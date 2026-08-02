@@ -5,7 +5,7 @@ description: Form conventions for API reference documents. Use when creating, ed
 
 # API documentation conventions
 
-This skill is the authority over the **form** of API documents. Every
+When adopted, this skill governs the **form** of API documents. Every
 `<service>-api.md` conforms to it; where an API document deviates in form,
 the API document is wrong and is corrected, not cited. Routes, fields,
 headers, vocabulary, and semantics are content; content authority lives in

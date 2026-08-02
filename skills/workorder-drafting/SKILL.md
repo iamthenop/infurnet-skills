@@ -5,7 +5,8 @@ description: Draft bounded execution authority for an agent. Use when writing, r
 
 # Workorder drafting
 
-A workorder is the only authority an agent executes under. If the workorder is
+A workorder is the job-specific grant an agent executes under,
+subordinate to repository governance and role boundaries. If the workorder is
 ambiguous, the failure belongs to the workorder, not the agent. A stop caused by
 an unbounded workorder is a drafting defect.
 
@@ -37,9 +38,11 @@ implied grant.
 
 ## Drafting rules
 
-* **Do not delegate interpretation.** "Improve", "clean up", "as appropriate",
-  and "use judgment" are not instructions. Where judgment is required, name the
-  criterion the judgment serves.
+* **Do not delegate unresolved decisions.** "Improve", "clean up", "as
+  appropriate", and "use judgment" are not instructions for policy,
+  authority, vocabulary, or design decisions. Where bounded
+  implementation judgment is permitted, state the criterion it serves
+  and the boundary it must preserve.
 * **Supply exact text where text is the deliverable.** Governing text, required
   comments, error copy: the workorder carries the approved wording verbatim.
   The executor inserts; the executor does not compose authority-bearing text.

@@ -5,9 +5,11 @@ for coding-agent governance: language standards, documentation conventions, and
 workorder discipline. Extracted from the Infurnet project; project-neutral;
 MIT-licensed.
 
-Skills carry **procedure** — how to produce a class of artifact. They carry no
-authority: role definitions, permissions, and stop-condition chains stay in the
-consuming repository's own governance files.
+Skills contain portable rules and procedures. They acquire authority
+only when adopted by consuming repository governance; a skill file does
+not independently authorize work or mutation. Role instances,
+authority chains, and deciding-authority identity stay in the consuming
+repository's own governance files.
 
 ## Skills
 

@@ -1,8 +1,11 @@
 # AGENTS.md
 
 This repository is a library of portable agent skills (`skills/*/SKILL.md`)
-and role archetypes (`roles/*/ROLE.md`). Agents working here maintain the
-library; they do not execute the roles it defines.
+and role archetypes (`roles/*/ROLE.md`). Library content acquires
+authority only when adopted by a consuming repository's governance; in
+this repository it binds only as stated in the self-hosting rule below.
+Agents working here maintain the library; they do not execute the roles
+it defines.
 
 ## Self-hosting rule
 

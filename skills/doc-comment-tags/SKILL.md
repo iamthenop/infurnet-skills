@@ -24,7 +24,7 @@ not inferred from the implementation.
 | `@lifecycle` | Lifecycle stage or state constraints |
 | `@threading` | Concurrency and thread-safety contract |
 | `@runtime` | Runtime environment requirements |
-| `@temporary` | Authorization reference and the concrete removal condition |
+| `@temporary` | The concrete removal condition of temporary code |
 
 Standard parameter/return/error tags accompany them: `@param`, `@return`, and
 `@throws` (Java) or `@raises` (Python).
@@ -84,9 +84,10 @@ def apply_region_mask(
 
 ## Temporary code
 
-`@temporary` names the authorizing reference and the concrete condition that
-removes the code. The tag describes the temporary state; it does not carry the
-authorization itself, and new callers must not depend on the temporary unit.
+`@temporary` states the concrete condition that removes the code. The
+authorizing reference lives in the commissioning instruction and pull
+request, never in the tag; new callers must not depend on the temporary
+unit.
 
 ```java
 /**
@@ -99,7 +100,7 @@ authorization itself, and new callers must not depend on the temporary unit.
  * @param path path to the manifest file
  * @return normalized manifest
  * @throws ManifestLoadException when the manifest cannot be parsed or normalized
- * @temporary authorized by TICKET-123 until manifest v2 migration is complete; new callers must not depend on this loader
+ * @temporary until manifest v2 migration is complete; new callers must not depend on this loader
  */
 ```
 

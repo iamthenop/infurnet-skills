@@ -49,6 +49,20 @@ the consuming repository's governance and bindings fill.
 Skills remain individually consumable; a role is one curated composition,
 not a prerequisite.
 
+### Role consumption contract
+
+`ROLE.md` is not part of the Agent Skills specification; no standard
+client interprets it. A consuming repository supplies a router — its
+governance entry point or tooling — that implements this contract:
+
+* the router reads the role frontmatter;
+* `skills.always` entries load for every invocation of the role;
+* `skills.by-surface` entries load only when the authorized work touches
+  that surface;
+* a bundle entry naming a missing skill is a validation failure;
+* the consuming repository supplies the governance entry point and the
+  bindings location.
+
 ## Layout
 
 ```

@@ -24,8 +24,10 @@ exercise repository authority.
 3. this role file;
 4. the bundled skills that govern the implementation surface being tested.
 
-Read only the skills that govern the surface under test. Testing a
-standard does not grant authority to amend it.
+Read only the skills that govern the surface under test; consume the
+Required-fields and validation-profile sections of `workorder-drafting`
+to validate the workorder received. Testing a standard does not grant
+authority to amend it.
 
 ## Tester may
 

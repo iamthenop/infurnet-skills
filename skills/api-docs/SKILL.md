@@ -45,11 +45,14 @@ section and this skill is a defect in the API document.
 
 Every operation uses exactly five headings:
 
-1. `## <API route>` (functions as the title)
-2. `### <Human-friendly operation name>` (functions as the description)
-3. `### Request`
-4. `### Response`
-5. `### Errors`
+1. `### <API route>` (functions as the title)
+2. `#### <Human-friendly operation name>` (functions as the description)
+3. `#### Request`
+4. `#### Response`
+5. `#### Errors`
+
+Operations nest under the `## Operations` container; an operation heading
+at the container's own level is a hierarchy defect.
 
 Do not invent additional headings — no Purpose, Idempotency, or Caller and
 Authority headings inside an operation. All prose belongs under the
@@ -68,8 +71,9 @@ An operation with no fields states `*None*`.
 
 The route title is wrapped in backticks. The anchor is a `<span id="...">`
 immediately under the name heading, matching the Operations List link.
-Anchor ids are sequential per method (`get1`, `put2`), contain no
-punctuation, and are renumbered when operations are inserted.
+Anchor ids are stable and semantic — the lowercase HTTP method plus the
+operation name slug (`get-list-certificates`) — and never renumber:
+inserting an operation must not invalidate links to any other operation.
 
 The description ends with the workflow reference where one exists, linking
 to the workflow document (a Markdown document with embedded diagrams) and,
@@ -171,7 +175,7 @@ still a system route and keeps the prefix.
 The reference is the last segment; an action or status segment precedes it.
 Route patterns in use:
 
-* resource reference: `/<surface>/<type>{reference}`;
+* resource reference: `/<surface>/<type>/{reference}`;
 * action-in-path: `/<surface>/<action>/{reference}`;
 * status-in-path: `/<surface>/{status}/{reference}`.
 
@@ -203,6 +207,11 @@ same <reference> + same <parameters>
   silently remove the statement.
 
 ## Change discipline
+
+Documents conforming to superseded conventions of this skill (container-
+level operation headings, sequential numbered anchors, the unslashed
+resource-reference pattern) are migrated when touched; migration of a
+document set as its own job is commissioned separately.
 
 Edits are surgical. Restructuring an existing API document to these
 conventions preserves every field, code, and rule unless a change is

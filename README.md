@@ -14,21 +14,21 @@ consuming repository's own governance files.
 | Skill | Governs | Status |
 | --- | --- | --- |
 | [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents | ✅ |
-| `code-comments` | Comment doctrine; information-location discipline | planned |
-| `type-discipline` | Load-bearing value types; parse-once boundaries | planned |
-| `doc-comment-tags` | Custom documentation tag system (Javadoc/docstring) | planned |
-| `bazel-discipline` | Dependency declaration, visibility, target separation | planned |
-| `vocabulary-control` | Term introduction; drift control; one home per fact | planned |
+| [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline | ✅ |
+| [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries | ✅ |
+| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) | ✅ |
+| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation | ✅ |
+| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact | ✅ |
 | `design-docs` | Design file taxonomy, writing rules, diagram conventions | planned |
 | `project-bindings` | Repository bindings file authoring | planned |
-| `java-standard` | Java layout, types, tests | planned |
-| `python-standard` | Python typing, validation boundaries, dep isolation | planned |
-| `web-standard` | Templates, page model, palette tokens, accessibility | planned |
-| `deploy-standard` | Artifact classes, promotion, fixture discipline | planned |
+| [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | ✅ |
+| [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | ✅ |
+| [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility | ✅ |
+| [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline | ✅ |
 | `api-docs` | API document and operation shape | planned |
 | `schema-design` | Initialization ordering, strata, destructive changes | planned |
 | `user-docs` | Task-oriented user documentation | planned |
-| `workflow-modeling` | Gates as states; work package vocabulary | planned |
+| [`workflow-modeling`](skills/workorder-drafting/SKILL.md) | Gates as states; work package vocabulary | ✅ |
 
 ## Layout
 

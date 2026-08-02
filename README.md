@@ -30,11 +30,29 @@ consuming repository's own governance files.
 | [`user-docs`](skills/user-docs/SKILL.md) | Task-oriented user documentation | ✅ |
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary | ✅ |
 
+## Roles
+
+A role is a set of operational boundaries plus a bundle of skills. Roles
+carry the may/must-not/stop-condition frame that keeps agent behaviour
+in-bounds; skills carry the procedure. The archetypes are project-neutral:
+authority chains, deciding-authority identity, and document homes are slots
+the consuming repository's governance and bindings fill.
+
+| Role | Frame | Bundle |
+| --- | --- | --- |
+| [`builder`](roles/builder/ROLE.md) | Executes bounded implementation under an approved workorder | core discipline skills + surface standards |
+| [`designer`](roles/designer/ROLE.md) | Drafts governing text, design, and workorders; never decides | authoring skills |
+| [`tester`](roles/tester/ROLE.md) | Falsifies approved work locally; no repository authority | surface standards for the target under test |
+
+Skills remain individually consumable; a role is one curated composition,
+not a prerequisite.
+
 ## Layout
 
 ```
 skills/<name>/SKILL.md      # frontmatter (name, description) + procedure
 skills/<name>/references/   # optional bundled templates and reference material
+roles/<name>/ROLE.md        # frontmatter (name, description, skills bundle) + boundaries
 ```
 
 ## Consuming

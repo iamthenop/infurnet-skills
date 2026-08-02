@@ -1,0 +1,62 @@
+---
+name: type-discipline
+description: Choose types for load-bearing values so boundaries survive review and refactoring. Use when introducing identifiers, states, hashes, timestamps, or other controlled values; when parsing untrusted input; or when reviewing code that passes raw strings where a narrower type is required.
+---
+
+# Type discipline
+
+Load-bearing values carry their meaning in the type system, not in reviewer
+memory.
+
+## Universal rules
+
+* UUID-shaped identifiers use UUID types or narrow value objects, not bare
+  strings.
+* Identifiers with the same representation but different meanings use distinct
+  wrapper types wherever confusion is possible.
+* Closed vocabularies use enums, literals, or registry identifiers — never open
+  strings.
+* Hashes and digests use fixed-width bytes.
+* Stored and cross-process timestamps are timezone-aware UTC.
+* Untrusted input is parsed once at the system boundary. Interior code receives
+  parsed, typed values, never raw payloads.
+
+Do not pass raw strings for controlled states, algorithms, encodings, MIME
+types, lifecycle states, review states, authority states, schema versions,
+UUID-shaped identifiers, hashes, or digests when a narrower type is available
+or required.
+
+## Language mappings
+
+| Value class | Java | Python |
+| --- | --- | --- |
+| UUID identifier | `java.util.UUID` or value object | `uuid.UUID` or value object |
+| Closed vocabulary | enum | enum or literal-backed type |
+| Confusable identifiers | distinct value objects | distinct value objects |
+| Cross-process timestamp | `java.time.Instant` | timezone-aware UTC `datetime.datetime` |
+| Filesystem path | `java.nio.file.Path` | `pathlib.Path` |
+| Hash / digest | byte array or typed wrapper | fixed-width `bytes` |
+| Exact decimal | `java.math.BigDecimal` | `decimal.Decimal` |
+
+Other languages map by analogy: the rule is the value class, not the library.
+
+## Absence, failure, mutation
+
+* Do not use null (or None) as control flow. Public contracts make absence
+  visible through explicit optionality.
+* Use explicit exceptions. Do not swallow failures or convert boundary
+  failures into generic ones.
+* Prefer immutable value objects. Keep mutable state local. Do not expose
+  mutable collections from public contracts unless required.
+
+## Scope control
+
+Apply these rules to new and touched code. Do not launch unrelated type
+refactors: a type migration is its own authorized change, not a side effect of
+passing through a file.
+
+## Final rule
+
+If two values must never be confused, the compiler — not the reviewer —
+enforces it.
+

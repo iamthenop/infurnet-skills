@@ -25,10 +25,10 @@ consuming repository's own governance files.
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | ✅ |
 | [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility | ✅ |
 | [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline | ✅ |
-| `api-docs` | API document and operation shape | planned |
-| `schema-design` | Initialization ordering, strata, destructive changes | planned |
-| `user-docs` | Task-oriented user documentation | planned |
-| [`workflow-modeling`](skills/workorder-drafting/SKILL.md) | Gates as states; work package vocabulary | ✅ |
+| [`api-docs`](skills/api-docs/SKILL.md) | API document and operation shape | ✅ |
+| [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes | ✅ |
+| [`user-docs`](skills/user-docs/SKILL.md) | Task-oriented user documentation | ✅ |
+| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary | ✅ |
 
 ## Layout
 

@@ -1,6 +1,9 @@
 ---
 name: code-comments
 description: Decide whether a source comment belongs, what it may contain, and where displaced information goes instead. Use when writing or reviewing code comments, when tempted to record history, tickets, or approvals in source, or when cleaning comments during a code change.
+license: MIT
+metadata:
+  infurnet-kind: core-skill
 ---
 
 # Code comments

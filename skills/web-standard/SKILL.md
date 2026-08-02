@@ -1,6 +1,10 @@
 ---
 name: web-standard
 description: Server-rendered web shell standard for templates, fragments, page models, CSS tokens, and accessibility. Use when adding or changing web templates, Thymeleaf fragments, page-shell view models, web CSS, or web accessibility behaviour. Assumes Spring MVC with Thymeleaf and a dependency-free shell.
+license: MIT
+metadata:
+  infurnet-kind: stack-profile
+  infurnet-compat: java,spring-mvc,thymeleaf
 ---
 
 # Web standard

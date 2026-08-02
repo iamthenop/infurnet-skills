@@ -1,6 +1,9 @@
 ---
 name: workflow-modeling
 description: Model workflow gates as states, not object families. Use when designing workflow schema, lifecycle stages, work packages, work results, derivations, or naming anything after a workflow gate or pipeline stage — or when reviewing a design that multiplies objects, services, enums, or tables per stage.
+license: MIT
+metadata:
+  infurnet-kind: pattern
 ---
 
 # Workflow modeling
@@ -11,6 +14,9 @@ being transcribed into bloated identifiers.
 
 Gate keys and the work-type namespace are declared in the repository's
 bindings. Gate names in this document (`G0`, `G1`, `G2`) are placeholders.
+The example domain (assets, media, packages) is illustrative; the
+pattern applies to any staged pipeline whose items pass through
+lifecycle positions.
 
 ## Core rule
 

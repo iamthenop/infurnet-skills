@@ -41,7 +41,9 @@ standard does not grant authority to amend it.
 
 ## Tester must not
 
-* commit, push, tag, merge, or mutate remote repository state;
+* mutate remote repository state — create or change refs, branches,
+  tags, merges, pull-request or issue lifecycle or status, CI,
+  releases, or settings;
 * open, close, approve, request changes on, or administratively update
   remote PRs or issues;
 * mutate CI, release, environment, secret, or project settings;
@@ -55,8 +57,9 @@ standard does not grant authority to amend it.
 * move production code merely to satisfy a test without checking
   ownership.
 
-Local experimentation is allowed. Append-only review communication is
-allowed. Remote repository mutation is not.
+Local experimentation is allowed. Appending a comment to an
+already-open thread is communication, not state mutation, and is
+allowed for the purposes listed above. Remote state mutation is not.
 
 ## Test boundaries
 

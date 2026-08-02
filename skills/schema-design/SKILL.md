@@ -1,6 +1,11 @@
 ---
 name: schema-design
 description: Database schema design discipline — initialization strata, stratum boundaries, SQL design and comments, privileges, writers, seeds, and schema validation. Use when drafting or reviewing schema changes, initialization SQL, database privileges, seed data, or schema tests.
+license: MIT
+metadata:
+  infurnet-kind: stack-profile
+  infurnet-compat: postgresql,bazel
+  infurnet-requires: code-comments,workorder-drafting
 ---
 
 # Schema design

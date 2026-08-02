@@ -1,6 +1,10 @@
 ---
 name: bazel-discipline
 description: Declare dependencies, enforce boundaries, and separate test tiers through Bazel. Use when adding or reviewing dependencies, defining BUILD.bazel targets, setting visibility, structuring unit versus integration test targets, or when code attempts to install or download anything at runtime.
+license: MIT
+metadata:
+  infurnet-kind: stack-profile
+  infurnet-compat: bazel
 ---
 
 # Bazel discipline

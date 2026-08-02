@@ -19,8 +19,8 @@ consuming repository's own governance files.
 | [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) | ✅ |
 | [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation | ✅ |
 | [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact | ✅ |
-| `design-docs` | Design file taxonomy, writing rules, diagram conventions | planned |
-| `project-bindings` | Repository bindings file authoring | planned |
+| [`design-docs`](skills/design-docs/SKILL.md) | Design file taxonomy, writing rules, diagram conventions | ✅ |
+| [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring | ✅ |
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | ✅ |
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | ✅ |
 | [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility | ✅ |

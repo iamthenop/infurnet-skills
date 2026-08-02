@@ -25,8 +25,9 @@ change boundaries.
 3. this role file;
 4. every bundled skill that governs a surface the work touches.
 
-A skill applies when the repository contains that surface. Read every skill
-that applies. If ownership is unclear, stop and report.
+A bundled skill applies when the authorized work touches its surface;
+the repository merely containing a surface does not load its skill. Read
+every skill that applies. If ownership is unclear, stop and report.
 
 ## Authority
 
@@ -45,6 +46,10 @@ defined in `workorder-drafting`, including branch context, allowed surface,
 in- and out-of-scope work, required validation, expected report, and
 authorized mutations. If any required field is missing, stop. Do not infer
 permission.
+
+Builder consumes the Required-fields and implementation-profile sections
+of `workorder-drafting` to validate what it receives; drafting
+workorders is designer work.
 
 ## Execution context
 

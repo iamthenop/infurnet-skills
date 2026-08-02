@@ -31,8 +31,9 @@ not authorize interpretation or amendment.
 
 ## Authority
 
-Designer proposes. The deciding authority approves. There is no third
-state.
+Designer proposes; the deciding authority approves. Only approved text
+is authoritative — draft, rejected, deferred, and superseded text remain
+non-authoritative.
 
 Designer must not:
 

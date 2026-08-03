@@ -99,68 +99,6 @@ preserve stale dependencies because tests already use them, they work on one
 CPU architecture, the runtime can emulate them, or a local override hides
 the problem.
 
-## DEV host execution
-
-DEV runs naturally on supported developer hosts:
-
-| Development host | Local OCI target |
-| --- | --- |
-| Apple Silicon | `linux/arm64` |
-| x86_64 workstation | `linux/amd64` |
-
-A normal local image target must select the matching Linux architecture
-automatically, require no source edits and no normal-use architecture flag,
-carry correct OCI OS/architecture metadata, select matching base-image and
-package-layer architectures, and fail clearly on an unsupported host. QEMU
-is not the normal development path. Do not add a tracked Compose `platform:`
-directive to force an architecture-limited image to run.
-
-The Bazel execution platform and the OCI target platform are separate: Bazel
-may execute on macOS while producing a Linux image for the matching CPU.
-Local arm64 and amd64 images may have different digests; local images are
-not promoted release artifacts.
-
-## Local execution modes
-
-Cumulative Compose profiles:
-
-| Mode | Profiles |
-| --- | --- |
-| Infrastructure only | `infra` |
-| Full application stack | `infra`, `app` |
-| Full development tooling | `infra`, `app`, `dev-tools` |
-
-`infra` provides fixtures for applications running directly through Bazel or
-an IDE; `app` runs completed application images; `dev-tools` is optional
-tooling. Profile membership does not transfer build authority to Compose. A
-developer must not need the full application stack merely to use the
-infrastructure profile.
-
-## Docker Compose discipline
-
-Compose is a local runtime orchestrator. It may create networks and named
-volumes, run supplied images, inject local configuration, expose local
-ports, define health checks, express startup dependencies, and build
-narrowly scoped third-party fixture wrappers.
-
-Compose must not build project application images, build repository-owned
-fixture images, mount application source as a substitute for a built runtime
-artifact, embed secrets in tracked YAML, force an architecture for supported
-hosts, create placeholder services for missing executables, or use sleeping
-containers or unconditional health checks to imply implementation.
-
-Machine-specific ports, resource settings, and optional tools belong in
-ignored local configuration surfaces.
-
-## Local tags
-
-Local tags are runtime vocabulary, not artifact identity. Use `:dev` for
-developer-loaded images and `:test` for isolated test loading; a test tag
-must not overwrite or depend on the developer's `:dev` tag. Local tags do
-not identify release artifacts, imply registry publication, authorize an
-image or service, or replace digest identity. Declare the local tag
-vocabulary centrally in the repository's bindings.
-
 ## Deployment fixtures in tests
 
 Tests using a repository-owned fixture image consume the canonical Bazel
@@ -171,29 +109,6 @@ a replacement image, and derive from the same canonical image used by local
 orchestration. A local Docker-compatible daemon may be required for real
 container behaviour; a Docker requirement does not justify undeclared
 dependency resolution over the network.
-
-## Environment definitions
-
-**DEV** — developer-controlled local execution: the workstation, host-native
-local images, local Bazel as build authority, `oci_load` distribution,
-Compose or direct Bazel or IDE execution, ignored local overrides, and
-development credentials and trust material. DEV artifacts are not promoted.
-
-**SIT** — first integrated deployment of a release candidate: an artifact
-built by the release build authority, an immutable registry digest,
-SIT-owned configuration, credentials, identities, and data, an approved SIT
-runtime, and integration validation against the candidate. A change to the
-artifact produces a new release candidate.
-
-**UAT** — validates the candidate accepted from SIT: the same immutable
-digest, UAT-owned configuration and secrets, controlled acceptance data, an
-approved staging runtime. UAT does not rebuild, repair, or modify the
-candidate.
-
-**PRD** — runs the artifact accepted from UAT: the same immutable digest,
-production identities, credentials, trust material, policies, and
-configuration, on the approved production runtime. PRD deployment does not
-build source or modify the promoted artifact.
 
 ## Release artifacts
 
@@ -255,17 +170,6 @@ must not silently inherit a development default. A public development CA
 certificate may be included only when the image contract requires it; a
 private CA key must never enter an image.
 
-## Target conventions
-
-* `<service>_image`, `<service>_load`, `<service>_release_image`,
-  `<service>_push`
-* `<service>_fixture_image`, `<service>_fixture_load`,
-  `<service>_fixture_test_load`, `<service>_fixture_test_tar`
-
-Internal architecture-specific targets may exist when required; the normal
-public local target remains host-adaptive, and callers must not need to
-select an internal architecture-specific target.
-
 ## Image contents
 
 An image contains only what its runtime requires. Do not include source
@@ -276,28 +180,6 @@ or debugging utilities without a runtime need. Prefer non-root execution.
 Health checks match the actual runtime; do not add a shell or
 general-purpose network utility solely to support a health check when the
 runtime can provide a narrower probe.
-
-## Architecture validation
-
-For each supported image architecture, verify: the base image publishes the
-required manifest; package inputs resolve for that architecture; the package
-layer matches the base-image architecture; OCI metadata names the correct
-architecture; the image runs natively; no tracked emulation or architecture
-pin is required. Do not combine an arm64 base with amd64 packages or the
-reverse. Do not infer architecture support from a tag name.
-
-## Release validation
-
-Release validation establishes: the release image or index digest; correct
-OCI metadata; absence of environment-specific configuration and secrets;
-runtime startup; meaningful health behaviour; required service integration;
-registry digest preservation when publication is present; digest equality
-through promotion.
-
-A liveness check proves the process is running and serving; a readiness
-check proves the dependencies required to accept work are usable. Do not use
-a liveness result as a readiness gate. A locally loaded `:dev` image is not
-a release candidate.
 
 ## Deployment documentation
 
@@ -329,6 +211,15 @@ Stop deployment implementation when:
 * registry publication or promotion would modify the artifact;
 * the required upstream dependency is unsupported and no maintained input
   path exists.
+
+## Reference material
+
+Detailed normative material lives beside this skill and carries its
+authority:
+
+* [`references/environments.md`](references/environments.md) — Local execution modes, Compose discipline, local tags, development-host architecture, and the DEV/SIT/UAT/PRD environment definitions.
+* [`references/target-conventions.md`](references/target-conventions.md) — Canonical Bazel target naming for images, fixtures, and release artifacts.
+* [`references/validation.md`](references/validation.md) — Per-architecture image validation and release validation matrices.
 
 ## Final rule
 

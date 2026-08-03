@@ -78,14 +78,16 @@ guards = [
     ("repository contains that surface", "repo-scoped skill loading"),
 ]
 art = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")  # box/arrow glyphs
-for p in list(skills) + list(roles):
+for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/references/*.md")):
     t = p.read_text()
     for needle, label in guards:
         if needle in t:
             err(f"{p}: regression — {label}")
     if art.search(t):
         err(f"{p}: character-drawn diagram glyphs present")
-    if frontmatter(p) and (frontmatter(p).get("metadata") or {}).get("infurnet-kind") == "core-skill":
+    if re.search(r"[\u00a0\u200b\u200c\u200d\ufeff]", t):
+        err(f"{p}: invisible characters present (NBSP or zero-width)")
+    if p.name == "SKILL.md" and frontmatter(p) and (frontmatter(p).get("metadata") or {}).get("infurnet-kind") == "core-skill":
         for leak in ("Infurnet", "PROJECT.md"):
             if leak in t:
                 err(f"{p}: core skill contains project-specific reference {leak!r}")

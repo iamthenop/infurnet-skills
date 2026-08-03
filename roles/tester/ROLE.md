@@ -2,14 +2,19 @@
 name: tester
 description: Verifies approved work by trying to falsify it locally; exercises no repository authority. Operational boundaries plus the skill bundle governing the surfaces under test.
 skills:
-  always: [workorder-drafting, bazel-discipline]
+  always: [workorder-drafting]
   by-surface:
+    build: [bazel-discipline]
     java: [java-standard]
     python: [python-standard]
     web: [web-standard]
     deployment: [deploy-standard]
     schema: [schema-design]
     workflow: [workflow-modeling]
+    design-documents: [vocabulary-control, design-docs]
+    api-documents: [api-docs]
+    user-documents: [user-docs]
+    bindings: [project-bindings]
 ---
 
 # Tester
@@ -24,10 +29,10 @@ exercise repository authority.
 3. this role file;
 4. the bundled skills that govern the implementation surface being tested.
 
-Read only the skills that govern the surface under test; consume the
-Required-fields and validation-profile sections of `workorder-drafting`
-to validate the workorder received. Testing a standard does not grant
-authority to amend it.
+Read only the skills that govern the surface under test; consume
+`workorder-drafting#Required fields` and
+`workorder-drafting#Validation profile` to validate the workorder
+received. Testing a standard does not grant authority to amend it.
 
 ## Tester may
 

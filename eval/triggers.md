@@ -1,5 +1,11 @@
 # Trigger evaluation corpus
 
+Status: **not yet executed** — descriptions are unevaluated until a
+harness runs this corpus against the intended clients. Record results
+separately per client; router-driven role loading is a separate
+mechanism (see the README role consumption contract) and is not
+evaluated by this corpus.
+
 Client-neutral queries for evaluating skill-description triggering.
 Each row: the query, the skill that SHOULD load, and the near-miss skill
 that should NOT. A harness presents the query with all frontmatter
@@ -12,7 +18,7 @@ descriptions available and records which skills load.
 | 3 | "Where should the state diagram for the certificate lifecycle live, and what sections does that file need?" | design-docs | api-docs |
 | 4 | "Convert this README from asciidoc to markdown" | (none) | design-docs |
 | 5 | "Draft the task brief for the agent that will implement the importer" | workorder-drafting | (none) |
-| 6 | "Here is workorder WO-7; implement it" | (none — role consumes scoped sections) | workorder-drafting (full) |
+| 6 | "Here is workorder WO-7; implement it" | (none) | workorder-drafting |
 | 7 | "Should this function have a comment explaining the locking order?" | code-comments | doc-comment-tags |
 | 8 | "Add the @privacy and @boundary tags to this Javadoc" | doc-comment-tags | code-comments |
 | 9 | "Model the review pipeline: items pass through triage, enrichment, and approval stages" | workflow-modeling | schema-design |

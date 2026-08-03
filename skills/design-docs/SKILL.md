@@ -88,8 +88,11 @@ A diagram or table restating one sentence is a defect.
   notation is weak and the content is a closed set, which is table work.
 * Diagrams are embedded in the Markdown document they illustrate, beside
   the prose that owns the obligations. Standalone diagram files are legacy
-  form: migrate the content into its owning document when touched; do not
-  create new ones.
+  form: do not create new ones. Existing files are grandfathered debt;
+  migration into the owning document occurs only when a workorder
+  explicitly authorizes it. When a semantic correction and a
+  representation migration share a pull request, they are separately
+  named scopes, preferably separate commits.
 
 ## Workflow documents
 
@@ -101,9 +104,9 @@ restating them.
 
 ## Linking
 
-Inline links use a backticked filename with a relative path:
-[`component.md`](../component.md). Dependent files close with a
-Related-documents block: paths and one-line roles. A link is not a
+Inline links use a backticked filename with a relative path, in the
+form `` [`component.md`](../component.md) ``. Dependent files close
+with a Related-documents block: paths and one-line roles. A link is not a
 substitute for the rule where the rule is normative.
 
 ## Pending decisions

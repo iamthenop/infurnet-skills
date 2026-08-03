@@ -60,6 +60,13 @@ governance entry point or tooling — that implements this contract:
 * `skills.by-surface` entries load only when the authorized work touches
   that surface;
 * a bundle entry naming a missing skill is a validation failure;
+* a loaded skill's `infurnet-requires` load with it, transitively;
+* an `always` or matched `by-surface` skill loads **in full**; a role
+  sentence naming `skill#Section` references is reading guidance inside
+  a loaded skill, not partial loading;
+* router-driven role loading and a client's native
+  description-triggering are separate mechanisms; the trigger corpus in
+  `eval/` evaluates only the latter;
 * the consuming repository supplies the governance entry point and the
   bindings location.
 
@@ -88,10 +95,12 @@ requirements; see Installation semantics.
 ## Installation semantics
 
 * `infurnet-kind` classifies each entry: `core-skill` (broadly reusable
-  discipline, no assumed stack), `stack-profile` (reusable only for the
-  stacks named in `infurnet-compat`), `pattern` (an opinionated approach
-  consumers may adopt), and `role-archetype` (operational composition,
-  outside the Agent Skills specification).
+  discipline, no assumed stack), `stack-profile` (an opinionated
+  governance profile limited to the stacks named in `infurnet-compat` —
+  adopting it adopts the profile's policy model, not merely technical
+  stack compatibility), `pattern` (an opinionated approach consumers may
+  adopt), and `role-archetype` (operational composition, outside the
+  Agent Skills specification).
 * `infurnet-requires` names sibling skills that must be installed
   together with the skill. A missing requirement is an installation
   validation failure; at use time, a dangling skill reference is a stop
@@ -100,6 +109,23 @@ requirements; see Installation semantics.
   governance adopts it; installation alone confers none.
 * The repository's governance entry point declares where its bindings
   file lives; skills dereference bindings through it.
+
+## Adoption contract
+
+A consuming repository records its adoption in an `ADOPTION.md` at its
+governance-declared location, copied from this repository's
+[`ADOPTION.md`](ADOPTION.md) template. The manifest pins a
+cryptographically exact source revision; a governance dependency must
+not follow a mutable checkout or floating `main`. It records: source
+repository; pinned commit (and tag if any); installed skills; installed
+roles; installation mode; consumer governance entry point; bindings
+file location; approved local deviations; last update.
+
+Updating the pin follows six steps: compare pinned and candidate
+revisions; enumerate changed obligations; identify affected consumer
+bindings and governance; obtain approval from the consuming
+repository's deciding authority; update the pin and installed content
+together; validate the consumer.
 
 ## License
 

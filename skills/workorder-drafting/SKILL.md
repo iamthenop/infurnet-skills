@@ -57,16 +57,20 @@ implied grant.
 * **Reference standards by location.** Do not restate them; restatement forks.
   Name the standard files that govern the surface, and require they be read.
 
-## Executor-shaped profiles
+## Execution profiles
 
 The required fields are universal. Some executing roles carry additional
-minimums:
+minimums.
 
-**Implementation workorders** additionally name every file-creation, move, and
+### Implementation profile
+
+Implementation workorders additionally name every file-creation, move, and
 dependency authorization. Creating files, moving files, and adding dependencies
 are explicit grants, not inferences from scope.
 
-**Validation workorders** additionally:
+### Validation profile
+
+Validation workorders additionally:
 
 * identify the exact target under review — branch, pull request, or file set;
 * define the checks: the validator validates defined checks and does not decide
@@ -74,7 +78,9 @@ are explicit grants, not inferences from scope.
 * state which standards govern the surface under test;
 * state that remote mutation is not authorized, or name the narrow exception.
 
-**Design and drafting workorders** additionally name the decision or approved
+### Design and drafting profile
+
+Design and drafting workorders additionally name the decision or approved
 request the drafting flows from, and state that outputs are proposals until
 approved.
 

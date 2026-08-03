@@ -7,9 +7,11 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Pinned to reviewed commit SHAs; tags in comments. Owner verifies
+      # SHAs against the upstream repositories before first run.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: "3.12"
-      - run: pip install pyyaml
+      - run: pip install -r tools/requirements.txt
       - run: python tools/validate.py

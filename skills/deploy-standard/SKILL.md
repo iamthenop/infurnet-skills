@@ -12,6 +12,17 @@ metadata:
 Build once. Distribute without modification. Run with configuration owned by
 the environment.
 
+## Required references by task
+
+Reference files beside this skill are normative under it; load them by
+task before working:
+
+| Work touches | Must also read |
+| --- | --- |
+| Compose, local modes, tags, development hosts, environments | [`references/environments.md`](references/environments.md) |
+| Bazel image, fixture, or release target names | [`references/target-conventions.md`](references/target-conventions.md) |
+| Architecture or release validation | [`references/validation.md`](references/validation.md) |
+
 ## Execution pipeline
 
 1. Source

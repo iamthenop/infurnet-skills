@@ -2,14 +2,20 @@
 name: builder
 description: Executes bounded implementation work under an approved workorder. Operational boundaries plus the skill bundle governing implementation surfaces.
 skills:
-  always: [workorder-drafting, code-comments, type-discipline, doc-comment-tags, bazel-discipline]
+  always: [workorder-drafting]
   by-surface:
+    code: [code-comments, type-discipline, doc-comment-tags]
+    build: [bazel-discipline]
     java: [java-standard]
     python: [python-standard]
     web: [web-standard]
     deployment: [deploy-standard]
     schema: [schema-design]
     workflow: [workflow-modeling]
+    design-documents: [vocabulary-control, design-docs]
+    api-documents: [api-docs]
+    user-documents: [user-docs]
+    bindings: [project-bindings]
 ---
 
 # Builder
@@ -47,9 +53,9 @@ in- and out-of-scope work, required validation, expected report, and
 authorized mutations. If any required field is missing, stop. Do not infer
 permission.
 
-Builder consumes the Required-fields and implementation-profile sections
-of `workorder-drafting` to validate what it receives; drafting
-workorders is designer work.
+Builder consumes `workorder-drafting#Required fields` and
+`workorder-drafting#Implementation profile` to validate what it
+receives; drafting workorders is designer work.
 
 ## Execution context
 

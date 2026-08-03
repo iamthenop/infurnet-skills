@@ -54,6 +54,15 @@ One test: if the value could differ between two repositories consuming the
 same standards without either being wrong, it is a binding. If changing it
 changes an obligation, it is a rule and belongs in a standard.
 
+## Materializing a bindings file
+
+Start from the bundled template,
+[`references/bindings-template.md`](references/bindings-template.md):
+copy it to the consuming repository root, keep the preamble, delete
+sections whose governing skills are not installed, and fill or plainly
+defer each value. The template carries form only; every value is the
+consuming repository owner's decision.
+
 ## Binding format
 
 Each binding is one declaration with:

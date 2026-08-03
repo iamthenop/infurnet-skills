@@ -59,6 +59,7 @@ project imports.)
 | Binding | Value |
 | :--- | :--- |
 | Database directories | *not yet defined* (e.g. db/<database>/init/) |
+| Schema test directories | *not yet defined* (per database) |
 | Foundational threshold | *not yet defined* (stratum number only; the authorization rule lives in role or governance text) |
 | Strata in force | *not yet defined* (per database; stratum classes are defined in `schema-design`) |
 

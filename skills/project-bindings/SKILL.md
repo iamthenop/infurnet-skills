@@ -29,8 +29,8 @@ or agent instruction dereferences by name. Typical binding classes:
 * package and module ownership — which package owns a layer; the approved
   compute module; import boundaries;
 * workspace declarations — language workspaces and their roots;
-* database declarations — databases, their directories, and the strata in
-  force per database;
+* database declarations — databases, their initialization and test
+  directories, and the strata in force per database;
 * closed namespaces — gate keys, the work-type namespace, local tag
   vocabulary, navigation vocabulary;
 * asset declarations — the approved palette, the logo path;

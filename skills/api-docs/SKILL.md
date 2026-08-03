@@ -84,8 +84,9 @@ This operation is illustrated in [<workflow name>](<path-to-workflow>.md#<anchor
 ```
 
 Workflow diagrams are embedded in their workflow documents; a standalone
-diagram file is legacy form and is migrated into its workflow document when
-touched, not newly referenced.
+diagram file is legacy form: do not create or newly reference one.
+Existing files are grandfathered debt; migration into the workflow
+document occurs only when a workorder explicitly authorizes it.
 
 ## Tables
 
@@ -210,8 +211,9 @@ same <reference> + same <parameters>
 
 Documents conforming to superseded conventions of this skill (container-
 level operation headings, sequential numbered anchors, the unslashed
-resource-reference pattern) are migrated when touched; migration of a
-document set as its own job is commissioned separately.
+resource-reference pattern) are migrated only when a workorder
+explicitly authorizes the migration; a convention migration is its own
+named scope, never a silent companion to a semantic change.
 
 Edits are surgical. Restructuring an existing API document to these
 conventions preserves every field, code, and rule unless a change is
@@ -219,8 +221,9 @@ separately authorized; a convention pass that silently alters semantics is
 two changes wearing one commit.
 
 When an operation is added, update in the same change: the Operations List,
-anchor numbering, the workflow reference, the document's Conventions section
-where affected, and any counterpart operation in a paired API document.
+the new operation's semantic anchor, the workflow reference, the
+document's Conventions section where affected, and any counterpart
+operation in a paired API document.
 
 ## Final rule
 

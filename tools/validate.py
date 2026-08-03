@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""Repository validator for infurnet-skills. Exit nonzero on any failure."""
-import pathlib, re, sys, yaml
+"""Structural validator for infurnet-skills. Exit nonzero on any failure."""
+import pathlib
+import re
+import sys
+
+import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 KINDS = {"core-skill", "stack-profile", "pattern"}
+INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
+GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
+PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
+GUARDS = [
+    ("authorized by TICKET", "authorization reference in @temporary example"),
+    ("get1", "sequential api-docs anchors"),
+    ("renumbered when operations are inserted", "anchor renumbering rule"),
+    ("anchor numbering", "stale anchor-numbering instruction"),
+    ("repository contains that surface", "repo-scoped skill loading"),
+]
 errors = []
+
 
 def err(msg):
     errors.append(msg)
 
-skills = sorted(p for p in (ROOT / "skills").glob("*/SKILL.md"))
-roles = sorted(p for p in (ROOT / "roles").glob("*/ROLE.md"))
-skill_names = {p.parent.name for p in skills}
 
 def frontmatter(path):
     m = re.match(r"^---\n(.*?)\n---\n", path.read_text(), re.S)
@@ -19,17 +31,34 @@ def frontmatter(path):
         err(f"{path}: missing frontmatter")
         return None
     try:
-        return yaml.safe_load(m.group(1))
+        d = yaml.safe_load(m.group(1))
     except yaml.YAMLError as e:
         err(f"{path}: frontmatter is not valid YAML ({str(e).splitlines()[0]})")
         return None
+    if not isinstance(d, dict):
+        err(f"{path}: frontmatter is not a mapping")
+        return None
+    return d
 
-# --- skills ---
+
+skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
+roles = sorted((ROOT / "roles").glob("*/ROLE.md"))
+refs = sorted((ROOT / "skills").glob("*/references/*.md"))
+skill_names = {p.parent.name for p in skills}
+role_names = {p.parent.name for p in roles}
+governed = list(skills) + list(roles) + list(refs) + [
+    ROOT / "eval" / "triggers.md",
+    ROOT / "tools" / "validate.py",
+]
+skill_meta = {}
+
+# --- skill frontmatter ---
 for p in skills:
     d = frontmatter(p)
     if d is None:
         continue
     folder = p.parent.name
+    skill_meta[folder] = d
     if d.get("name") != folder:
         err(f"{p}: name {d.get('name')!r} != folder {folder!r}")
     desc = d.get("description") or ""
@@ -39,15 +68,48 @@ for p in skills:
         err(f"{p}: description exceeds 1024 characters")
     if d.get("license") != "MIT":
         err(f"{p}: license must be MIT")
-    meta = d.get("metadata") or {}
+    meta = d.get("metadata")
+    if not isinstance(meta, dict):
+        err(f"{p}: metadata block missing or not a mapping")
+        continue
+    unknown = set(meta) - {"infurnet-kind", "infurnet-compat", "infurnet-requires"}
+    if unknown:
+        err(f"{p}: unknown metadata keys {sorted(unknown)}")
     kind = meta.get("infurnet-kind")
     if kind not in KINDS:
         err(f"{p}: infurnet-kind {kind!r} not in {sorted(KINDS)}")
     if kind == "stack-profile" and not meta.get("infurnet-compat"):
         err(f"{p}: stack-profile requires infurnet-compat")
-    for rq in filter(None, (meta.get("infurnet-requires") or "").split(",")):
-        if rq.strip() not in skill_names:
-            err(f"{p}: infurnet-requires names missing skill {rq.strip()!r}")
+    if kind != "stack-profile" and meta.get("infurnet-compat"):
+        err(f"{p}: infurnet-compat only valid on stack-profile")
+    req = [s.strip() for s in (meta.get("infurnet-requires") or "").split(",") if s.strip()]
+    if len(req) != len(set(req)):
+        err(f"{p}: duplicate entries in infurnet-requires")
+    for rq in req:
+        if rq not in skill_names:
+            err(f"{p}: infurnet-requires names missing skill {rq!r}")
+
+# --- requires cycles ---
+graph = {
+    n: [s.strip() for s in ((skill_meta.get(n, {}).get("metadata") or {}).get("infurnet-requires") or "").split(",") if s.strip()]
+    for n in skill_names
+}
+state = {}
+
+
+def dfs(node, stack):
+    state[node] = 1
+    for nxt in graph.get(node, []):
+        if state.get(nxt) == 1:
+            err(f"infurnet-requires cycle: {' -> '.join(stack + [node, nxt])}")
+        elif state.get(nxt) is None:
+            dfs(nxt, stack + [node])
+    state[node] = 2
+
+
+for n in sorted(skill_names):
+    if state.get(n) is None:
+        dfs(n, [])
 
 # --- roles ---
 for p in roles:
@@ -58,49 +120,111 @@ for p in roles:
         err(f"{p}: name != folder")
     bundle = d.get("skills") or {}
     entries = list(bundle.get("always") or [])
-    for v in (bundle.get("by-surface") or {}).values():
+    for surface, v in (bundle.get("by-surface") or {}).items():
         entries += list(v)
+    if len(entries) != len(set(entries)):
+        err(f"{p}: duplicate skills across bundle entries")
     for s in entries:
         if s not in skill_names:
             err(f"{p}: bundle names missing skill {s!r}")
 
-# --- README inventory parity ---
-readme = (ROOT / "README.md").read_text()
-for name in skill_names | {p.parent.name for p in roles}:
-    if f"`{name}`" not in readme:
-        err(f"README.md: missing inventory row for {name}")
-
-# --- regression guards ---
-guards = [
-    ("authorized by TICKET", "authorization reference in @temporary example"),
-    ("get1", "sequential api-docs anchors"),
-    ("renumbered when operations are inserted", "anchor renumbering rule"),
-    ("repository contains that surface", "repo-scoped skill loading"),
-]
-art = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")  # box/arrow glyphs
-for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/references/*.md")):
+# --- skill#Section references (roles and skills) ---
+for p in list(skills) + list(roles):
     t = p.read_text()
-    for needle, label in guards:
-        if needle in t:
-            err(f"{p}: regression — {label}")
-    if art.search(t):
-        err(f"{p}: character-drawn diagram glyphs present")
-    if re.search(r"[\u00a0\u200b\u200c\u200d\ufeff]", t):
-        err(f"{p}: invisible characters present (NBSP or zero-width)")
-    if p.name == "SKILL.md" and frontmatter(p) and (frontmatter(p).get("metadata") or {}).get("infurnet-kind") == "core-skill":
-        for leak in ("Infurnet", "PROJECT.md"):
-            if leak in t:
-                err(f"{p}: core skill contains project-specific reference {leak!r}")
+    for m in re.finditer(r"`([a-z][a-z0-9-]*)#([^`]+)`", t):
+        sk, heading = m.group(1), m.group(2)
+        if sk not in skill_names:
+            err(f"{p}: section reference to missing skill {sk!r}")
+            continue
+        body = (ROOT / "skills" / sk / "SKILL.md").read_text()
+        if not re.search(rf"(?m)^#+\s+{re.escape(heading)}\s*$", body):
+            err(f"{p}: section {heading!r} not found in skill {sk!r}")
 
-# --- reference files exist when linked ---
-for p in skills:
-    for m in re.finditer(r"\]\((references/[^)]+)\)", p.read_text()):
-        if not (p.parent / m.group(1)).exists():
-            err(f"{p}: broken reference link {m.group(1)}")
+# --- markdown link resolution (repo-wide, relative links) ---
+md_files = list(skills) + list(roles) + list(refs) + [
+    ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "ADOPTION.md",
+    ROOT / "eval" / "triggers.md",
+]
+for p in md_files:
+    if not p.exists():
+        err(f"missing expected file: {p.relative_to(ROOT)}")
+        continue
+    text = p.read_text()
+    tick = chr(96)
+    for run in (tick * 4, tick * 3):
+        text = re.sub(re.escape(run) + r".*?" + re.escape(run), "", text, flags=re.S)
+    text = re.sub(tick * 2 + r"[^\n]*?" + tick * 2, "", text)
+    text = re.sub(tick + r"[^" + tick + r"\n]*" + tick, "", text)
+    for m in re.finditer(r"\]\(([^)]+)\)", text):
+        target = m.group(1).split("#")[0]
+        if not target or "<" in target:
+            continue
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        if not (p.parent / target).exists():
+            err(f"{p}: broken relative link {m.group(1)!r}")
+
+# --- every reference file linked from its SKILL.md ---
+for rf in refs:
+    skill_file = rf.parent.parent / "SKILL.md"
+    if f"references/{rf.name}" not in skill_file.read_text():
+        err(f"{rf}: not linked from its SKILL.md")
+
+# --- README inventory: exact structural parity ---
+readme = (ROOT / "README.md").read_text()
+skill_rows = re.findall(
+    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| .+? \| ([a-z-]+) \|$",
+    readme,
+)
+seen = {}
+for name, link, kind in skill_rows:
+    if name in seen:
+        err(f"README.md: duplicate skill row {name!r}")
+    seen[name] = (link, kind)
+for name in sorted(skill_names):
+    if name not in seen:
+        err(f"README.md: missing skill row {name!r}")
+        continue
+    link, kind = seen[name]
+    if link != f"skills/{name}/SKILL.md":
+        err(f"README.md: skill row {name!r} links {link!r}")
+    actual = (skill_meta.get(name, {}).get("metadata") or {}).get("infurnet-kind")
+    if kind != actual:
+        err(f"README.md: skill row {name!r} kind {kind!r} != frontmatter {actual!r}")
+for name in seen:
+    if name not in skill_names:
+        err(f"README.md: skill row for nonexistent skill {name!r}")
+role_rows = re.findall(r"(?m)^\| \[`([a-z-]+)`\]\((roles/[a-z-]+/ROLE\.md)\) \|", readme)
+for name, link in role_rows:
+    if name not in role_names:
+        err(f"README.md: role row for nonexistent role {name!r}")
+    elif link != f"roles/{name}/ROLE.md":
+        err(f"README.md: role row {name!r} links {link!r}")
+for name in sorted(role_names):
+    if name not in {n for n, _ in role_rows}:
+        err(f"README.md: missing role row {name!r}")
+
+# --- text hygiene on all governed files ---
+for p in governed:
+    if not p.exists():
+        continue
+    t = p.read_text()
+    rel = p.relative_to(ROOT)
+    if INVISIBLE.search(t):
+        err(f"{rel}: invisible characters present (NBSP or zero-width)")
+    if p.suffix == ".md" and GLYPHS.search(t):
+        err(f"{rel}: character-drawn diagram glyphs present")
+    if str(rel).startswith(("skills/", "roles/")):
+        for needle in PORTABILITY:
+            if needle in t:
+                err(f"{rel}: project-specific reference {needle!r}")
+        for needle, label in GUARDS:
+            if p.name != "validate.py" and needle in t:
+                err(f"{rel}: regression — {label}")
 
 if errors:
     print(f"FAIL — {len(errors)} finding(s):")
     for e in errors:
         print(" -", e)
     sys.exit(1)
-print(f"PASS — {len(skills)} skills, {len(roles)} roles validated")
+print(f"PASS — {len(skills)} skills, {len(roles)} roles, {len(refs)} references validated")

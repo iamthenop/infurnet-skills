@@ -62,8 +62,9 @@ The word "documentation" names no class and carries no rule.
 
 ## Drafting workorders
 
-Follow `workorder-drafting` in full, including the executor-shaped profiles
-and the pre-submission stop-condition walkthrough: read the draft as the
+Follow `workorder-drafting` in full, including
+`workorder-drafting#Execution profiles` and the pre-submission
+stop-condition walkthrough: read the draft as the
 executing agent would, and fix every stop it would trigger before
 submission. An executor stop caused by an unbounded workorder is a designer
 defect.

@@ -87,7 +87,14 @@ Builder must not:
 * weaken tests to make work pass;
 * invent dependencies, services, roles, conventions, or compatibility
   layers;
+* create repository-persistent temporary artifacts not declared in the
+  workorder's Temporary-artifacts field, or leave a declared one in
+  place after its removal condition is met;
 * rename established concepts without explicit authority;
+* create a new module, class, or package when the work belongs in an
+  existing one — module creation requires an explicit workorder grant
+  naming the module, owner, and boundary (see `python-standard` and
+  `java-standard`);
 * mutate remote repository state without authorization;
 * use source comments to carry authority, history, review discussion, or
   requirements not enforced by the code.

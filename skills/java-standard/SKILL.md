@@ -54,6 +54,21 @@ test targets in `bazel-discipline`; documentation comments in
 Javadoc syntax with the project tag system; `@throws` in place of `@raises`.
 See `doc-comment-tags` for the tag vocabulary and examples.
 
+## Class and package creation
+
+Extend an existing class or package before creating a new one. A new
+class or package requires an explicit grant in the workorder naming:
+
+* the new class or package;
+* its owning package per the repository's bindings;
+* its boundary — what it owns and what it does not.
+
+Creating a class to house a method that belongs in an existing class is
+unauthorized scope expansion regardless of any other implementation
+grant. If the correct class or package is unclear from the repository's
+package ownership bindings, stop and report — do not create, do not
+guess.
+
 ## Final rule
 
 Java code carries boundaries in types, explicit packages, and deterministic

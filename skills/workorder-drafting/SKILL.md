@@ -35,6 +35,12 @@ Every workorder names:
 * **Authorized mutations** — exactly which persistent or remote state changes
   are granted (commits, pushes, branches, pull requests, publications), or the
   statement that none are granted.
+* **Temporary artifacts** — everything created to execute this workorder
+  that is not a deliverable (CI checks, scripts, fixtures, helper
+  branches), each with its removal condition. Removal on condition is
+  part of this workorder's validation, or is explicitly assigned to a
+  named successor workorder. If the field is absent, no temporary
+  artifact is authorized.
 
 If a field does not apply, the workorder says so. A missing field is not an
 implied grant.

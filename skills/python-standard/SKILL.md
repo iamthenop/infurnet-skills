@@ -85,6 +85,20 @@ payloads under any logging level.
 Docstrings with Javadoc-style structure and the project tag system; `@raises`
 for errors. See `doc-comment-tags` for the tag vocabulary and examples.
 
+## Module creation
+
+Extend an existing module before creating a new one. A new module
+requires an explicit grant in the workorder naming:
+
+* the new module;
+* its owning package per the repository's bindings;
+* its boundary — what it owns and what it does not.
+
+Creating a module to house a function that belongs in an existing module
+is unauthorized scope expansion regardless of any other implementation
+grant. If the correct module is unclear from the repository's package
+ownership bindings, stop and report — do not create, do not guess.
+
 ## Final rule
 
 Make Python boring. Boring code can be reviewed, and hermetic targets enforce

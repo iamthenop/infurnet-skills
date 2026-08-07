@@ -67,6 +67,30 @@ Comments describe only the code that currently exists. They must not contain:
   comment may describe the temporary behaviour and the concrete condition that
   removes it, but must not carry the authorization itself.
 
+## Identifier naming
+
+Identifiers use the repository's established vocabulary and name one
+responsibility. They do not narrate setup, causality, control flow,
+comparisons, implementation history, or multiple outcomes. If a name
+needs clauses or conjunctions to explain itself, split the responsibility
+or move the explanation to a comment.
+
+Test names follow `test_<subject>_<expected_outcome>()`. The subject is
+the unit under test; the outcome is what the passing case proves.
+
+``` python
+# correct
+test_overlong_int_is_invalid()
+test_bad_entry_returns_failed()
+
+# incorrect — prose in identifier
+test_stored_json_with_pathological_shape_causes_validation_to_fail_and_preserves_the_original_entry()
+test_selector_that_already_exists_causes_an_integrity_failure_and_does_not_get_replaced()
+```
+
+Helper and fixture names name what they supply, not how they will be
+used or why they were introduced.
+
 ## Final rule
 
 A comment states what the code cannot. Everything else has another home.

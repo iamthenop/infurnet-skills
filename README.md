@@ -15,22 +15,23 @@ repository's own governance files.
 
 | Skill | Governs | Kind |
 | --- | --- | --- |
-| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents | core-skill |
-| [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline | core-skill |
-| [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries | core-skill |
-| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) | pattern |
-| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation | stack-profile |
-| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact | core-skill |
-| [`design-docs`](skills/design-docs/SKILL.md) | Design file taxonomy, writing rules, diagram conventions | core-skill |
-| [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring | core-skill |
-| [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | stack-profile |
-| [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | stack-profile |
-| [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility | stack-profile |
-| [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline | stack-profile |
 | [`api-docs`](skills/api-docs/SKILL.md) | API document and operation shape | pattern |
+| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation | stack-profile |
+| [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline | core-skill |
+| [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline | stack-profile |
+| [`design-docs`](skills/design-docs/SKILL.md) | Design file taxonomy, writing rules, diagram conventions | core-skill |
+| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) | pattern |
+| [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries | core-skill |
+| [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | stack-profile |
+| [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring | core-skill |
+| [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | stack-profile |
 | [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes | stack-profile |
+| [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries | core-skill |
 | [`user-docs`](skills/user-docs/SKILL.md) | Task-oriented user documentation | core-skill |
+| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact | core-skill |
+| [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility | stack-profile |
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary | pattern |
+| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents | core-skill |
 
 ## Roles
 

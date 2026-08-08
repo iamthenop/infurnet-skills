@@ -5,7 +5,7 @@ license: MIT
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: python,bazel,pydantic
-  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
+  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,error-handling,deploy-standard
 ---
 
 # Python standard
@@ -44,10 +44,8 @@ visibility, heavy-dependency isolation, and test targets in
 
 ## Errors
 
-* Use explicit exceptions for runtime validation and processing failures.
-* Do not use `assert` outside test targets.
-* Error messages and exceptions must not leak sensitive raw values,
-  cryptographic keys, system paths, tokens, or unredacted external payloads.
+See `error-handling`. Python-specific addition: do not use `assert` outside
+test targets.
 
 ## Logging
 
@@ -85,6 +83,23 @@ payloads under any logging level.
 Docstrings with Javadoc-style structure and the project tag system; `@raises`
 for errors. See `doc-comment-tags` for the tag vocabulary and examples.
 
+## Naming
+
+The shortest unambiguous name wins. A longer name must justify its length
+against a specific collision in scope; no justification available means the
+name is wrong.
+
+Exhaust common words before coining compounds: `write`, `run`, `load`,
+`save`, `check`, `send`. A compound earns its second word only when a
+common word collides with something else already in scope.
+
+Private method names over 20 characters require a comment stating why no
+shorter name was unambiguous. If none can be written, the name is wrong.
+
+Do not encode prose, causal clauses, or contrast phrases in identifiers.
+The linter declared in the repository's build bindings enforces this; it
+runs locally before commits reach review.
+
 ## Module creation
 
 Extend an existing module before creating a new one. A new module
@@ -98,6 +113,12 @@ Creating a module to house a function that belongs in an existing module
 is unauthorized scope expansion regardless of any other implementation
 grant. If the correct module is unclear from the repository's package
 ownership bindings, stop and report — do not create, do not guess.
+
+## Linter
+
+A linter enforcing naming, import, and typing rules runs locally before
+commits reach review. The specific tool is declared in the repository's
+build bindings. Running it is not optional at push time.
 
 ## Final rule
 

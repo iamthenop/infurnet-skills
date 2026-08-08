@@ -93,8 +93,9 @@ Exhaust common words before coining compounds: `write`, `run`, `load`,
 `save`, `check`, `send`. A compound earns its second word only when a
 common word collides with something else already in scope.
 
-Private method names over 20 characters require a comment stating why no
-shorter name was unambiguous. If none can be written, the name is wrong.
+Private method names over 20 characters require justification. If no
+shorter unambiguous name exists, record the rationale in the pull-request
+body. If none can be written, the name is wrong.
 
 Do not encode prose, causal clauses, or contrast phrases in identifiers.
 The linter declared in the repository's build bindings enforces this; it

@@ -94,9 +94,11 @@ used or why they were introduced.
 The shortest name that is unambiguous in scope wins. Exhaust common words
 before coining compounds: `write`, `run`, `load`, `save`, `check`, `send`.
 A compound earns its second word only when a common word collides with
-something else already in scope. The linter declared in the repository's
-build bindings enforces length and pattern rules; it runs locally before
-commits reach review.
+something else already in scope. Names over 20 characters require
+justification recorded in the pull-request body; if none can be written,
+the name is wrong. The linter declared in the repository's build bindings
+enforces length and pattern rules; it runs locally before commits reach
+review.
 
 ## Final rule
 

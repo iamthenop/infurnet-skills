@@ -21,8 +21,6 @@ that the language or underlying library does not already name adequately.
 A custom exception names one condition; it does not carry behavioral
 parameters or default outcomes.
 
-Do not use `assert` outside test targets.
-
 ## Catching exceptions
 
 A caught exception is not a failure path when the condition is expected and

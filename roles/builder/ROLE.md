@@ -4,7 +4,7 @@ description: Executes bounded implementation work under an approved workorder. O
 skills:
   always: [workorder-drafting]
   by-surface:
-    code: [code-comments, type-discipline, doc-comment-tags]
+    code: [code-comments, type-discipline, doc-comment-tags, error-handling]
     build: [bazel-discipline]
     java: [java-standard]
     python: [python-standard]

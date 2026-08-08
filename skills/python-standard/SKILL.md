@@ -5,7 +5,7 @@ license: MIT
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: python,bazel,pydantic
-  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,error-handling,deploy-standard
+  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
 ---
 
 # Python standard

@@ -5,7 +5,7 @@ license: MIT
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: java,bazel
-  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard,error-handling
+  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
 ---
 
 # Java standard

@@ -73,11 +73,11 @@ governance entry point or tooling — that implements this contract:
 
 ## Layout
 
-```
-skills/<name>/SKILL.md      # frontmatter (name, description) + procedure
-skills/<name>/references/   # optional bundled templates and reference material
-roles/<name>/ROLE.md        # frontmatter (name, description, skills bundle) + boundaries
-```
+| Template | Description |
+| --- | --- |
+| `skills/<name>/SKILL.md` | frontmatter (name, description) + procedure |
+| `skills/<name>/references` | optional bundled templates and reference material |
+| `roles/<name>/ROLE.md` | frontmatter (name, description, skills bundle) + boundaries |
 
 ## Consuming
 

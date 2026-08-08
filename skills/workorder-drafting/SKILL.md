@@ -74,6 +74,19 @@ Implementation workorders additionally name every file-creation, move, and
 dependency authorization. Creating files, moving files, and adding dependencies
 are explicit grants, not inferences from scope.
 
+#### Implementation vocabulary
+
+A workorder names required public contracts and already-decided identifiers.
+
+Do not invent internal function, variable, helper, exception, or test names
+merely to make the workorder more explicit. Internal names belong to
+implementation unless a prior decision has fixed them.
+
+When an existing language or library mechanism already names a condition,
+describe the required behaviour without prescribing a new abstraction. If
+the workorder cannot name an identifier without inventing it, the builder
+proposes names before implementing and awaits approval.
+
 ### Validation profile
 
 Validation workorders additionally:

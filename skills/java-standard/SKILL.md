@@ -36,6 +36,30 @@ test targets in `bazel-discipline`; documentation comments in
 * Encapsulation is enforced through build-target visibility, not convention
   (see `bazel-discipline`).
 
+## Naming
+
+The shortest unambiguous name wins. A longer name must justify its length
+against a specific collision in scope; no justification available means the
+name is wrong.
+
+Exhaust common words before coining compounds: `write`, `run`, `load`,
+`save`, `check`, `send`. A compound earns its second word only when a
+common word collides with something else already in scope.
+
+Private method names over 20 characters require justification. If no
+shorter unambiguous name exists, record the rationale in the pull-request
+body. If none can be written, the name is wrong.
+
+Do not encode prose, causal clauses, or contrast phrases in identifiers.
+The linter declared in the repository's build bindings enforces this; it
+runs locally before commits reach review.
+
+## Errors
+
+See `error-handling`. Java-specific addition: checked exceptions state a
+contract; unchecked exceptions signal a programming error or unrecoverable
+condition. Do not use unchecked exceptions as checked-exception substitutes.
+
 ## Tests
 
 * Unit tests must not require Docker, external services, or manually prepared
@@ -68,6 +92,12 @@ unauthorized scope expansion regardless of any other implementation
 grant. If the correct class or package is unclear from the repository's
 package ownership bindings, stop and report — do not create, do not
 guess.
+
+## Linter
+
+A linter enforcing naming, import, and typing rules runs locally before
+commits reach review. The specific tool is declared in the repository's
+build bindings. Running it is not optional at push time.
 
 ## Final rule
 

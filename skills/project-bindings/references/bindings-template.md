@@ -31,6 +31,7 @@ infer it.
 | :--- | :--- |
 | Build system | *not yet defined* (e.g. Bazel) |
 | Dependency declaration | *not yet defined* (e.g. MODULE.bazel and per-module BUILD.bazel) |
+| Linter | *not yet defined* (e.g. ruff, pylint, checkstyle) |
 
 ## Workspaces and package ownership
 

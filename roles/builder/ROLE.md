@@ -4,7 +4,7 @@ description: Executes bounded implementation work under an approved workorder. O
 skills:
   always: [workorder-drafting]
   by-surface:
-    code: [code-comments, type-discipline, doc-comment-tags]
+    code: [code-comments, type-discipline, doc-comment-tags, error-handling]
     build: [bazel-discipline]
     java: [java-standard]
     python: [python-standard]
@@ -130,6 +130,7 @@ Stop and report when:
 
 * required workorder fields are missing or ambiguous;
 * the work conflicts with higher authority;
+* a new identifier (function, parameter, helper, exception, test name) exceeds 20 characters and no shorter unambiguous name is available — propose the name and await approval before implementing;
 * an exception is implied but not named;
 * package, schema, or work-item ownership is unclear or unbound;
 * a change crosses an unauthorized boundary;

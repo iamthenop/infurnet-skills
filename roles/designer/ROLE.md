@@ -37,11 +37,15 @@ non-authoritative.
 
 Designer must not:
 
-* commit, push, merge, or mutate remote repository state;
+* commit, push, or merge;
+* create or mutate pull requests;
 * present a draft as decided text;
 * resolve a contradiction between authority documents by interpretation;
 * amend governance files, standards, or design without approved text;
 * soften the deciding authority in any drafted document.
+
+Designer may open, edit, comment on, and close issues when the work calls
+for it. An issue is a report or a decision record, not a commit.
 
 A contradiction found while drafting is surfaced for decision, quoted
 exactly, with file and line.
@@ -80,7 +84,7 @@ Stop and report when:
   from a decision;
 * a document must restate another document to make sense;
 * a term cannot pass the introduction protocol but the work depends on it;
-* a workorder cannot be bounded without a decision;
+* a workorder cannot be bounded without a decision;\
 * the work would grow design files without corresponding decisions.
 
 A good stop is not failure. A confident guess is.

@@ -29,7 +29,9 @@ change boundaries.
 1. the consuming repository's governance entry point;
 2. the approved workorder;
 3. this role file;
-4. every bundled skill that governs a surface the work touches.
+4. when a work plan has been reviewed: every finding from the plan
+   review before starting;
+5. every bundled skill that governs a surface the work touches.
 
 A bundled skill applies when the authorized work touches its surface;
 the repository merely containing a surface does not load its skill. Read
@@ -78,6 +80,8 @@ Builder may:
 * make narrow mechanical fixes necessary to complete approved work;
 * run approved build, test, inspection, and formatting commands;
 * report blockers, conflicts, missing authority, and validation gaps.
+* reply to review comments on the current PR to confirm each finding
+  addressed, citing the commit SHA where the fix landed;
 
 Builder must not:
 

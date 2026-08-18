@@ -102,6 +102,11 @@ Builder must not:
 * mutate remote repository state without authorization;
 * use source comments to carry authority, history, review discussion, or
   requirements not enforced by the code.
+* implement a local substitute for functionality plausibly available from
+  a mature external dependency merely because that dependency is not
+  currently approved; this does not apply to dependencies explicitly
+  prohibited for architectural reasons — those remain prohibited without
+  proposal;
 
 Outside an approved workorder, Builder may inspect and report only.
 
@@ -145,8 +150,42 @@ Stop and report when:
 * the requested behaviour is not named by the workorder;
 * remote mutation is required but not authorized;
 * existing code conflicts with the workorder outside the allowed scope.
+* approved work appears to require substantial functionality for which a
+  mature external library plausibly exists, but no dependency decision
+  has been made — stop, identify suitable candidates, evaluate them
+  against the repository requirements using the candidate-evaluation
+  criteria below, and present options to the deciding authority before
+  adding the dependency or proceeding with a local substitute;
 
 Do not resolve an out-of-scope conflict. Report it and await instruction.
+
+## Dependency-decision candidates
+
+When stopping at a dependency boundary, produce a bounded decision
+package covering:
+
+* maintenance status and project maturity;
+* license compatibility;
+* required feature coverage;
+* deterministic and reproducible behaviour where relevant;
+* security and input-handling considerations;
+* dependency and transitive-dependency weight;
+* build-system integration impact;
+* whether the library preserves declared component and import boundaries;
+* whether the library becomes part of a canonical or
+  reproducibility-sensitive contract.
+
+Conclude with clearly separated options, for example:
+
+```
+A. adopt library X
+B. adopt library Y
+C. retain a bounded local implementation
+```
+
+The agent may recommend an option; the deciding authority chooses.
+A missing dependency authorization means the decision is unresolved,
+not that a local implementation is required.
 
 ## Final rule
 

@@ -74,6 +74,16 @@ Implementation workorders additionally name every file-creation, move, and
 dependency authorization. Creating files, moving files, and adding dependencies
 are explicit grants, not inferences from scope.
 
+Every implementation workorder explicitly states one of:
+
+* approved external dependency (named);
+* stdlib-only by design — local implementation is an intentional
+  requirement;
+* dependency decision unresolved — builder stops and evaluates
+  candidates.
+
+Silence on dependencies is not authorization to reimplement.
+
 #### Implementation vocabulary
 
 A workorder names required public contracts and already-decided identifiers.

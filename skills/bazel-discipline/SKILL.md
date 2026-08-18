@@ -24,6 +24,10 @@ declared in targets, deterministically, or they do not exist.
   scripts. No `pip install` outside Bazel-managed resolution.
 * Third-party Python dependencies enter through the central wheels definition
   (`requirement` macros), not ad-hoc imports.
+* A dependency absent from declared targets is unresolved, not prohibited.
+  Unresolved dependencies follow the Builder's dependency-decision
+  procedure. A dependency explicitly prohibited for architectural reasons
+  remains prohibited without proposal.
 
 ## Visibility is the boundary
 

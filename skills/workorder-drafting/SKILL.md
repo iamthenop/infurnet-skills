@@ -157,23 +157,23 @@ Anything done outside the explicit workorder grant. Each deviation
 names:
 
 * what was done;
-* the authorization that permitted it — founder override, plan-review
+* the authorization that permitted it — deciding authority override, plan-review
   correction, or explicit workorder clause;
 * if none of those apply, it was unauthorized and is stated as such.
 
 If there are no scope deviations, state none.
 
 **Items requiring attention**
-Bounded, actionable items for the founder or designer. Each item
+Bounded, actionable items for the deciding authority or designer. Each item
 states what decision or action is needed and who holds it. An item
-is not a finding until the designer has verified with the founder
+is not a finding until the designer has verified with the deciding authority
 whether any scope deviation it references was authorized.
 
 Before escalating a scope deviation as a blocker or finding, the
-designer verifies authorization with the founder. A builder that
+designer verifies authorization with the deciding authority. A builder that
 stopped on an unauthorized deviation has behaved correctly; a
 builder that proceeded on one has not. The designer distinguishes
-the two before the founder sees the report.
+the two before the deciding authority sees the report.
 
 **Final rule**
 The delivery report accounts for the work. It does not advocate for

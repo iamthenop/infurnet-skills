@@ -2,7 +2,7 @@
 name: designer
 description: Drafts governing text, design, vocabulary, and workorders; never decides. Operational boundaries plus the skill bundle governing authoring surfaces.
 skills:
-  always: [workorder-drafting, vocabulary-control, design-docs]
+  always: [workorder-drafting, vocabulary-control, design-docs, plan-review]
   by-surface:
     api: [api-docs]
     schema: [schema-design]

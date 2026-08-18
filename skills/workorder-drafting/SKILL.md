@@ -103,6 +103,28 @@ Design and drafting workorders additionally name the decision or approved
 request the drafting flows from, and state that outputs are proposals until
 approved.
 
+### PR fix profile
+
+A PR fix workorder addresses findings from a completed pull-request
+review. It commissions corrections only; it does not reopen the
+original workorder's scope.
+
+PR fix workorders additionally:
+
+* identify the pull request by number and the reviewed commit SHA;
+* enumerate each finding by file and line number;
+* state the exact correction for each finding — verbatim where text is
+  the deliverable, behaviorally precise where code is the deliverable;
+* explicitly prohibit scope expansion: findings not listed are out of
+  scope, and related cleanup is not authorized unless named;
+* state whether the fix lands as a new commit on the original branch or
+  as a new branch and PR.
+
+The PR review record is the authorizing source. A finding not present
+in the review record is not a finding in the fix workorder. A fix
+workorder that introduces new findings of its own requires a further
+fix workorder, not inline expansion.
+
 ## After drafting: the stop-condition walkthrough
 
 Read the draft as the executing agent would, against that agent's stop

@@ -125,6 +125,60 @@ in the review record is not a finding in the fix workorder. A fix
 workorder that introduces new findings of its own requires a further
 fix workorder, not inline expansion.
 
+### Delivery report profile
+
+A delivery report is the builder's or tester's account of completed
+work, submitted with the pull request. It is not a summary of the
+diff — it is an account of what happened against what was planned.
+
+Every delivery report contains, in order:
+
+**Header**
+Workorder key, pull-request link, branch, and commit range.
+
+**What landed**
+Precise, measurable outcomes where the workorder defined them.
+Counts, pass/fail results, and named targets. Not prose impressions.
+
+**Shape changes**
+Anything that differed from the approved plan and why. Each shape
+change names the cause and the effect on the work. A shape change
+is not a scope deviation — it is an execution difference within
+authorized scope.
+
+**Stops taken**
+Each point where the builder stopped rather than proceeded. States
+what was found, what decision or authorization was missing, and
+what partial work exists. A stop is not a failure; an undisclosed
+stop is.
+
+**Scope deviations**
+Anything done outside the explicit workorder grant. Each deviation
+names:
+
+* what was done;
+* the authorization that permitted it — founder override, plan-review
+  correction, or explicit workorder clause;
+* if none of those apply, it was unauthorized and is stated as such.
+
+If there are no scope deviations, state none.
+
+**Items requiring attention**
+Bounded, actionable items for the founder or designer. Each item
+states what decision or action is needed and who holds it. An item
+is not a finding until the designer has verified with the founder
+whether any scope deviation it references was authorized.
+
+Before escalating a scope deviation as a blocker or finding, the
+designer verifies authorization with the founder. A builder that
+stopped on an unauthorized deviation has behaved correctly; a
+builder that proceeded on one has not. The designer distinguishes
+the two before the founder sees the report.
+
+**Final rule**
+The delivery report accounts for the work. It does not advocate for
+decisions the workorder did not make.
+
 ## After drafting: the stop-condition walkthrough
 
 Read the draft as the executing agent would, against that agent's stop

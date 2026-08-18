@@ -23,6 +23,7 @@ repository's own governance files.
 | [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) | pattern |
 | [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries | core-skill |
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | stack-profile |
+| [`plan-review`](skills/plan-review/SKILL.md) | Work plan verdict before execution begins | core-skill |
 | [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring | core-skill |
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | stack-profile |
 | [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes | stack-profile |

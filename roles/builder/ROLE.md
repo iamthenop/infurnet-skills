@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Executes bounded implementation work under an approved workorder. Operational boundaries plus the skill bundle governing implementation surfaces.
+description: "Review an agent's proposed work plan before execution begins. Use when a builder or tester has produced a work plan from a workorder and the designer must assess it before authorizing execution. Returns one of three verdicts: execute as written, minor issues found, or stop and redraft the workorder."
 skills:
   always: [workorder-drafting]
   by-surface:

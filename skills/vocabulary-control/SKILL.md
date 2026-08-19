@@ -1,6 +1,6 @@
 ---
 name: vocabulary-control
-description: Control terminology and prevent documentation drift. Use when introducing, renaming, or retiring a term in governing text, design, schema, or instructions; when the same fact appears in two documents; or when reviewing text for restatement, silent renames, or parallel rules.
+description: "Control terminology and prevent documentation drift. Use when introducing, renaming, or retiring a term in governing text, design, schema, or instructions; when the same fact appears in two documents; or when reviewing text for restatement, silent renames, or parallel rules."
 license: MIT
 metadata:
   infurnet-kind: core-skill
@@ -67,6 +67,9 @@ behaviour.
 
 ## Writing rules for governing text
 
+Prose quality in governing text follows `prose-discipline`. The
+vocabulary-specific additions are:
+
 * State rules as obligations, not narration. One sentence, one obligation.
 * Describe implemented behaviour as fact only after verifying it from code,
   schema, or tests. Describe decided-but-unbuilt behaviour as decided,
@@ -75,12 +78,8 @@ behaviour.
   pull requests.
 * Do not write aspiration into governing text. Aspiration lives in proposals
   until approved.
-* A rule may keep one sentence of rationale if deleting it makes the rule
-  easier to erode. If the sentence only explains how the rule came to be, it
-  is history.
 * Text that requires interpretation to follow is not finished.
 
 ## Final rule
 
 One name, one meaning, one home.
-

@@ -25,6 +25,7 @@ repository's own governance files.
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests | stack-profile |
 | [`plan-review`](skills/plan-review/SKILL.md) | Work plan verdict before execution begins | core-skill |
 | [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring | core-skill |
+| [`prose-discipline`](skills/prose-discipline/SKILL.md) | Clarity, compression, voice, and structure for governed prose | core-skill |
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation | stack-profile |
 | [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes | stack-profile |
 | [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries | core-skill |

@@ -1,9 +1,10 @@
 ---
 name: user-docs
-description: Standard for user-facing documentation. Use when writing or changing user guides, how-to pages, or task documentation for end users — not architecture documents, agent standards, PR descriptions, or test reports.
+description: "Standard for user-facing documentation. Use when writing or changing user guides, how-to pages, or task documentation for end users — not architecture documents, agent standards, PR descriptions, or test reports."
 license: MIT
 metadata:
   infurnet-kind: core-skill
+  infurnet-requires: prose-discipline
 ---
 
 # User documentation standard
@@ -55,8 +56,10 @@ not expose raw sensitive values in examples; use obviously fake values.
 
 ## Tone
 
-Plain language. No marketing language. Do not over-explain internal
-architecture. Do not use cute language where precision matters.
+Prose quality follows `prose-discipline`. User documentation adds one
+constraint: write at the level of the task, not the implementation.
+Do not over-explain internal architecture. Do not use technical
+precision where plain language serves the user better.
 
 ## Relationship to implementation
 

@@ -1,10 +1,10 @@
 ---
 name: design-docs
-description: Author and structure design documentation — architecture files, boundary/contract/state/workflow documents, diagrams, placement, scoping, and linking. Use when creating or editing files under the architecture documentation tree, when choosing between prose, a table, a diagram, or a formula, or when reviewing design documents for form.
+description: "Author and structure design documentation — architecture files, boundary/contract/state/workflow documents, diagrams, placement, scoping, and linking. Use when creating or editing files under the architecture documentation tree, when choosing between prose, a table, a diagram, or a formula, or when reviewing design documents for form."
 license: MIT
 metadata:
   infurnet-kind: core-skill
-  infurnet-requires: vocabulary-control
+  infurnet-requires: vocabulary-control,prose-discipline
 ---
 
 # Design documentation
@@ -14,10 +14,10 @@ decisions; it does not make them. On the mainline, every design file states
 decided design: no decision, no file. Do not write a design file as a
 substitute for authorized implementation work.
 
-The writing rules and drift-control discipline in `vocabulary-control`
-(obligations not narration, one home per fact, reference don't paraphrase,
-no history or aspiration in governing text, surgical changes) apply to all
-design documents.
+Prose quality follows `prose-discipline`. The writing rules and drift-control
+discipline in `vocabulary-control` (obligations not narration, one home per
+fact, reference don't paraphrase, no history or aspiration in governing text,
+surgical changes) apply to all design documents.
 
 ## Design file types
 

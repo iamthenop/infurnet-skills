@@ -102,3 +102,68 @@ sentence. Avoid unnamed human actors when the action can be expressed
 through the mechanism itself.
 
 Preferred:
+
+```
+The workorder authorizes the change.
+The validator rejects the file.
+The boundary holds.
+```
+
+Avoid:
+
+```
+Someone needs to authorize the change.
+You should run the validator.
+They held the boundary.
+```
+
+Use pronouns only when the referent is unmistakable.
+
+## Compression limits
+
+Do not compress before the reader has the context to receive it.
+Do not substitute compression for explanation.
+
+Avoid:
+
+* continuous aphorisms without buildup
+* sentence fragments as substitutes for reasoning
+* repetition that restates rather than advances
+
+Repetition is permitted only when it reinforces doctrine across a
+document — a short recurring phrase that develops meaning each time it
+appears.
+
+## What to avoid
+
+* volume as a substitute for clarity
+* hedging language that avoids commitment (`may potentially`, `could
+  possibly`, `it is worth noting that`)
+* passive constructions that obscure the subject
+* filler openings (`In order to`, `It is important to`, `As mentioned`)
+* emotional language as pressure
+* persuasion through assertion rather than structure
+
+## Capitalization
+
+Sentence case for all headings and titles. Capitalize only the first
+word, proper nouns, and established acronyms. Avoid title case.
+
+## Pre-submission clarity check
+
+Before submitting any prose deliverable, verify:
+
+* can a reader explain this section after one read?
+* is every concept introduced before it is compressed?
+* does each section complete the full observation → explanation →
+  implication → resolution cycle?
+* is the system or process the subject of each paragraph, not a
+  generic human actor?
+* does any structural line resolve its section, or does it merely
+  restate it?
+
+If any check fails, revise before submitting.
+
+## Final rule
+
+One pass. One meaning. No assembly required.

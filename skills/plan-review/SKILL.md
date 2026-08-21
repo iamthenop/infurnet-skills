@@ -60,6 +60,12 @@ Return stop-and-redraft when:
 * the plan proposes a workaround where the workorder requires a solution;
 * correcting the plan requires a decision the reviewer cannot make.
 
+## Reference material
+
+* [`references/claude-code.md`](references/claude-code.md) — Claude Code
+  plan format, stop points, and response guidance for local VS Code and
+  cloud instances.
+
 ## Final rule
 
 A plan review authorizes execution or stops it. It does not redesign the

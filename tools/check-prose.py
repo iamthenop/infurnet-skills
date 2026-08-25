@@ -11,8 +11,10 @@ Usage:
 """
 import argparse
 import ast
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +26,10 @@ GOVERNANCE_DIRS = {
 GOVERNANCE_FILES = {
     "AGENTS.md", "ADOPTION.md",
 }
+
+# Suffixes this checker understands. Anything else is not a checkable
+# target and is excluded from the file count rather than reported as clean.
+SUPPORTED_SUFFIXES = (".py", ".java", ".md")
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -41,7 +47,7 @@ VOCABULARY = [
     (r"\bleverage\b", "use"),
     (r"\bperformant\b", "fast or efficient"),
     (r"\bpersist\b(?=.*\b(data|state|record|value)\b)", "save"),
-    (r"\bpropagat\b", "pass or spread"),
+    (r"\bpropagat\w+\b", "pass or spread"),
     (r"\borchestr\w+\b", "coordinate or run"),
     (r"\bprovision\b", "create or set up"),
     (r"\bparameteriz\w+\b", "configure"),
@@ -66,8 +72,7 @@ VOCABULARY = [
     (r"\brobust\b", "be specific about what holds"),
     (r"\bseamless\b", "be specific"),
     (r"\bstraightforward\b", "be specific"),
-    (r"\btrivial\b", "be specific"),
-    (r"\bnon-trivial\b", "be specific"),
+    (r"\b(?:non-)?trivial\b", "be specific"),
 ]
 
 VOCABULARY_RE = [
@@ -101,7 +106,10 @@ def is_governance_markdown(path):
     Governance markdown receives vocabulary checks only — no density.
     Source comments and user-facing docs receive both.
     """
-    rel = path.relative_to(ROOT) if path.is_absolute() else path
+    try:
+        rel = path.resolve().relative_to(ROOT)
+    except (ValueError, OSError):
+        return False
     parts = rel.parts
     if rel.name in GOVERNANCE_FILES:
         return True
@@ -161,12 +169,14 @@ def overlap_ratio(tokens_a, tokens_b):
 
 def extract_python_comments(source):
     items = []
-    for i, line in enumerate(source.splitlines(), 1):
-        m = re.search(r'(?<!["\'])#\s*(.*)', line)
-        if m:
-            text = m.group(1).strip()
-            if text:
-                items.append((i, "inline", text))
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                text = tok.string.lstrip("#").strip()
+                if text:
+                    items.append((tok.start[0], "inline", text))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
     try:
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -183,23 +193,66 @@ def extract_python_comments(source):
 
 def extract_java_comments(source):
     items = []
-    for i, line in enumerate(source.splitlines(), 1):
-        m = re.search(r'//\s*(.*)', line)
-        if m:
-            text = m.group(1).strip()
+    i, n, line = 0, len(source), 1
+    while i < n:
+        c = source[i]
+        if c == "\n":
+            line += 1
+            i += 1
+        elif c == '"':
+            if source.startswith('"""', i):
+                i += 3
+                while i < n and not source.startswith('"""', i):
+                    if source[i] == "\n":
+                        line += 1
+                    i += 1
+                i += 3
+            else:
+                i += 1
+                while i < n and source[i] != '"':
+                    if source[i] == "\\":
+                        i += 1
+                    elif source[i] == "\n":
+                        line += 1
+                    i += 1
+                i += 1
+        elif c == "'":
+            i += 1
+            while i < n and source[i] not in ("'", "\n"):
+                if source[i] == "\\":
+                    i += 1
+                i += 1
+            if i < n and source[i] == "'":
+                i += 1
+        elif source.startswith("//", i):
+            start = line
+            i += 2
+            begin = i
+            while i < n and source[i] != "\n":
+                i += 1
+            text = source[begin:i].strip()
             if text:
-                items.append((i, "inline", text))
-    for m in re.finditer(r'/\*+\s*(.*?)\s*\*+/', source, re.S):
-        lineno = source[:m.start()].count('\n') + 1
-        text = re.sub(r'\s*\*\s*', ' ', m.group(1)).strip()
-        if text:
-            items.append((lineno, "block", text))
+                items.append((start, "inline", text))
+        elif source.startswith("/*", i):
+            start = line
+            i += 2
+            begin = i
+            while i < n and not source.startswith("*/", i):
+                if source[i] == "\n":
+                    line += 1
+                i += 1
+            text = re.sub(r"\s*\*\s*", " ", source[begin:i]).strip()
+            i += 2
+            if text:
+                items.append((start, "block", text))
+        else:
+            i += 1
     return items
 
 
 def extract_markdown_prose(source):
     items = []
-    in_fence = False
+    fence = None  # (marker char, length) while a fence is open
     in_frontmatter = False
     fence_re = re.compile(r'^\s*(`{3,}|~{3,})')
     frontmatter_re = re.compile(r'^---\s*$')
@@ -225,11 +278,16 @@ def extract_markdown_prose(source):
             if frontmatter_re.match(line):
                 in_frontmatter = False
             continue
-        if fence_re.match(line):
-            flush()
-            in_fence = not in_fence
+        fence_match = fence_re.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence is None:
+                flush()
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
             continue
-        if in_fence:
+        if fence is not None:
             continue
         if re.match(r'^\s*#', line) or not line.strip():
             flush()
@@ -354,9 +412,10 @@ def collect_files(targets):
     for target in targets:
         p = Path(target)
         if p.is_file():
-            files.append(p)
+            if p.suffix in SUPPORTED_SUFFIXES:
+                files.append(p)
         elif p.is_dir():
-            for suffix in (".py", ".java", ".md"):
+            for suffix in SUPPORTED_SUFFIXES:
                 files.extend(
                     f for f in p.rglob(f"*{suffix}")
                     if not any(part in skip_dirs for part in f.parts)

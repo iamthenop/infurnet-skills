@@ -82,8 +82,9 @@ Builder may:
 * report blockers, conflicts, missing authority, and validation gaps.
 * reply to review comments on the current PR to confirm each finding
   addressed, citing the commit SHA where the fix landed;
-* run `tools/check-prose.py` over all changed source and document files
-  before submitting; report findings in the delivery report;
+* run the prose checker declared in the consuming repository's bindings
+  (Build authority — Prose checker) over all changed source and document
+  files before submitting; report findings in the delivery report;
 
 Builder must not:
 
@@ -144,8 +145,9 @@ Stop and report when:
 * a new identifier (function, parameter, helper, exception, test name) exceeds
   20 characters and no shorter unambiguous name is available — propose the name
   and await approval before implementing;
-* `tools/check-prose.py` findings were not run or not reported — the
-  prose check is required validation, not optional;
+* the bound prose checker was not run over the changed files, or its
+  findings were not reported — the prose check is required validation,
+  not optional;
 * an exception is implied but not named;
 * package, schema, or work-item ownership is unclear or unbound;
 * a change crosses an unauthorized boundary;

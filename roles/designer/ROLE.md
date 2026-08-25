@@ -23,7 +23,7 @@ proposal text, clearly marked as such.
 1. the consuming repository's governance entry point;
 2. the approved request or workorder authorizing the design work;
 3. this role file;
-4. every bundled skill that governs a surface the work touches;
+4. every bundled skill governing a surface that the work touches;
 5. the role file of any agent a drafted workorder will instruct.
 
 Reading an authority document permits bounded compliance checks. It does

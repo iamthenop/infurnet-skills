@@ -31,7 +31,7 @@ change boundaries.
 3. this role file;
 4. when a work plan has been reviewed: every finding from the plan
    review before starting;
-5. every bundled skill that governs a surface the work touches.
+5. every bundled skill governing a surface that the work touches.
 
 A bundled skill applies when the authorized work touches its surface;
 the repository merely containing a surface does not load its skill. Read

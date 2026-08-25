@@ -137,12 +137,18 @@ appears.
 ## What to avoid
 
 * volume as a substitute for clarity
-* hedging language that avoids commitment (`may potentially`, `could
-  possibly`, `it is worth noting that`)
+* hedging language that avoids commitment
 * passive constructions that obscure the subject
-* filler openings (`In order to`, `It is important to`, `As mentioned`)
+* filler openings
 * emotional language as pressure
 * persuasion through assertion rather than structure
+
+The hedges and filler openings named above read like this:
+
+```
+may potentially, could possibly, it is worth noting that
+In order to, It is important to, As mentioned
+```
 
 ## Capitalization
 

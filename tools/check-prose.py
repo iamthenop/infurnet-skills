@@ -89,7 +89,6 @@ FILLERS = re.compile(
 # Stop-word filter for overlap detection
 # ---------------------------------------------------------------------------
 
-# Common English stop words plus short tokens that carry no semantic weight
 BASE_STOP_WORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
@@ -102,19 +101,16 @@ BASE_STOP_WORDS = {
 
 
 def extract_code_identifiers(source, suffix):
-    """Extract identifiers from source to exclude from overlap calculation."""
     identifiers = set()
     if suffix == ".py":
         try:
             tree = ast.parse(source)
             for node in ast.walk(tree):
                 if hasattr(node, "name") and node.name:
-                    # split snake_case and camelCase
                     parts = re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", node.name)
                     identifiers.update(p.lower() for p in parts if len(p) > 2)
         except SyntaxError:
             pass
-    # for Java and Markdown, extract capitalised words as likely identifiers
     for m in re.finditer(r"\b([A-Z][a-zA-Z0-9]{2,})\b", source):
         parts = re.split(r"(?<=[a-z])(?=[A-Z])", m.group(1))
         identifiers.update(p.lower() for p in parts if len(p) > 2)
@@ -122,7 +118,6 @@ def extract_code_identifiers(source, suffix):
 
 
 def meaningful_tokens(text, stop_words):
-    """Return lowercase tokens with stop words removed."""
     tokens = re.findall(r"\b[a-z]{3,}\b", text.lower())
     return [t for t in tokens if t not in stop_words]
 
@@ -153,7 +148,8 @@ def extract_python_comments(source):
                                   ast.ClassDef, ast.Module)):
                 docstring = ast.get_docstring(node)
                 if docstring:
-                    items.append((node.lineno, "docstring", docstring))
+                    lineno = getattr(node, "lineno", 1)
+                    items.append((lineno, "docstring", docstring))
     except SyntaxError:
         pass
     return items
@@ -178,34 +174,61 @@ def extract_java_comments(source):
 def extract_markdown_prose(source):
     items = []
     in_fence = False
+    in_frontmatter = False
     fence_re = re.compile(r'^\s*(`{3,}|~{3,})')
+    frontmatter_re = re.compile(r'^---\s*$')
+    list_re = re.compile(r'^\s*(\*|-|\d+\.)\s')
+    table_re = re.compile(r'^\s*\|')
     lineno = 0
     para_start = None
     para_lines = []
 
+    def flush():
+        nonlocal para_start, para_lines
+        if para_lines:
+            items.append((para_start, "prose", " ".join(para_lines)))
+        para_lines = []
+        para_start = None
+
     for line in source.splitlines():
         lineno += 1
+
+        # frontmatter fence (first --- block)
+        if lineno == 1 and frontmatter_re.match(line):
+            in_frontmatter = True
+            continue
+        if in_frontmatter:
+            if frontmatter_re.match(line):
+                in_frontmatter = False
+            continue
+
+        # code fences
         if fence_re.match(line):
-            if para_lines:
-                items.append((para_start, "prose", " ".join(para_lines)))
-                para_lines = []
-                para_start = None
+            flush()
             in_fence = not in_fence
             continue
         if in_fence:
             continue
+
+        # headings and blank lines — paragraph boundaries
         if re.match(r'^\s*#', line) or not line.strip():
-            if para_lines:
-                items.append((para_start, "prose", " ".join(para_lines)))
-                para_lines = []
-                para_start = None
+            flush()
             continue
+
+        # list items and table rows — single-line prose items, never merged
+        if list_re.match(line) or table_re.match(line):
+            flush()
+            text = line.strip().lstrip('*-|0123456789. ').strip()
+            if text:
+                items.append((lineno, "prose", text))
+            continue
+
+        # ordinary prose — accumulate into paragraph
         if para_start is None:
             para_start = lineno
         para_lines.append(line.strip())
 
-    if para_lines:
-        items.append((para_start, "prose", " ".join(para_lines)))
+    flush()
     return items
 
 
@@ -221,11 +244,9 @@ def check_density(lineno, kind, text, stop_words):
     if len(sentences) > limit:
         findings.append((
             lineno, kind,
-            f"{len(sentences)} sentences — "
-            f"limit is {limit} for {kind}",
+            f"{len(sentences)} sentences — limit is {limit} for {kind}",
         ))
 
-    # restatement: consecutive sentences with high meaningful-token overlap
     for i in range(len(sentences) - 1):
         tok_a = meaningful_tokens(sentences[i], stop_words)
         tok_b = meaningful_tokens(sentences[i + 1], stop_words)
@@ -239,7 +260,6 @@ def check_density(lineno, kind, text, stop_words):
                 ))
                 break
 
-    # hedge density
     hedges = HEDGES.findall(text)
     if len(hedges) > 1:
         quoted = ", ".join(f"'{h}'" for h in hedges[:3])
@@ -248,7 +268,6 @@ def check_density(lineno, kind, text, stop_words):
             f"{len(hedges)} hedge words ({quoted}) — state the fact directly",
         ))
 
-    # filler openers
     if FILLERS.search(text):
         findings.append((lineno, kind, "filler opener — start with the fact"))
 
@@ -278,7 +297,6 @@ def check_file(path, run_density, run_vocabulary):
     except OSError:
         return findings
 
-    # build file-specific stop words: base + code identifiers
     stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, path.suffix)
 
     if path.suffix == ".py":
@@ -306,8 +324,8 @@ def check_file(path, run_density, run_vocabulary):
 
 
 def collect_files(targets):
-    files = []
     skip_dirs = {".git", "vendor", ".venv", "__pycache__", "node_modules"}
+    files = []
     for target in targets:
         p = Path(target)
         if p.is_file():
@@ -327,24 +345,18 @@ def collect_files(targets):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Check prose density and vocabulary sprawl."
+        description="Check prose density and vocabulary sprawl.",
     )
     parser.add_argument(
         "paths", nargs="*", default=[str(ROOT)],
         help="Files or directories to check (default: repo root)",
     )
-    parser.add_argument(
-        "--density", action="store_true",
-        help="Run density checks only",
-    )
-    parser.add_argument(
-        "--vocabulary", action="store_true",
-        help="Run vocabulary checks only",
-    )
-    parser.add_argument(
-        "--strict", action="store_true",
-        help="Exit 1 on any finding (for CI)",
-    )
+    parser.add_argument("--density", action="store_true",
+                        help="Run density checks only")
+    parser.add_argument("--vocabulary", action="store_true",
+                        help="Run vocabulary checks only")
+    parser.add_argument("--strict", action="store_true",
+                        help="Exit 1 on any finding (for CI)")
     args = parser.parse_args()
 
     run_density = args.density or not args.vocabulary
@@ -363,14 +375,13 @@ def main():
         print(f"PASS — {len(files)} files checked, no findings")
         sys.exit(0)
 
-    # group and display by file
     by_file: dict = {}
     for filepath, lineno, kind, message in all_findings:
         by_file.setdefault(filepath, []).append((lineno, kind, message))
 
     density_count = sum(
         1 for _, _, k, m in all_findings
-        if "sentences" in m or "overlap" in m or "hedge" in m or "filler" in m
+        if any(w in m for w in ("sentences", "overlap", "hedge", "filler"))
     )
     vocab_count = len(all_findings) - density_count
 

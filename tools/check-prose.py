@@ -313,7 +313,7 @@ def extract_markdown_prose(source):
 def check_density(lineno, kind, text, stop_words):
     findings = []
     sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-    limit = 3
+    limit = 2 if kind == "inline" else 3
 
     if len(sentences) > limit:
         findings.append((

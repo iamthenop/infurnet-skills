@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""
+Check prose density and vocabulary sprawl in source comments,
+docstrings, and Markdown files.
+
+Usage:
+    python3 tools/check-prose.py [path ...]   # check specific files or dirs
+    python3 tools/check-prose.py              # check entire repo root
+    python3 tools/check-prose.py --density    # density checks only
+    python3 tools/check-prose.py --vocabulary # vocabulary checks only
+    python3 tools/check-prose.py --strict     # exit 1 on any finding
+"""
+import argparse
+import ast
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# Vocabulary: words/phrases the model reaches for when simpler ones exist.
+# Format: (pattern, suggestion)
+# ---------------------------------------------------------------------------
+VOCABULARY = [
+    (r"\butilize\b", "use"),
+    (r"\bfacilitate\b", "help or allow"),
+    (r"\binstantiate\b", "create"),
+    (r"\binstantiation\b", "creation"),
+    (r"\bexecute\b", "run"),
+    (r"\binitialize\b", "set up or start"),
+    (r"\binitialization\b", "setup or start"),
+    (r"\bsubsequently\b", "then"),
+    (r"\baforementioned\b", "remove — the reader already knows"),
+    (r"\bleverage\b", "use"),
+    (r"\bperformant\b", "fast or efficient"),
+    (r"\bpersist\b(?=.*\b(data|state|record|value)\b)", "save"),
+    (r"\bpropagat\b", "pass or spread"),
+    (r"\borchestr\w+\b", "coordinate or run"),
+    (r"\bprovision\b", "create or set up"),
+    (r"\bparameteriz\w+\b", "configure"),
+    (r"\bsurface\b(?=\s+(?:a|the|an)\b)", "expose or show"),
+    (r"\bit is worth noting\b", "remove — state the fact directly"),
+    (r"\bit should be noted\b", "remove — state the fact directly"),
+    (r"\bin order to\b", "to"),
+    (r"\bdue to the fact that\b", "because"),
+    (r"\bat this point in time\b", "now"),
+    (r"\bprior to\b", "before"),
+    (r"\bsubsequent to\b", "after"),
+    (r"\bin the event that\b", "if"),
+    (r"\bwith respect to\b", "about or for"),
+    (r"\bin terms of\b", "remove or rewrite"),
+    (r"\bpotentially\b", "remove or be specific"),
+    (r"\bgenerally speaking\b", "remove"),
+    (r"\bbasically\b", "remove"),
+    (r"\bessentially\b", "remove"),
+    (r"\bfundamentally\b", "remove"),
+    (r"\boverall\b", "remove"),
+    (r"\beffectively\b", "remove or be specific"),
+    (r"\brobust\b", "be specific about what holds"),
+    (r"\bseamless\b", "be specific"),
+    (r"\bstraightforward\b", "be specific"),
+    (r"\btrivial\b", "be specific"),
+    (r"\bnon-trivial\b", "be specific"),
+]
+
+VOCABULARY_RE = [
+    (re.compile(pat, re.IGNORECASE), suggestion)
+    for pat, suggestion in VOCABULARY
+]
+
+HEDGES = re.compile(
+    r"\b(may|might|could|potentially|possibly|generally|typically|"
+    r"usually|often|sometimes|in some cases|in certain cases|"
+    r"it is possible that|there may be)\b",
+    re.IGNORECASE,
+)
+
+FILLERS = re.compile(
+    r"^\s*(in order to|it is worth|it should be|as mentioned|"
+    r"as noted|as discussed|as previously|note that|please note|"
+    r"it is important to|this function|this method|this class|"
+    r"this module)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Stop-word filter for overlap detection
+# ---------------------------------------------------------------------------
+
+# Common English stop words plus short tokens that carry no semantic weight
+BASE_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "must", "shall", "this", "that", "these",
+    "those", "it", "its", "if", "as", "not", "no", "so", "than", "then",
+    "when", "where", "which", "who", "how", "what", "all", "any", "each",
+    "both", "either", "neither", "such", "own", "same", "other",
+}
+
+
+def extract_code_identifiers(source, suffix):
+    """Extract identifiers from source to exclude from overlap calculation."""
+    identifiers = set()
+    if suffix == ".py":
+        try:
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if hasattr(node, "name") and node.name:
+                    # split snake_case and camelCase
+                    parts = re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", node.name)
+                    identifiers.update(p.lower() for p in parts if len(p) > 2)
+        except SyntaxError:
+            pass
+    # for Java and Markdown, extract capitalised words as likely identifiers
+    for m in re.finditer(r"\b([A-Z][a-zA-Z0-9]{2,})\b", source):
+        parts = re.split(r"(?<=[a-z])(?=[A-Z])", m.group(1))
+        identifiers.update(p.lower() for p in parts if len(p) > 2)
+    return identifiers
+
+
+def meaningful_tokens(text, stop_words):
+    """Return lowercase tokens with stop words removed."""
+    tokens = re.findall(r"\b[a-z]{3,}\b", text.lower())
+    return [t for t in tokens if t not in stop_words]
+
+
+def overlap_ratio(tokens_a, tokens_b):
+    if not tokens_a or not tokens_b:
+        return 0.0
+    set_a, set_b = set(tokens_a), set(tokens_b)
+    return len(set_a & set_b) / min(len(set_a), len(set_b))
+
+
+# ---------------------------------------------------------------------------
+# Extraction
+# ---------------------------------------------------------------------------
+
+def extract_python_comments(source):
+    items = []
+    for i, line in enumerate(source.splitlines(), 1):
+        m = re.search(r'(?<!["\'])#\s*(.*)', line)
+        if m:
+            text = m.group(1).strip()
+            if text:
+                items.append((i, "inline", text))
+    try:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef, ast.Module)):
+                docstring = ast.get_docstring(node)
+                if docstring:
+                    items.append((node.lineno, "docstring", docstring))
+    except SyntaxError:
+        pass
+    return items
+
+
+def extract_java_comments(source):
+    items = []
+    for i, line in enumerate(source.splitlines(), 1):
+        m = re.search(r'//\s*(.*)', line)
+        if m:
+            text = m.group(1).strip()
+            if text:
+                items.append((i, "inline", text))
+    for m in re.finditer(r'/\*+\s*(.*?)\s*\*+/', source, re.S):
+        lineno = source[:m.start()].count('\n') + 1
+        text = re.sub(r'\s*\*\s*', ' ', m.group(1)).strip()
+        if text:
+            items.append((lineno, "block", text))
+    return items
+
+
+def extract_markdown_prose(source):
+    items = []
+    in_fence = False
+    fence_re = re.compile(r'^\s*(`{3,}|~{3,})')
+    lineno = 0
+    para_start = None
+    para_lines = []
+
+    for line in source.splitlines():
+        lineno += 1
+        if fence_re.match(line):
+            if para_lines:
+                items.append((para_start, "prose", " ".join(para_lines)))
+                para_lines = []
+                para_start = None
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if re.match(r'^\s*#', line) or not line.strip():
+            if para_lines:
+                items.append((para_start, "prose", " ".join(para_lines)))
+                para_lines = []
+                para_start = None
+            continue
+        if para_start is None:
+            para_start = lineno
+        para_lines.append(line.strip())
+
+    if para_lines:
+        items.append((para_start, "prose", " ".join(para_lines)))
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Checks
+# ---------------------------------------------------------------------------
+
+def check_density(lineno, kind, text, stop_words):
+    findings = []
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+    limit = 3 if kind in ("docstring", "block") else 2
+
+    if len(sentences) > limit:
+        findings.append((
+            lineno, kind,
+            f"{len(sentences)} sentences — "
+            f"limit is {limit} for {kind}",
+        ))
+
+    # restatement: consecutive sentences with high meaningful-token overlap
+    for i in range(len(sentences) - 1):
+        tok_a = meaningful_tokens(sentences[i], stop_words)
+        tok_b = meaningful_tokens(sentences[i + 1], stop_words)
+        if len(tok_a) >= 4 and len(tok_b) >= 4:
+            ratio = overlap_ratio(tok_a, tok_b)
+            if ratio > 0.6:
+                findings.append((
+                    lineno, kind,
+                    f"consecutive sentences repeat the same content "
+                    f"({ratio:.0%} token overlap after filtering)",
+                ))
+                break
+
+    # hedge density
+    hedges = HEDGES.findall(text)
+    if len(hedges) > 1:
+        quoted = ", ".join(f"'{h}'" for h in hedges[:3])
+        findings.append((
+            lineno, kind,
+            f"{len(hedges)} hedge words ({quoted}) — state the fact directly",
+        ))
+
+    # filler openers
+    if FILLERS.search(text):
+        findings.append((lineno, kind, "filler opener — start with the fact"))
+
+    return findings
+
+
+def check_vocabulary(lineno, kind, text):
+    findings = []
+    for pattern, suggestion in VOCABULARY_RE:
+        m = pattern.search(text)
+        if m:
+            findings.append((
+                lineno, kind,
+                f"'{m.group(0)}' — consider: {suggestion}",
+            ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# File dispatch
+# ---------------------------------------------------------------------------
+
+def check_file(path, run_density, run_vocabulary):
+    findings = []
+    try:
+        source = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return findings
+
+    # build file-specific stop words: base + code identifiers
+    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, path.suffix)
+
+    if path.suffix == ".py":
+        items = extract_python_comments(source)
+    elif path.suffix == ".java":
+        items = extract_java_comments(source)
+    elif path.suffix == ".md":
+        items = extract_markdown_prose(source)
+    else:
+        return findings
+
+    for lineno, kind, text in items:
+        if run_density:
+            findings.extend(
+                (path, ln, k, msg)
+                for ln, k, msg in check_density(lineno, kind, text, stop_words)
+            )
+        if run_vocabulary:
+            findings.extend(
+                (path, ln, k, msg)
+                for ln, k, msg in check_vocabulary(lineno, kind, text)
+            )
+
+    return findings
+
+
+def collect_files(targets):
+    files = []
+    skip_dirs = {".git", "vendor", ".venv", "__pycache__", "node_modules"}
+    for target in targets:
+        p = Path(target)
+        if p.is_file():
+            files.append(p)
+        elif p.is_dir():
+            for suffix in (".py", ".java", ".md"):
+                files.extend(
+                    f for f in p.rglob(f"*{suffix}")
+                    if not any(part in skip_dirs for part in f.parts)
+                )
+    return sorted(set(files))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Check prose density and vocabulary sprawl."
+    )
+    parser.add_argument(
+        "paths", nargs="*", default=[str(ROOT)],
+        help="Files or directories to check (default: repo root)",
+    )
+    parser.add_argument(
+        "--density", action="store_true",
+        help="Run density checks only",
+    )
+    parser.add_argument(
+        "--vocabulary", action="store_true",
+        help="Run vocabulary checks only",
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Exit 1 on any finding (for CI)",
+    )
+    args = parser.parse_args()
+
+    run_density = args.density or not args.vocabulary
+    run_vocabulary = args.vocabulary or not args.density
+
+    files = collect_files(args.paths)
+    if not files:
+        print("No files found.")
+        sys.exit(0)
+
+    all_findings = []
+    for f in files:
+        all_findings.extend(check_file(f, run_density, run_vocabulary))
+
+    if not all_findings:
+        print(f"PASS — {len(files)} files checked, no findings")
+        sys.exit(0)
+
+    # group and display by file
+    by_file: dict = {}
+    for filepath, lineno, kind, message in all_findings:
+        by_file.setdefault(filepath, []).append((lineno, kind, message))
+
+    density_count = sum(
+        1 for _, _, k, m in all_findings
+        if "sentences" in m or "overlap" in m or "hedge" in m or "filler" in m
+    )
+    vocab_count = len(all_findings) - density_count
+
+    for filepath in sorted(by_file):
+        print(f"\n{filepath}")
+        for lineno, kind, message in sorted(by_file[filepath]):
+            print(f"  {lineno:4d}  [{kind}] {message}")
+
+    print(
+        f"\n{len(all_findings)} finding(s) across {len(by_file)} file(s) "
+        f"— density: {density_count}, vocabulary: {vocab_count}"
+    )
+    print(
+        "Findings do not block delivery. Each finding kept as-is must be "
+        "acknowledged individually in the delivery report with a one-sentence "
+        "rationale."
+    )
+
+    if args.strict:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

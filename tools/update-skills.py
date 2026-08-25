@@ -3,7 +3,7 @@
 Update infurnet-skills vendor tree.
 
 Usage:
-    python3 .agents/update-skills.py                  # report + integrity check only
+    python3 .agents/update-skills.py                  # report + integrity check
     python3 .agents/update-skills.py --apply          # report + apply
     python3 .agents/update-skills.py --candidate SHA  # compare against specific SHA
     python3 .agents/update-skills.py --candidate v0.2.0  # compare against tag
@@ -57,7 +57,6 @@ def read_manifest():
 
 
 def verify_state(adoption):
-    """Verify that ADOPTION.md, vendor tree, and manifest all agree."""
     declared_pin = adoption["pin"]
     manifest = read_manifest()
     errors = []
@@ -84,7 +83,6 @@ def verify_state(adoption):
         if missing:
             errors.append(f"manifest has {len(missing)} files not on disk")
 
-        # verify a sample of file hashes
         for rel, expected_sha in list(manifest.get("files", {}).items())[:20]:
             p = VENDOR / rel
             if p.exists():
@@ -96,7 +94,6 @@ def verify_state(adoption):
 
 
 def generate_manifest(tree_path, sha):
-    """Generate a manifest from a tree directory."""
     files = {}
     for p in sorted(tree_path.rglob("*")):
         if p.is_file() and ".git" not in p.parts:
@@ -187,32 +184,27 @@ def diff_obligations(old_text, new_text):
 
 def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
                          skill_names, role_names):
-    # pin
     text = re.sub(
         r"\| Pinned commit\s*\|[^\n]*",
         f"| Pinned commit             | `{candidate_sha}` |",
         text,
     )
-    # tag — only update when a named ref that looks like a tag was supplied
     if adoption["tag"] and candidate_ref and candidate_ref != "main":
         text = re.sub(
             r"\| Release tag\s*\|[^\n]*",
             f"| Release tag               | `{candidate_ref}` |",
             text,
         )
-    # installed skills
     text = re.sub(
         r"\| Installed skills\s*\|[^\n]*",
         f"| Installed skills          | {', '.join(skill_names)} |",
         text,
     )
-    # installed roles
     text = re.sub(
         r"\| Installed roles\s*\|[^\n]*",
         f"| Installed roles           | {', '.join(role_names)} |",
         text,
     )
-    # last update — explicit replacement avoids backreference/escape ambiguity
     text = re.sub(
         r"\| Last update\s*\|[^\n]*",
         f"| Last update               | `{date.today().isoformat()} — pin update to {candidate_sha[:12]}` |",
@@ -232,7 +224,6 @@ def main():
     current_pin = adoption["pin"]
     repo_url = adoption["repo"]
 
-    # always verify current state first — never trust declared state alone
     print(f"Current pin (ADOPTION.md): {current_pin[:12]}")
     print("\n--- Integrity check ---")
     integrity_errors = verify_state(adoption)
@@ -248,28 +239,6 @@ def main():
     candidate_ref = args.candidate or "main"
     candidate_sha = resolve_sha(repo_url, candidate_ref)
     print(f"\nCandidate: {candidate_sha[:12]} ({candidate_ref})")
-
-    # self-check: warn if update-skills.py itself has changed in the candidate
-    import hashlib as _hashlib
-    _own_sha = _hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    _candidate_copy = Path(tempfile.mkdtemp()) / "update-skills-check.py"
-    try:
-        subprocess.run(
-            ["git", "show", f"{candidate_sha}:tools/update-skills.py"],
-            stdout=_candidate_copy.open("wb"), stderr=subprocess.DEVNULL,
-            check=True,
-        )
-        if _hashlib.sha256(_candidate_copy.read_bytes()).hexdigest() != _own_sha:
-            print(
-                "\nWARNING: update-skills.py has changed in the candidate.\n"
-                "Copy the new version after applying with --apply:\n"
-                f"  cp .agents/vendor/infurnet-skills/tools/update-skills.py"
-                f" {Path(__file__)}"
-            )
-        else:
-            print("\nupdate-skills.py: current")
-    except subprocess.CalledProcessError:
-        print("\nupdate-skills.py: not present in candidate tree")
 
     if current_pin == candidate_sha and not integrity_errors:
         print("Already at candidate and integrity checks pass. Nothing to do.")
@@ -336,7 +305,7 @@ def main():
         shutil.rmtree(VENDOR)
         shutil.copytree(str(candidate_tree), str(VENDOR))
 
-        # step 2: regenerate manifest atomically with vendor tree
+        # step 2: regenerate manifest
         skill_names = sorted(
             p.parent.name for p in candidate_tree.glob("skills/*/SKILL.md")
         )
@@ -353,7 +322,17 @@ def main():
         )
         ADOPTION.write_text(text)
 
-        # step 4: verify all three agree
+        # step 4: update self if a newer version exists in vendor tree
+        new_self = VENDOR / "tools" / "update-skills.py"
+        own = Path(__file__).resolve()
+        if new_self.exists():
+            if new_self.read_bytes() != own.read_bytes():
+                shutil.copy2(str(new_self), str(own))
+                print("  update-skills.py updated — re-run to use the new version")
+            else:
+                print("  update-skills.py: already current")
+
+        # step 5: verify all three agree
         print("5. Verifying integrity...")
         adoption_updated = read_adoption()
         errors = verify_state(adoption_updated)

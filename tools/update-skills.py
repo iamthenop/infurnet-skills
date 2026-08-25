@@ -249,6 +249,28 @@ def main():
     candidate_sha = resolve_sha(repo_url, candidate_ref)
     print(f"\nCandidate: {candidate_sha[:12]} ({candidate_ref})")
 
+    # self-check: warn if update-skills.py itself has changed in the candidate
+    import hashlib as _hashlib
+    _own_sha = _hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    _candidate_copy = Path(tempfile.mkdtemp()) / "update-skills-check.py"
+    try:
+        subprocess.run(
+            ["git", "show", f"{candidate_sha}:tools/update-skills.py"],
+            stdout=_candidate_copy.open("wb"), stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        if _hashlib.sha256(_candidate_copy.read_bytes()).hexdigest() != _own_sha:
+            print(
+                "\nWARNING: update-skills.py has changed in the candidate.\n"
+                "Copy the new version after applying with --apply:\n"
+                f"  cp .agents/vendor/infurnet-skills/tools/update-skills.py"
+                f" {Path(__file__)}"
+            )
+        else:
+            print("\nupdate-skills.py: current")
+    except subprocess.CalledProcessError:
+        print("\nupdate-skills.py: not present in candidate tree")
+
     if current_pin == candidate_sha and not integrity_errors:
         print("Already at candidate and integrity checks pass. Nothing to do.")
         sys.exit(0)

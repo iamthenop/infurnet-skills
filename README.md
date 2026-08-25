@@ -7,9 +7,10 @@ MIT-licensed.
 
 Skills contain portable rules and procedures. They acquire authority
 only when adopted by consuming repository governance; a skill file does
-not independently authorize work or mutation. Role instances,
-authority chains, and deciding-authority identity stay in the consuming
-repository's own governance files.
+not independently authorize work or mutation.
+
+Role instances, authority chains, and deciding-authority identity stay
+in the consuming repository's own governance files.
 
 ## Skills
 
@@ -39,9 +40,11 @@ repository's own governance files.
 
 A role is a set of operational boundaries plus a bundle of skills. Roles
 carry the may/must-not/stop-condition frame that keeps agent behaviour
-in-bounds; skills carry the procedure. The archetypes are project-neutral:
-authority chains, deciding-authority identity, and document homes are slots
-the consuming repository's governance and bindings fill.
+in-bounds; skills carry the procedure.
+
+The archetypes are project-neutral: authority chains, deciding-authority
+identity, and document homes are slots the consuming repository's
+governance and bindings fill.
 
 | Role | Frame | Bundle |
 | --- | --- | --- |
@@ -119,10 +122,11 @@ A consuming repository records its adoption in an `ADOPTION.md` at its
 governance-declared location, copied from this repository's
 [`ADOPTION.md`](ADOPTION.md) template. The manifest pins a
 cryptographically exact source revision; a governance dependency must
-not follow a mutable checkout or floating `main`. It records: source
-repository; pinned commit (and tag if any); installed skills; installed
-roles; installation mode; consumer governance entry point; bindings
-file location; approved local deviations; last update.
+not follow a mutable checkout or floating `main`.
+
+It records: source repository; pinned commit (and tag if any); installed
+skills; installed roles; installation mode; consumer governance entry
+point; bindings file location; approved local deviations; last update.
 
 Updating the pin follows six steps: compare pinned and candidate
 revisions; enumerate changed obligations; identify affected consumer

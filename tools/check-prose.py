@@ -4,11 +4,10 @@ Check prose density and vocabulary sprawl in source comments,
 docstrings, and Markdown files.
 
 Usage:
-    python3 tools/check-prose.py [path ...]   # check specific files or dirs
-    python3 tools/check-prose.py              # check entire repo root
-    python3 tools/check-prose.py --density    # density checks only
-    python3 tools/check-prose.py --vocabulary # vocabulary checks only
-    python3 tools/check-prose.py --strict     # exit 1 on any finding
+    python3 tools/check-prose.py [path ...]   # default: entire repo root
+    --density      # density checks only
+    --vocabulary   # vocabulary checks only
+    --strict       # exit 1 on any finding
 """
 import argparse
 import ast
@@ -255,7 +254,7 @@ def extract_markdown_prose(source):
 
 def check_density(lineno, kind, text, stop_words):
     findings = []
-    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
     limit = 3 if kind in ("docstring", "block") else 2
 
     if len(sentences) > limit:

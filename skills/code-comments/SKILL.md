@@ -70,10 +70,10 @@ Comments describe only the code that currently exists. They must not contain:
 * Inline comments are two sentences maximum. Docstrings and block comments
   are three sentences maximum. A comment that requires more is a signal
   the code needs simplifying or the information belongs elsewhere.
-* Prose density and vocabulary sprawl are checked by
-  `tools/check-prose.py`. Run it locally before commits reach review.
-  Findings do not block delivery but must be acknowledged individually
-  in the delivery report.
+* Prose density and vocabulary sprawl are checked by the prose checker
+  declared in the repository's build bindings. Run it locally before
+  commits reach review. Findings do not block delivery but must be
+  acknowledged individually in the delivery report.
 
 ## Identifier naming
 

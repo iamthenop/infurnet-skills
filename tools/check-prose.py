@@ -18,9 +18,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Markdown paths treated as governance — vocabulary checks only, no density.
+GOVERNANCE_DIRS = {
+    "skills", "roles", "eval",
+}
+GOVERNANCE_FILES = {
+    "AGENTS.md", "ADOPTION.md",
+}
+
 # ---------------------------------------------------------------------------
-# Vocabulary: words/phrases the model reaches for when simpler ones exist.
-# Format: (pattern, suggestion)
+# Vocabulary
 # ---------------------------------------------------------------------------
 VOCABULARY = [
     (r"\butilize\b", "use"),
@@ -86,7 +93,26 @@ FILLERS = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# Stop-word filter for overlap detection
+# Path classification
+# ---------------------------------------------------------------------------
+
+def is_governance_markdown(path):
+    """
+    Returns True when a Markdown file is governance text.
+    Governance markdown receives vocabulary checks only — no density.
+    Source comments and user-facing docs receive both.
+    """
+    rel = path.relative_to(ROOT) if path.is_absolute() else path
+    parts = rel.parts
+    if rel.name in GOVERNANCE_FILES:
+        return True
+    if parts and parts[0] in GOVERNANCE_DIRS:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Stop-word filter
 # ---------------------------------------------------------------------------
 
 BASE_STOP_WORDS = {
@@ -106,7 +132,8 @@ def extract_code_identifiers(source, suffix):
         try:
             tree = ast.parse(source)
             for node in ast.walk(tree):
-                if hasattr(node, "name") and node.name:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef)):
                     parts = re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", node.name)
                     identifiers.update(p.lower() for p in parts if len(p) > 2)
         except SyntaxError:
@@ -192,8 +219,6 @@ def extract_markdown_prose(source):
 
     for line in source.splitlines():
         lineno += 1
-
-        # frontmatter fence (first --- block)
         if lineno == 1 and frontmatter_re.match(line):
             in_frontmatter = True
             continue
@@ -201,29 +226,21 @@ def extract_markdown_prose(source):
             if frontmatter_re.match(line):
                 in_frontmatter = False
             continue
-
-        # code fences
         if fence_re.match(line):
             flush()
             in_fence = not in_fence
             continue
         if in_fence:
             continue
-
-        # headings and blank lines — paragraph boundaries
         if re.match(r'^\s*#', line) or not line.strip():
             flush()
             continue
-
-        # list items and table rows — single-line prose items, never merged
         if list_re.match(line) or table_re.match(line):
             flush()
             text = line.strip().lstrip('*-|0123456789. ').strip()
             if text:
                 items.append((lineno, "prose", text))
             continue
-
-        # ordinary prose — accumulate into paragraph
         if para_start is None:
             para_start = lineno
         para_lines.append(line.strip())
@@ -298,6 +315,7 @@ def check_file(path, run_density, run_vocabulary):
         return findings
 
     stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, path.suffix)
+    governance = path.suffix == ".md" and is_governance_markdown(path)
 
     if path.suffix == ".py":
         items = extract_python_comments(source)
@@ -309,16 +327,24 @@ def check_file(path, run_density, run_vocabulary):
         return findings
 
     for lineno, kind, text in items:
-        if run_density:
-            findings.extend(
-                (path, ln, k, msg)
-                for ln, k, msg in check_density(lineno, kind, text, stop_words)
-            )
-        if run_vocabulary:
-            findings.extend(
-                (path, ln, k, msg)
-                for ln, k, msg in check_vocabulary(lineno, kind, text)
-            )
+        # governance markdown: vocabulary only
+        if governance:
+            if run_vocabulary:
+                findings.extend(
+                    (path, ln, k, msg)
+                    for ln, k, msg in check_vocabulary(lineno, kind, text)
+                )
+        else:
+            if run_density:
+                findings.extend(
+                    (path, ln, k, msg)
+                    for ln, k, msg in check_density(lineno, kind, text, stop_words)
+                )
+            if run_vocabulary:
+                findings.extend(
+                    (path, ln, k, msg)
+                    for ln, k, msg in check_vocabulary(lineno, kind, text)
+                )
 
     return findings
 

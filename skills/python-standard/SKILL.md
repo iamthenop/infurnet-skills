@@ -69,7 +69,7 @@ payloads under any logging level.
 
 ## Tests
 
-* Execute tests through the build system with unit and integration tiers as
+* Run tests through the build system with unit and integration tiers as
   separate targets (see `bazel-discipline`).
 * Use focused tests for changed behaviour. Do not weaken tests to force a
   green CI build.

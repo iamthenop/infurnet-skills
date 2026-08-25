@@ -163,8 +163,13 @@ Workorder key, pull-request link, branch, and commit range.
 
 **What landed**
 Precise, measurable outcomes where the workorder defined them.
-Counts, pass/fail results, named targets, and linter result (tool,
-target count, pass/fail). Not prose impressions.
+Counts, pass/fail results, named targets, linter result (tool,
+target count, pass/fail), and prose check result (finding count
+by category — density and vocabulary). Not prose impressions.
+
+Each prose finding kept as-is must be acknowledged individually:
+state the file and line, the text flagged, and one sentence explaining
+why it was retained. "All findings justified" is not an acknowledgment.
 
 **Shape changes**
 Anything that differed from the approved plan and why. Each shape

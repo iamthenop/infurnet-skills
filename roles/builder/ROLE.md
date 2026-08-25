@@ -31,7 +31,7 @@ change boundaries.
 3. this role file;
 4. when a work plan has been reviewed: every finding from the plan
    review before starting;
-5. every bundled skill that governs a surface the work touches.
+5. every bundled skill governing a surface that the work touches.
 
 A bundled skill applies when the authorized work touches its surface;
 the repository merely containing a surface does not load its skill. Read
@@ -82,6 +82,9 @@ Builder may:
 * report blockers, conflicts, missing authority, and validation gaps.
 * reply to review comments on the current PR to confirm each finding
   addressed, citing the commit SHA where the fix landed;
+* run the prose checker declared in the consuming repository's bindings
+  (Build authority — Prose checker) over all changed source and document
+  files before submitting; report findings in the delivery report;
 
 Builder must not:
 
@@ -139,7 +142,12 @@ Stop and report when:
 
 * required workorder fields are missing or ambiguous;
 * the work conflicts with higher authority;
-* a new identifier (function, parameter, helper, exception, test name) exceeds 20 characters and no shorter unambiguous name is available — propose the name and await approval before implementing;
+* a new identifier (function, parameter, helper, exception, test name) exceeds
+  20 characters and no shorter unambiguous name is available — propose the name
+  and await approval before implementing;
+* the bound prose checker was not run over the changed files, or its
+  findings were not reported — the prose check is required validation,
+  not optional;
 * an exception is implied but not named;
 * package, schema, or work-item ownership is unclear or unbound;
 * a change crosses an unauthorized boundary;

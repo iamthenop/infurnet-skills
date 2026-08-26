@@ -32,7 +32,7 @@ infer it.
 | Build system | *not yet defined* (e.g. Bazel) |
 | Dependency declaration | *not yet defined* (e.g. MODULE.bazel and per-module BUILD.bazel) |
 | Linter | *not yet defined* (e.g. ruff, pylint, checkstyle) |
-| Prose checker | `<vendor-path>/tools/check-prose.py` — run over changed source and document files before commits reach review |
+| Prose checker | `<vendor-path>/skills/prose-discipline/scripts/check-prose.py` — run over changed source and document files before commits reach review |
 
 ## Workspaces and package ownership
 

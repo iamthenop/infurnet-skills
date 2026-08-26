@@ -43,7 +43,10 @@ def frontmatter(path):
 
 skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
 roles = sorted((ROOT / "roles").glob("*/ROLE.md"))
-refs = sorted((ROOT / "skills").glob("*/references/*.md"))
+refs = sorted(
+    list((ROOT / "skills").glob("*/references/*.md")) +
+    list((ROOT / "skills").glob("*/scripts/*"))
+)
 skill_names = {p.parent.name for p in skills}
 role_names = {p.parent.name for p in roles}
 governed = list(skills) + list(roles) + list(refs) + [
@@ -88,6 +91,11 @@ for p in skills:
     for rq in req:
         if rq not in skill_names:
             err(f"{p}: infurnet-requires names missing skill {rq!r}")
+
+    # 500-line threshold
+    lines = len(p.read_text().splitlines())
+    if lines > 500:
+        err(f"{p}: SKILL.md exceeds 500 lines ({lines}) — move detail to references/")
 
 # --- requires cycles ---
 graph = {
@@ -167,7 +175,8 @@ for p in md_files:
 # --- every reference file linked from its SKILL.md ---
 for rf in refs:
     skill_file = rf.parent.parent / "SKILL.md"
-    if f"references/{rf.name}" not in skill_file.read_text():
+    sub = "/".join(rf.parts[rf.parts.index("skills") + 2:])
+    if sub not in skill_file.read_text():
         err(f"{rf}: not linked from its SKILL.md")
 
 # --- README inventory: exact structural parity ---
@@ -227,4 +236,6 @@ if errors:
     for e in errors:
         print(" -", e)
     sys.exit(1)
-print(f"PASS — {len(skills)} skills, {len(roles)} roles, {len(refs)} references validated")
+ref_count = len([r for r in refs if "references" in r.parts])
+script_count = len([r for r in refs if "scripts" in r.parts])
+print(f"PASS — {len(skills)} skills, {len(roles)} roles, {ref_count} references, {script_count} scripts validated")

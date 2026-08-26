@@ -17,7 +17,7 @@ import sys
 import tokenize
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 # Markdown paths treated as governance — vocabulary checks only, no density.
 GOVERNANCE_DIRS = {

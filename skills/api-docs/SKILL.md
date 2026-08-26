@@ -1,10 +1,10 @@
 ---
 name: api-docs
-description: Form conventions for API reference documents. Use when creating, editing, restructuring, or reviewing a service API document — its operations, request/response/error tables, type notation, routes, anchors, or conventions section. Governs form only; routes, fields, and semantics are content owned elsewhere.
+description: "Form conventions for API reference documents. Use when creating, editing, restructuring, or reviewing a service API document — its operations, request/response/error tables, type notation, routes, anchors, or conventions section. Governs form only; routes, fields, and semantics are content owned elsewhere."
 license: MIT
 metadata:
   infurnet-kind: pattern
-  infurnet-requires: vocabulary-control
+  infurnet-requires: vocabulary-control,prose-discipline
 ---
 
 # API documentation conventions
@@ -14,20 +14,14 @@ When adopted, this skill governs the **form** of API documents. Every
 the API document is wrong and is corrected, not cited. Routes, fields,
 headers, vocabulary, and semantics are content; content authority lives in
 the repository's bindings, architecture documents, and the API documents
-themselves. Values appearing below are placeholders, not norms.
+themselves. Values appearing below are placeholders, not norms. Prose
+quality in API documents follows `prose-discipline`.
 
 ## Document shape
 
-An API document contains, in order:
-
-1. a title heading naming the API;
-2. `## Purpose` — what the API is for, who calls whom, and the transport and
-   authentication statement;
-3. `## Conventions` — the document-scoped conventions restated for standalone
-   reading;
-4. `## Operations List` — anchor links grouped by HTTP method;
-5. `## Operations` — one section per operation;
-6. `## Related documents` — plain-text block of paths with one-line roles.
+The canonical structure is in [`assets/api-template.md`](assets/api-template.md).
+Copy it when creating a new API document; fill every placeholder before
+committing.
 
 ## Conventions section
 
@@ -112,47 +106,15 @@ counts as sensitive is content; the API document states it.
 
 ## Type notation
 
-The `Type` column carries the scalar or structural type. The `Field` column
-carries the field name only — never a type, never brackets.
+See [`assets/api-template.md`](assets/api-template.md) for the complete
+type vocabulary. The governing rules:
 
-Scalar types:
-
-| Type | Meaning |
-| :--- | :--- |
-| `text` | UTF-8 string, bounded by the operation's contract |
-| `integer` | base-10 integer |
-| `boolean` | `true` or `false` |
-| `hex(n)` | lowercase hexadecimal string of exactly `n` characters |
-| `uuid` | RFC 4122 UUID in canonical 36-character form |
-| `enum` | closed value set; values listed in the Description cell. When the set is undecided, the cell states plainly that the set is not yet defined |
-
-Structural types:
-
-| Type | Meaning |
-| :--- | :--- |
-| `object` | JSON object; members listed in the Description cell or a dedicated shape block in the description |
-| `T[]` | JSON array of `T`, where `T` is any type in this table — `hex(64)[]`, `object[]`, `text[]` |
-
-Array notation lives in the `Type` column. Do not write `<field>[]` in the
-Field column.
-
-An `object[]` whose member shape is short is stated inline in the
-Description cell:
-
-```text
-| items | object[] | Array of `{ id, name, value }` |
-```
-
-An object shape too large for a cell is defined once in the operation
-description as a fenced JSON block, and the cell references it. A shape
-shared by several operations is defined once in the document and referenced;
-it is not restated per operation.
-
-`JSON` is not a type. Use `object`, `T[]`, or a named schema reference.
-
-Optionality markers lead the Description cell in italics: `*[optional]*`,
-`*[conditional]*`. A conditional field states its condition. An unmarked
-field is required.
+* The `Type` column carries the scalar or structural type.
+* The `Field` column carries the field name only — never a type, never brackets.
+* `JSON` is not a type. Use `object`, `T[]`, or a named schema reference.
+* Optionality markers lead the Description cell in italics: `*[optional]*`,
+  `*[conditional]*`. A conditional field states its condition. An unmarked
+  field is required.
 
 ## Cross-cutting fields
 
@@ -224,6 +186,12 @@ When an operation is added, update in the same change: the Operations List,
 the new operation's semantic anchor, the workflow reference, the
 document's Conventions section where affected, and any counterpart
 operation in a paired API document.
+
+## Assets
+
+* [`assets/api-template.md`](assets/api-template.md) — blank API document
+  scaffold including the complete type notation table. Copy when creating a
+  new API document; fill every placeholder before committing.
 
 ## Final rule
 

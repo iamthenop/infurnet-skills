@@ -4,7 +4,7 @@ Check prose density and vocabulary sprawl in source comments,
 docstrings, and Markdown files.
 
 Usage:
-    python3 tools/check-prose.py [path ...]   # default: entire repo root
+    python3 skills/prose-discipline/scripts/check-prose.py [path ...]   # default: entire repo root
     --density      # density checks only
     --vocabulary   # vocabulary checks only
     --strict       # exit 1 on any finding
@@ -17,7 +17,15 @@ import sys
 import tokenize
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+def _find_root(start):
+    p = start.resolve()
+    for parent in [p] + list(p.parents):
+        if any((parent / m).exists() for m in (".git", "AGENTS.md", "ADOPTION.md")):
+            return parent
+    return p  # fallback: script's own directory
+
+
+ROOT = _find_root(Path(__file__).parent)
 
 # Markdown paths treated as governance — vocabulary checks only, no density.
 GOVERNANCE_DIRS = {

@@ -170,6 +170,14 @@ Before submitting any prose deliverable, verify:
 
 If any check fails, revise before submitting.
 
+## Scripts
+
+* [`scripts/check-prose.py`](scripts/check-prose.py) — checks prose
+  density and vocabulary sprawl in source comments, docstrings, and
+  Markdown files. Run it over changed source and document files before
+  commits reach review. Invoke as:
+  `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [path ...]`
+
 ## Final rule
 
 One pass. One meaning. No assembly required.

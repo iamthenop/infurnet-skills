@@ -141,9 +141,11 @@ def fetch_tree(repo_url, sha):
 
 def collect_governed(tree):
     files = {}
-    for pattern in ("skills/*/SKILL.md", "roles/*/ROLE.md", "skills/*/references/*.md"):
+    for pattern in ("skills/*/SKILL.md", "roles/*/ROLE.md", "skills/*/references/*.md",
+                    "skills/*/scripts/*"):
         for p in sorted(tree.glob(pattern)):
-            files[str(p.relative_to(tree))] = p.read_text()
+            if p.is_file():
+                files[str(p.relative_to(tree))] = p.read_text()
     return files
 
 

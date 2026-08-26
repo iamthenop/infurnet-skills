@@ -2,6 +2,7 @@
 name: deploy-standard
 description: Container build, distribution, and release promotion discipline. Use when changing OCI images, BUILD targets for images, Docker Compose files, deployment fixtures, environment definitions, registry publication, or release promotion — or when a test needs a container fixture.
 license: MIT
+compatibility: Requires Bazel with rules_oci, a Docker-compatible container runtime, and Docker Compose.
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: bazel,rules_oci,docker-compatible-runtime,docker-compose

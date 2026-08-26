@@ -2,6 +2,7 @@
 name: python-standard
 description: Python implementation rules for module layout, typing posture, validation boundaries, errors, and logging. Use when changing Python source, tests, packaging, runtime behaviour, scripts, or daemons. Companion skills govern value types (type-discipline), build and dependencies (bazel-discipline), and docstrings (doc-comment-tags).
 license: MIT
+compatibility: Requires Python 3, Bazel build system, and Pydantic.
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: python,bazel,pydantic

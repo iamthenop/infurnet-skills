@@ -95,9 +95,9 @@ for p in skills:
 # --- skills-ref spec validation ---
 # The skills-ref PyPI package (pinned in tools/requirements.txt) installs its
 # CLI as `agentskills`, not `skills-ref` — there is no `skills-ref` binary.
+import shutil as _shutil
 import subprocess as _sp
-_sr = _sp.run(["agentskills", "--version"], capture_output=True)
-if _sr.returncode != 0:
+if _shutil.which("agentskills") is None:
     err("skills-ref (agentskills) not installed — run: pip install -r tools/requirements.txt")
 else:
     for p in skills:

@@ -45,7 +45,7 @@ skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
 roles = sorted((ROOT / "roles").glob("*/ROLE.md"))
 refs = sorted(
     list((ROOT / "skills").glob("*/references/*.md")) +
-    list((ROOT / "skills").glob("*/scripts/*"))
+    [p for p in (ROOT / "skills").glob("*/scripts/*") if p.is_file()]
 )
 skill_names = {p.parent.name for p in skills}
 role_names = {p.parent.name for p in roles}

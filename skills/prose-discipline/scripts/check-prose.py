@@ -4,7 +4,7 @@ Check prose density and vocabulary sprawl in source comments,
 docstrings, and Markdown files.
 
 Usage:
-    python3 tools/check-prose.py [path ...]   # default: entire repo root
+    python3 skills/prose-discipline/scripts/check-prose.py [path ...]   # default: entire repo root
     --density      # density checks only
     --vocabulary   # vocabulary checks only
     --strict       # exit 1 on any finding

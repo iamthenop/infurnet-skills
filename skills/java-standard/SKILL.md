@@ -2,6 +2,7 @@
 name: java-standard
 description: Java implementation rules for source layout, test placement, and documentation. Use when changing Java source, Java tests, JVM package layout, or Java runtime behaviour. Companion skills govern types (type-discipline), build and dependencies (bazel-discipline), and doc comments (doc-comment-tags).
 license: MIT
+compatibility: Requires Java toolchain and Bazel build system.
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: java,bazel

@@ -62,13 +62,6 @@ for p in skills:
         continue
     folder = p.parent.name
     skill_meta[folder] = d
-    if d.get("name") != folder:
-        err(f"{p}: name {d.get('name')!r} != folder {folder!r}")
-    desc = d.get("description") or ""
-    if not desc:
-        err(f"{p}: missing description")
-    if len(desc) > 1024:
-        err(f"{p}: description exceeds 1024 characters")
     if d.get("license") != "MIT":
         err(f"{p}: license must be MIT")
     meta = d.get("metadata")
@@ -85,6 +78,8 @@ for p in skills:
         err(f"{p}: stack-profile requires infurnet-compat")
     if kind != "stack-profile" and meta.get("infurnet-compat"):
         err(f"{p}: infurnet-compat only valid on stack-profile")
+    if kind == "stack-profile" and not d.get("compatibility"):
+        err(f"{p}: stack-profile requires compatibility field")
     req = [s.strip() for s in (meta.get("infurnet-requires") or "").split(",") if s.strip()]
     if len(req) != len(set(req)):
         err(f"{p}: duplicate entries in infurnet-requires")
@@ -96,6 +91,24 @@ for p in skills:
     lines = len(p.read_text().splitlines())
     if lines > 500:
         err(f"{p}: SKILL.md exceeds 500 lines ({lines}) — move detail to references/")
+
+# --- skills-ref spec validation ---
+# The skills-ref PyPI package (pinned in tools/requirements.txt) installs its
+# CLI as `agentskills`, not `skills-ref` — there is no `skills-ref` binary.
+import shutil as _shutil
+import subprocess as _sp
+if _shutil.which("agentskills") is None:
+    err("skills-ref (agentskills) not installed — run: pip install -r tools/requirements.txt")
+else:
+    for p in skills:
+        _r = _sp.run(
+            ["agentskills", "validate", str(p.parent)],
+            capture_output=True, text=True,
+        )
+        if _r.returncode != 0:
+            for line in (_r.stdout + _r.stderr).splitlines():
+                if line.strip():
+                    err(f"{p.parent.name}: skills-ref: {line.strip()}")
 
 # --- requires cycles ---
 graph = {

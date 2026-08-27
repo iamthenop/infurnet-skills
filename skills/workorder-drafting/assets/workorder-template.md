@@ -1,3 +1,30 @@
+---
+workorder_key: "<WO-...>"
+profile: "<implementation|validation|design|pr-fix|delivery>"
+executing_role: "roles/<role>/ROLE.md"
+
+base_branch: "<main|...>"
+work_branch: "<feat/...>"
+work_branch_state: "<existing|to_create>"
+target_branch: "<main|...>"
+
+governance:
+  - "<governing-document>"
+  - "<governing-document>"
+
+authorized_mutations:
+  - "<create-branch|commit|push|create-pr|merge|publish|create-issue|close-issue|comment-on-issue|comment-on-pr>"
+
+allowed_surface:
+  - "<path/to/file>"
+  - "<path/to/dir/>"
+
+temporary_artifacts: "none"
+# or, if temporary artifacts are authorized:
+# temporary_artifacts:
+#   - "<artifact-name>"
+---
+
 # `<workorder-key>` — `<title>`
 
 ## Workorder key
@@ -6,11 +33,9 @@
 
 ## Executing role
 
-Role: `<role>`
+Role: see `executing_role` in frontmatter.
 
-Role definition:
-
-* [`<role-file>`](<role-file>)
+Rationale: <explain any constraints on how the role applies>
 
 ## Authorizing source
 
@@ -26,36 +51,28 @@ approved.
 
 ## Governance
 
+Authoritative paths: see `governance` in frontmatter.
+
 <!--
-Reference governing standards by location. Do not restate them here.
-List every authority document the executor must read before acting.
+Explain any constraints on how the governing documents apply to this
+workorder, or leave blank.
 -->
-
-Required governing documents:
-
-* [`<governing-document>`](<governing-document>)
-* [`<governing-document>`](<governing-document>)
 
 ## Execution surface
 
-Repository: `<repository>`
-
-Base branch: `<base-branch>`
-
-Target branch: `<target-branch>`
+Branches: see `base_branch`, `work_branch`, `work_branch_state`, and
+`target_branch` in frontmatter.
 
 Environment or document set: `<environment, document set, or not applicable>`
 
 ## Allowed surface
 
-The executor may touch only:
+Authoritative surface: see `allowed_surface` in frontmatter.
 
-* `<file, directory, package, artifact, or other bounded surface>`;
-* `<file, directory, package, artifact, or other bounded surface>`.
+Boundary rationale and constraints:
 
-Every touched package, import, schema, runtime, persistence, remote, or other
-architectural boundary must be named here or elsewhere explicitly in this
-workorder.
+<explain why this surface is appropriate, any boundary rules the executor
+must respect, or leave blank if self-evident from the paths>
 
 ## In-scope work
 
@@ -116,37 +133,20 @@ Dependencies: `<dependency disposition or not applicable>`
 
 ## Authorized mutations
 
-<!--
-Persistent and remote mutations are grants, not implications.
+Authoritative mutations: see `authorized_mutations` in frontmatter.
 
-Name exactly what is authorized: branch creation, commits, pushes, PR creation,
-publication, issue mutation, etc.
-
-If none are granted, state that explicitly.
--->
-
-Authorized:
-
-* <mutation>;
-* <mutation>.
-
-Not authorized:
-
-* <mutation>;
-* <mutation>.
+Rationale: <explain any constraints or ordering on the authorized mutations,
+or leave blank>
 
 ## Temporary artifacts
 
+Authoritative: see `temporary_artifacts` in frontmatter.
+
 <!--
-List every non-deliverable artifact authorized for execution and its removal
-condition.
-
-If none are authorized, state "None."
+If temporary_artifacts is not none, explain each artifact's purpose and
+removal condition here. The frontmatter carries the machine-checkable
+declaration; this section carries the human rationale.
 -->
-
-| Temporary artifact | Purpose | Removal condition |
-| :--- | :--- | :--- |
-| `<artifact>` | <execution purpose> | <condition requiring removal> |
 
 ## Required validation
 

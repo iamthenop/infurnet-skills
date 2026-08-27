@@ -29,6 +29,38 @@ govern how each field is drafted.
 If a field does not apply, the workorder says so. A missing field is not an
 implied grant.
 
+## Frontmatter
+
+Every workorder carries a YAML frontmatter block. Frontmatter is
+authoritative for machine-checkable commissioning metadata. Prose
+sections explain, constrain, and provide rationale — they do not
+restate frontmatter values as independent authority.
+
+The exception is `workorder_key`, which is intentionally mirrored in
+`## Workorder key` as a human-readable identifier; the validator
+checks exact match.
+
+Required frontmatter fields:
+
+* `workorder_key` — unique identifier; must match `## Workorder key`
+* `profile` — one of: `implementation`, `validation`, `design`,
+  `pr-fix`, `delivery`
+* `executing_role` — repo-relative path to the role file
+* `base_branch` — starting-state ref; used for stale-base check
+* `work_branch` — branch the work executes on
+* `work_branch_state` — `existing` or `to_create`
+* `target_branch` — intended integration destination
+* `governance` — non-empty list of repo-relative paths to governing
+  documents
+* `authorized_mutations` — non-empty list from the established
+  vocabulary: `create-branch`, `commit`, `push`, `create-pr`,
+  `merge`, `publish`, `create-issue`, `close-issue`,
+  `comment-on-issue`, `comment-on-pr`
+* `allowed_surface` — non-empty list of repo-relative paths; files
+  have no trailing `/`; directories have trailing `/`; no `..`
+  traversal; no globs; no absolute paths
+* `temporary_artifacts` — the string `none` or a non-empty list
+
 ## Drafting rules
 
 * **Do not delegate unresolved decisions.** "Improve", "clean up", "as
@@ -229,6 +261,18 @@ A good stop is not failure. A confident guess is.
   workorder scaffold with all required fields pre-labelled. Copy when
   drafting a new workorder; fill every placeholder before submitting for
   approval.
+
+## Scripts
+
+* [`scripts/walkthrough.py`](scripts/walkthrough.py) — commissioning
+  validator. Checks frontmatter completeness and type correctness,
+  prose section presence and non-emptiness, repository-path existence,
+  and local git/ref conditions. Requires `pyyaml`.
+
+```
+python3 <vendor-path>/skills/workorder-drafting/scripts/walkthrough.py <workorder.md>
+python3 <vendor-path>/skills/workorder-drafting/scripts/walkthrough.py <workorder.md> --strict
+```
 
 ## Final rule
 

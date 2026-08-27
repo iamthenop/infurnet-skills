@@ -44,37 +44,10 @@ the template and boundary detail for each stratum.
 
 ## Stratum boundaries
 
-**`0000`** defines which database states are possible: foundational schema
-and invariant enforcement. It must not contain audit observers, queue
-notifications, seed records, service accounts, or application views or
-grants. Foundational invariants must work when `0000` is initialized alone.
-
-**`0001`** — audit records accepted database activity. Audit must not decide
-whether an operation is valid or replace foundational enforcement.
-
-**`0002`** — notifications wake consumers after database facts change.
-Notifications are not durable records or sources of truth; consumers must
-reread committed state.
-
-**`0020`** — only approved database service accounts and connection
-bootstrap privileges. Do not invent, rename, merge, split, or remove
-service accounts without explicit approval.
-
-**`0100`** — application-facing views, view triggers, and object privileges.
-Views and grants must not weaken, bypass, duplicate, or reinterpret
-foundational invariants.
-
-**`0200`** — purpose-built application writer functions and their execution
-privileges, under the same invariant rule. A writer may validate inputs
-early for useful failures, but foundational constraints and triggers remain
-the enforcement boundary.
-
-**`0900`** — only approved baseline records. Data only: no schema objects,
-roles, privileges, functions, triggers, or views.
-
-**`0901`** — only approved local-development sample identities and fixtures.
-Data only; runs after `0900`; development records are never production
-baseline data.
+See [`references/strata.md`](references/strata.md) for per-stratum
+boundary detail, permitted and prohibited object classes, dependency
+direction, placement litmus tests, and selection examples for ambiguous
+cases.
 
 ## SQL design
 
@@ -107,20 +80,14 @@ home per kind of information. SQL-specific additions:
 
 ## Privileges and writers
 
-Application roles receive only the privileges required by their documented
-service boundary. Prefer the pattern: base tables deny direct mutation; a
-purpose-built writer owns mutation; the runtime role receives `EXECUTE`
-only.
+Application roles receive only the privileges required by their
+documented service boundary. Prefer the pattern: base tables deny
+direct mutation; a purpose-built writer owns mutation; the runtime role
+receives `EXECUTE` only.
 
-`SECURITY DEFINER` functions must:
-
-* use a fixed trusted `search_path`;
-* place `pg_catalog` first and `pg_temp` last;
-* qualify application objects where practical;
-* revoke execution from `PUBLIC`;
-* grant execution only to approved roles.
-
-Do not invent role names or privilege boundaries.
+See [`references/strata.md`](references/strata.md) for the full
+least-privilege model, `SECURITY DEFINER` hardening requirements,
+grant-scope rules, and privilege verification expectations.
 
 ## Seed rules
 
@@ -132,19 +99,13 @@ remain in their separate strata.
 
 ## Validation
 
-* Foundational invariant tests initialize `0000` alone.
-* Full initialization tests execute every approved file in filename order
-  with SQL errors treated as fatal.
-* Schema tests verify the actual database catalogue: columns and types,
+* Run tests through the build system.
+* Schema tests verify the actual database catalogue — columns, types,
   constraints, foreign-key actions, indexes, triggers, function security,
   privileges, and initialization boundaries.
-* Behaviour tests prove the named invariant or failure condition.
-* Run tests through the build system.
-
-Do not suppress SQL errors, skip failing strata, weaken existing invariant
-tests, replace catalogue assertions with comments or text matching, or
-claim a constraint was tested when another trigger or privilege caused the
-failure.
+* Do not suppress SQL errors, skip failing strata, weaken existing
+  invariant tests, or claim a constraint was tested when another trigger
+  or privilege caused the failure.
 
 ## Multiple databases
 
@@ -155,22 +116,14 @@ each.
 
 ## Refuse and escalate
 
-Stop and report when:
+See [`references/strata.md`](references/strata.md) for the full stop
+condition list. Do not infer the resolution. Report the conflict and
+await instruction.
 
-* required schema authority is missing, or a required file is outside the
-  commissioned scope;
-* an object belongs to more than one stratum;
-* a foundational invariant depends on a later stratum;
-* a view, grant, or writer would bypass foundational enforcement;
-* a service account or privilege is not approved;
-* a new stratum appears necessary but is not approved;
-* a seed record must be invented;
-* work in one database requires changing another without authorization;
-* SQL conflicts with approved architecture;
-* an out-of-scope defect cannot be corrected mechanically;
-* an existing test must be weakened to pass.
+## References
 
-Do not infer the solution. Report the conflict and await instruction.
+* [`references/strata.md`](references/strata.md) — per-stratum boundary
+  detail, placement litmus tests, SQL privilege rules, and stop conditions
 
 ## Assets
 

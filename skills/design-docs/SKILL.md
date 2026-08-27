@@ -124,6 +124,18 @@ live in a working branch. It must not survive a merge into the mainline;
 removal is a merge check. The decided rule remains; the choosing stays in
 the pull-request and issue record.
 
+## Assets
+
+Templates for each design file type — copy the relevant file when
+creating a new document:
+
+* [`assets/boundary-template.md`](assets/boundary-template.md) — boundary document
+* [`assets/contract-template.md`](assets/contract-template.md) — contract document
+* [`assets/state-template.md`](assets/state-template.md) — state document
+* [`assets/workflow-template.md`](assets/workflow-template.md) — workflow document
+* [`assets/index-template.md`](assets/index-template.md) — directory index
+* [`assets/glossary-template.md`](assets/glossary-template.md) — glossary
+
 ## Final rule
 
 One file, one type, one home per fact. The lightest representation that

@@ -1,5 +1,5 @@
 <!--
-INFURNET_DIMENSION_MANIFEST:
+COMPLETION_CHECKLIST — mark each section included or not_applicable before committing:
   identity_and_addressing: included | not_applicable
   authority_and_access: included | not_applicable
   lifecycle: included | not_applicable

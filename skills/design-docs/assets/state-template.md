@@ -1,5 +1,5 @@
 <!--
-INFURNET_DIMENSION_MANIFEST:
+COMPLETION_CHECKLIST — mark each section included or not_applicable before committing:
   transition_effects: included | not_applicable
   adjacent_state_dimensions: included | not_applicable
   timing: included | not_applicable

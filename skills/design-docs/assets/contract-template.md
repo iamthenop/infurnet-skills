@@ -1,5 +1,5 @@
 <!--
-INFURNET_DIMENSION_MANIFEST:
+COMPLETION_CHECKLIST — mark each section included or not_applicable before committing:
   standards: included | not_applicable
   ownership: included | not_applicable
   timing: included | not_applicable

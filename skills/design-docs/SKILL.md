@@ -21,16 +21,16 @@ surgical changes) apply to all design documents.
 
 ## Design file types
 
-One file, one type. The type sets the required sections.
+One file, one type. Use the corresponding template from `## Assets`.
 
-| Type | Governs | Required sections |
-| :--- | :--- | :--- |
-| boundary | one component | binding rule; defines; does not define |
-| contract | one interface, instruction, or grant profile | canonical representation; validation; failure behaviour; versioning |
-| state | one entity's states | state diagram; transition rules; ownership |
-| workflow | one cross-component sequence | scope; participants; embedded sequence diagrams; related documents |
-| index | one directory | inventory with one-line roles |
-| glossary | canonical vocabulary | terms only; no rules |
+| Type | Governs |
+| :--- | :--- |
+| boundary | one component |
+| contract | one interface, instruction, or grant profile |
+| state | one entity's states |
+| workflow | one cross-component sequence |
+| index | one directory |
+| glossary | canonical vocabulary |
 
 ## Placement
 

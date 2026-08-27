@@ -308,6 +308,11 @@ Verify against the actual database catalogue, not only SQL text:
   matching, or claim a constraint was tested when another trigger or
   privilege caused the failure.
 
+The structural validator at
+[`scripts/validate-strata.py`](../scripts/validate-strata.py) checks
+filename ordering, stratum naming, and conservative boundary rules
+statically without a database connection.
+
 ## Stop conditions
 
 Stop and report when:

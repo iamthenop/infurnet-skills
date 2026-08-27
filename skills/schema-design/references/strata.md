@@ -20,7 +20,7 @@ constraints, indexes, foundational invariant functions and triggers.
 **Prohibited:** audit observers, queue notifications, seed records,
 service accounts, application views, object grants, writer functions.
 
-**Dependency direction:** nothing depends on this stratum; all later
+**Dependency direction:** this stratum depends on nothing; all later
 strata depend on it.
 
 **Litmus test:** would this object exist in a completely fresh database
@@ -40,7 +40,7 @@ useful, it does not.
 **Purpose:** records accepted database activity for accountability.
 
 **Permitted:** audit schema, audit tables, audit functions, audit
-triggers that observe committed state.
+triggers that observe accepted events.
 
 **Prohibited:** objects that decide whether an operation is valid,
 objects that replace or duplicate foundational enforcement, notification
@@ -53,10 +53,11 @@ or later.
 does it decide whether it should happen? Observation belongs here;
 decision belongs in `0000`.
 
-**Audit trigger vs invariant trigger:** an audit trigger fires after a
-fact is committed and records it. An invariant trigger enforces a rule
-and may raise an exception. Invariant triggers belong in `0000`; audit
-triggers belong here.
+**Audit trigger vs invariant trigger:** an audit trigger fires after the
+row or statement event, within the same transaction, and records it
+without deciding the transaction's outcome. An invariant trigger
+enforces a rule and may raise an exception. Invariant triggers belong in
+`0000`; audit triggers belong here.
 
 **Template:** [`assets/0001-audit-template.sql`](../assets/0001-audit-template.sql)
 
@@ -67,7 +68,8 @@ triggers belong here.
 **Purpose:** wakes consumers after database facts change.
 
 **Permitted:** notification functions and triggers that call
-`pg_notify` or equivalent after a commit.
+`pg_notify` or equivalent; delivery to listeners is deferred until the
+transaction commits.
 
 **Prohibited:** durable records, audit tables, objects that are sources
 of truth, objects that decide operation validity, seed data.
@@ -210,24 +212,61 @@ Additional requirements:
 * keep the function body narrower than the owner's full authority;
 * internal helper functions must not accidentally become callable application APIs — revoke `PUBLIC` `EXECUTE` on every function, including helpers.
 
-Template: `assets/0200-writers-template.sql`
-`0900_<db>_seeds.sql` — production baseline
-Purpose: approved baseline records required by production.
-Permitted: `INSERT` statements for explicitly approved baseline records.
-Prohibited: schemas, roles, privileges, functions, triggers, views, or any other schema object. Generated identifiers used as stable constants only when explicitly designed and approved as such.
-Dependency direction: depends on all earlier strata; `0901` depends on this file.
-Litmus test: is this record required for the production system to function correctly, and has it been explicitly approved? If no to either, it does not belong here.
-Production baseline vs development fixture: a production baseline record must exist in every deployed environment. A development fixture exists only for local development and testing. Development fixtures belong in `0901`, not here.
-Template: `assets/0900-seeds-template.sql`
-`0901_<db>_dev_seeds.sql` — development fixtures
-Purpose: approved local-development sample identities and fixtures.
-Permitted: `INSERT` statements for explicitly approved local-development records. Runs after `0900`.
-Prohibited: schemas, roles, privileges, functions, triggers, views, or any other schema object. Production baseline data. Records that production depends on.
-Dependency direction: depends on all earlier strata including `0900`; nothing depends on this file in production.
-Litmus test: would the production system fail without this record? If yes, it belongs in `0900`, not here.
-Template: `assets/0901-dev-seeds-template.sql`
-SQL privilege rules
-Least-privilege model
+**Template:** [`assets/0200-writers-template.sql`](../assets/0200-writers-template.sql)
+
+---
+
+### `0900_<db>_seeds.sql` — production baseline
+
+**Purpose:** approved baseline records required by production.
+
+**Permitted:** `INSERT` statements for explicitly approved baseline
+records.
+
+**Prohibited:** schemas, roles, privileges, functions, triggers, views,
+or any other schema object. Generated identifiers used as stable
+constants only when explicitly designed and approved as such.
+
+**Dependency direction:** depends on all earlier strata; `0901` depends
+on this file.
+
+**Litmus test:** is this record required for the production system to
+function correctly, and has it been explicitly approved? If no to
+either, it does not belong here.
+
+**Production baseline vs development fixture:** a production baseline
+record must exist in every deployed environment. A development fixture
+exists only for local development and testing. Development fixtures
+belong in `0901`, not here.
+
+**Template:** [`assets/0900-seeds-template.sql`](../assets/0900-seeds-template.sql)
+
+---
+
+### `0901_<db>_dev_seeds.sql` — development fixtures
+
+**Purpose:** approved local-development sample identities and fixtures.
+
+**Permitted:** `INSERT` statements for explicitly approved
+local-development records. Runs after `0900`.
+
+**Prohibited:** schemas, roles, privileges, functions, triggers, views,
+or any other schema object. Production baseline data. Records that
+production depends on.
+
+**Dependency direction:** depends on all earlier strata including
+`0900`; nothing depends on this file in production.
+
+**Litmus test:** would the production system fail without this record?
+If yes, it belongs in `0900`, not here.
+
+**Template:** [`assets/0901-dev-seeds-template.sql`](../assets/0901-dev-seeds-template.sql)
+
+---
+
+## SQL privilege rules
+
+### Least-privilege model
 
 * Application roles receive only the privileges required by their documented service boundary.
 * Base tables normally deny direct mutation when an approved writer owns the mutation surface.
@@ -236,7 +275,8 @@ Least-privilege model
 * Writer `EXECUTE` privileges belong with the writer in `0200`.
 * Service-account creation and connection/schema bootstrap belong in `0020`.
 
-Role-authority constraints
+### Role-authority constraints
+
 Never, without explicit approval:
 
 * invent role names or privilege boundaries;
@@ -244,7 +284,8 @@ Never, without explicit approval:
 * add role membership or ownership transfer;
 * add `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`, or any similar elevated capability.
 
-Privilege verification
+### Privilege verification
+
 Verify against the actual database catalogue, not only SQL text:
 
 * prove direct DML bypass paths are absent where writers are intended to be the controlling mutation surface;
@@ -267,9 +308,12 @@ Verify against the actual database catalogue, not only SQL text:
   matching, or claim a constraint was tested when another trigger or
   privilege caused the failure.
 
-Stop conditions
+## Stop conditions
+
 Stop and report when:
 
+* required schema authority is missing, or a required file is outside
+  the commissioned scope;
 * an object appears to belong in multiple strata;
 * a foundational invariant requires an object from a later stratum to enforce correctly;
 * a new stratum appears necessary but is not approved;
@@ -277,6 +321,10 @@ Stop and report when:
 * privilege ownership is ambiguous between strata;
 * a view, writer, or grant would bypass foundational enforcement;
 * seed data requires inventing identifiers, principals, or vocabulary not explicitly approved;
-* cross-database authority is not already defined for the work in scope.
+* work in one database requires changing another without authorization;
+* cross-database authority is not already defined for the work in scope;
+* SQL conflicts with approved architecture;
+* an out-of-scope defect cannot be corrected mechanically;
+* an existing test must be weakened to pass.
 
 Do not infer the resolution. Report the conflict and await instruction.

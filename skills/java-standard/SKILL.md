@@ -18,12 +18,8 @@ test targets in `bazel-discipline`; documentation comments in
 
 ## Source roots
 
-| Root | Contains |
-| --- | --- |
-| `src/main/java` | production Java source |
-| `src/main/resources` | production classpath resources |
-| `src/test/java` | isolated unit and package tests |
-| `src/it/java` | live integration and contract tests |
+Use the canonical Java source roots defined in
+[`references/source-roots.md`](references/source-roots.md).
 
 * Do not place Docker-backed, database-backed, network-backed, or other live
   integration tests under `src/test/java`.
@@ -99,6 +95,11 @@ guess.
 A linter enforcing naming, import, and typing rules runs locally before
 commits reach review. The specific tool is declared in the repository's
 build bindings. Running it is not optional at push time.
+
+## References
+
+* [`references/source-roots.md`](references/source-roots.md) — canonical
+  Java source roots and their contents
 
 ## Final rule
 

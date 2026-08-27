@@ -1,0 +1,221 @@
+-- =========================================================
+-- 0002_<db>_notify.sql
+-- =========================================================
+-- Transactional notification functions and triggers.
+--
+-- This stratum wakes consumers after accepted database facts change.
+--
+-- PERMITTED:
+--   notification functions
+--   AFTER triggers that emit transactional notifications
+--   minimal notification payload construction
+--   routing needed to select an approved notification channel
+--
+-- NOT PERMITTED:
+--   foundational state or lifecycle enforcement
+--   audit records or audit ownership
+--   durable queue or event records
+--   business decisions or authorization
+--   service-account creation
+--   application-facing views or grants
+--   application writer functions
+--   baseline seed records
+--   development fixtures
+--
+-- A notification is not a durable record and is never a source of truth.
+--
+-- Consumers must reread committed database state after receiving a
+-- notification.
+--
+-- Notifications must describe only facts accepted by earlier strata.
+-- They must not make an invalid operation valid, reinterpret the fact, or
+-- create a second lifecycle alongside the database state.
+--
+-- This template is a drafting aid only. Its presence does not authorize
+-- creation of this stratum, any notification channel, or any notification
+-- event. Repository bindings and the governing workorder provide that
+-- authority.
+
+BEGIN;
+
+-- =========================================================
+-- Notification function
+-- =========================================================
+-- A notification function should do the minimum work required to wake the
+-- approved consumer and identify what committed state it should reread.
+--
+-- Prefer SECURITY INVOKER unless elevated authority is demonstrably required.
+--
+-- Use a fixed trusted search_path:
+--   pg_catalog first
+--   pg_temp last
+--
+-- Notification payloads should normally contain only routing or lookup data:
+--   event/action category where required;
+--   source relation or fact category where required;
+--   stable identifier needed to reread committed state.
+--
+-- Do not copy the complete changed row into the notification.
+-- Do not make the payload a substitute for querying the database.
+-- Do not place secrets, credentials, tokens, material bytes, or unnecessary
+-- sensitive fields in a notification payload.
+
+-- CREATE OR REPLACE FUNCTION <schema>.<notify-function>()
+-- RETURNS trigger
+-- LANGUAGE plpgsql
+-- SECURITY INVOKER
+-- SET search_path = pg_catalog, pg_temp
+-- AS $$
+-- DECLARE
+--     payload json;
+-- BEGIN
+--     payload := json_build_object(
+--         'action', TG_OP,
+--         'table', TG_TABLE_NAME,
+--         'id', NEW.<stable-id>::text
+--     );
+--
+--     PERFORM pg_notify('<approved-channel>', payload::text);
+--
+--     RETURN NULL; -- AFTER ... FOR EACH ROW
+-- END;
+-- $$;
+
+
+-- =========================================================
+-- Source routing
+-- =========================================================
+-- When one notification function is attached to more than one relation,
+-- dispatch using the schema-qualified source identity where names could
+-- collide.
+--
+-- Every attached relation and event must be explicitly recognized.
+-- An unexpected attachment should fail rather than silently emit a
+-- misleading notification.
+--
+-- Do not infer record identity through column names that are not present on
+-- every triggering relation.
+
+-- Example:
+--
+-- CASE TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME
+--     WHEN '<schema>.<table>' THEN
+--         record_id := NEW.<id>::text;
+--     WHEN '<schema>.<other-table>' THEN
+--         record_id := NEW.<other-id>::text;
+--     ELSE
+--         RAISE EXCEPTION
+--             '<notify-function> attached to unrecognized table %.%',
+--             TG_TABLE_SCHEMA,
+--             TG_TABLE_NAME;
+-- END CASE;
+
+
+-- =========================================================
+-- Notification triggers
+-- =========================================================
+-- Notifications observe already-accepted changes.
+--
+-- Use AFTER triggers so foundational enforcement has already accepted the
+-- underlying change.
+--
+-- Select INSERT, UPDATE, or DELETE only when that event represents an
+-- approved wake-up condition.
+--
+-- Do not notify merely because a table changed if no consumer action is
+-- required.
+--
+-- Avoid duplicate wake-ups for one logical operation. If one operation
+-- produces several internal database writes, identify the authoritative fact
+-- whose change should wake the consumer and attach the notification there.
+--
+-- PostgreSQL notifications emitted inside a transaction are delivered only
+-- after successful commit. A rolled-back transaction must not wake consumers.
+
+-- CREATE TRIGGER <trigger-name>
+-- AFTER <approved-event>
+-- ON <schema>.<source-table>
+-- FOR EACH ROW
+-- EXECUTE FUNCTION <schema>.<notify-function>();
+
+
+-- =========================================================
+-- Payload semantics
+-- =========================================================
+-- The payload is a hint that committed state may require attention.
+--
+-- It must not be interpreted as:
+--   a durable event;
+--   proof that downstream work completed;
+--   a complete representation of the changed fact;
+--   authorization to act beyond the consumer's existing authority;
+--   an ordering guarantee beyond PostgreSQL's defined notification behavior;
+--   a retry ledger;
+--   delivery acknowledgement.
+--
+-- Consumers must tolerate:
+--   duplicate wake-ups;
+--   coalescing where applicable;
+--   reconnects or lost notifications;
+--   state changing again before the consumer rereads it.
+--
+-- Correctness therefore belongs to the durable database state, not to
+-- successful receipt of every notification.
+
+
+-- =========================================================
+-- Notification failure semantics
+-- =========================================================
+-- Notification functions execute inside the source transaction.
+--
+-- An unhandled error in the notification trigger can abort that transaction.
+-- Keep notification logic bounded and deterministic so notification plumbing
+-- does not become an accidental availability dependency.
+--
+-- Do not catch and suppress errors merely to make writes succeed unless the
+-- architecture explicitly defines that failure behavior.
+--
+-- Do not create a durable outbox or retry table in this stratum unless a
+-- separate approved design explicitly changes the notification architecture.
+-- A durable outbox is durable state, not merely a notification hook.
+
+
+-- =========================================================
+-- Privileges
+-- =========================================================
+-- Notification functions should not be application mutation interfaces.
+--
+-- Revoke direct execution from PUBLIC unless explicitly required.
+-- Grant only authority required by the approved execution path.
+
+-- REVOKE ALL
+--     ON FUNCTION <schema>.<notify-function>()
+--     FROM PUBLIC;
+
+
+-- =========================================================
+-- Final notification check
+-- =========================================================
+-- Before this file is accepted, verify:
+--
+--   [ ] every object belongs to the notification stratum;
+--   [ ] every source relation already exists in an earlier stratum;
+--   [ ] every trigger observes only an approved event;
+--   [ ] all source observation uses AFTER triggers;
+--   [ ] notification logic never decides whether the source change is valid;
+--   [ ] notifications are emitted transactionally;
+--   [ ] rolled-back changes produce no delivered notification;
+--   [ ] consumers are expected to reread committed state;
+--   [ ] payloads contain lookup/routing data rather than duplicated state;
+--   [ ] no secret or unnecessary sensitive data is included;
+--   [ ] one logical operation does not produce unintended duplicate wake-ups;
+--   [ ] multi-table dispatch uses unambiguous source identity;
+--   [ ] unexpected trigger attachment fails explicitly;
+--   [ ] notification failure semantics are understood;
+--   [ ] no durable queue, retry ledger, or event store is introduced;
+--   [ ] no audit ownership is present;
+--   [ ] no service account is created;
+--   [ ] no application view, grant, or writer is present;
+--   [ ] no seed data is present.
+
+COMMIT;

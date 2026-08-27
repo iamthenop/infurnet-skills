@@ -84,14 +84,8 @@ validates one specific contract.
 
 Gate names must not define generic architecture. Do not create generic
 classes, services, enums, functions, or tables named after workflow gates.
-
-| Avoid | Prefer |
-| --- | --- |
-| `G0WorkStatus` | `GateDisplayState` |
-| `G1PackageService`, `G2PackageService` | `PackageService`, `WorkResultService`, `DerivationService` |
-| `g0_accepted`, `g1_contextualized` | `completed` |
-| `accepted_g0_prep_report`, `g1_image_pkg_provenance` | `work_result`, `derivation` |
-| `fn_work_contract_complete_g0_acceptance` | `fn_work_contract_complete` |
+See [`references/naming-pairs.md`](references/naming-pairs.md) for the
+established avoid/prefer vocabulary pairs.
 
 ## Work-unit status
 
@@ -134,6 +128,11 @@ Before adding anything named after a gate key, answer:
 
 If the proposed design creates a generic architecture object named after a
 workflow gate, stop and report the conflict.
+
+## References
+
+* [`references/naming-pairs.md`](references/naming-pairs.md) — avoid/prefer
+  naming pairs for workflow concepts
 
 ## Final rule
 

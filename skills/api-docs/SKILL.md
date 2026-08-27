@@ -106,15 +106,16 @@ counts as sensitive is content; the API document states it.
 
 ## Type notation
 
-See [`assets/api-template.md`](assets/api-template.md) for the complete
-type vocabulary. The governing rules:
+The complete type vocabulary is in
+[`references/type-notation.md`](references/type-notation.md). The
+governing rules:
 
-* The `Type` column carries the scalar or structural type.
-* The `Field` column carries the field name only — never a type, never brackets.
+* The `Type` column carries only the scalar or structural type.
+* The `Field` column carries only the field name — never a type, never
+  brackets.
 * `JSON` is not a type. Use `object`, `T[]`, or a named schema reference.
-* Optionality markers lead the Description cell in italics: `*[optional]*`,
-  `*[conditional]*`. A conditional field states its condition. An unmarked
-  field is required.
+* Optionality is not encoded in the type — see the reference for
+  optionality markers.
 
 ## Cross-cutting fields
 
@@ -186,6 +187,11 @@ When an operation is added, update in the same change: the Operations List,
 the new operation's semantic anchor, the workflow reference, the
 document's Conventions section where affected, and any counterpart
 operation in a paired API document.
+
+## References
+
+* [`references/type-notation.md`](references/type-notation.md) — canonical
+  API field type vocabulary, optionality markers, and usage examples
 
 ## Assets
 

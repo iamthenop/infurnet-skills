@@ -46,15 +46,9 @@ Comments describe only the code that currently exists. They must not contain:
 
 ## One home per kind of information
 
-| Information | Location |
-| --- | --- |
-| What the code currently does | Code or a necessary source comment |
-| Why work was authorized | Workorder |
-| What changed and why | Pull-request body |
-| Historical implementation details | Commit and pull-request history |
-| Durable system structure and boundaries | Architecture documentation |
-| Binding project rules | Project governance files |
-| Validation performed | Test code and pull-request results |
+Every kind of information has exactly one authoritative location. See
+[`references/information-location.md`](references/information-location.md)
+for the canonical table.
 
 ## Discipline
 
@@ -77,36 +71,18 @@ Comments describe only the code that currently exists. They must not contain:
 
 ## Identifier naming
 
-Identifiers use the repository's established vocabulary and name one
-responsibility. They do not narrate setup, causality, control flow,
-comparisons, implementation history, or multiple outcomes. If a name
-needs clauses or conjunctions to explain itself, split the responsibility
-or move the explanation to a comment.
+Identifiers name one responsibility. They do not narrate setup, causality,
+control flow, comparisons, or multiple outcomes. See
+[`references/identifier-naming.md`](references/identifier-naming.md) for
+naming rules by identifier kind, examples, length guidance, and mechanical
+enforcement.
 
-Test names follow `test_<subject>_<expected_outcome>()`. The subject is
-the unit under test; the outcome is what the passing case proves.
+## References
 
-``` python
-# correct
-test_overlong_int_is_invalid()
-test_bad_entry_returns_failed()
-
-# incorrect — prose in identifier
-test_stored_json_with_pathological_shape_causes_validation_to_fail_and_preserves_the_original_entry()
-test_selector_that_already_exists_causes_an_integrity_failure_and_does_not_get_replaced()
-```
-
-Helper and fixture names name what they supply, not how they will be
-used or why they were introduced.
-
-The shortest name that is unambiguous in scope wins. Exhaust common words
-before coining compounds: `write`, `run`, `load`, `save`, `check`, `send`.
-A compound earns its second word only when a common word collides with
-something else already in scope. Names over 20 characters require
-justification recorded in the pull-request body; if none can be written,
-the name is wrong. The linter declared in the repository's build bindings
-enforces length and pattern rules; it runs locally before commits reach
-review.
+* [`references/information-location.md`](references/information-location.md) —
+  canonical table of information homes
+* [`references/identifier-naming.md`](references/identifier-naming.md) —
+  naming rules by identifier kind, examples, length guidance, linter mandate
 
 ## Final rule
 

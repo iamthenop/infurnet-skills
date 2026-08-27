@@ -53,50 +53,9 @@ recreate the shell; they compose the layout:
 
 Each fragment owns one concern. Do not fold feature behaviour into a
 fragment; pass typed model data in and let the page supply its own action
-markup.
-
-| Fragment | Owns |
-| --- | --- |
-| `document-head` | one `<title>`, viewport meta, the four stylesheet links in fixed order |
-| `application-header` | brand link (logo + name), current-principal display |
-| `primary-navigation` | the navigation list, active and unavailable states |
-| `breadcrumbs` | the breadcrumb trail; renders nothing when empty |
-| `page-header` | the single `<h1>`, optional description, an optional actions slot |
-| `action-bar` | a styled, responsive container for page actions |
-| `feedback` | status messages by severity |
-| `form-errors` | the page-level validation summary |
-| `empty-state` | an explained empty collection |
-| `application-footer` | the minimal footer |
-
-Fragments and pages use only the core Thymeleaf `StandardDialect`
-(`th:text`, `th:each`, `th:if`, `th:insert`/`th:replace`/`th:fragment`,
-`th:with`, `th:attr`, `th:classappend`, `th:href="@{…}"`, and fragment
-expressions `~{…}`). Do not use `th:field`/`#fields` or the Layout Dialect;
-neither is available and both break dependency-free rendering tests. Actions
-pass to a fragment as a fragment expression, or `~{}` when there are none.
-
-## Standard page model
-
-Every page supplies a `ShellViewModel` in the web module's package. Its field
-names are the standard; feature controllers populate this model rather than
-inventing names such as `title`, `screenTitle`, `headerText`, `pageName`, or
-`heading`.
-
-```text
-pageTitle                String              required — the one document <title>
-pageHeading              String              required — the one visible <h1>
-pageDescription          Optional<String>    explicit absence
-activeNavigation         Optional<NavigationSection>
-breadcrumbs              List<Breadcrumb>    immutable, possibly empty
-currentPrincipalDisplay  Optional<String>
-```
-
-Optional values are `java.util.Optional`, never `null`; the model is never an
-untyped map. Supporting types are typed: `NavigationSection` (enum, closed
-navigation vocabulary), `Breadcrumb`, `FormFieldError`, `FeedbackLevel`
-(enum), and `FeedbackMessage`. The navigation catalog is
-`NavigationSection.values()`, contributed as the `navSections` model
-attribute — not a field of `ShellViewModel`.
+markup. See [`references/fragments.md`](references/fragments.md) for the exact fragment ownership
+table, Thymeleaf dialect constraint, and `ShellViewModel` field
+specification.
 
 ## Page categories
 
@@ -110,30 +69,15 @@ attribute — not a field of `ShellViewModel`.
 
 ## CSS ownership
 
-| File | Owns |
-| --- | --- |
-| `tokens.css` | the palette, semantic role aliases, and the spacing, typography, width, radius, shadow, focus-ring, and transition scales |
-| `base.css` | element defaults, native system font stack, focus-visible, reduced-motion |
-| `layout.css` | the shell frame, header/nav/main/footer layout, responsive breakpoints |
-| `components.css` | the reusable component classes |
+Stylesheets load in the fixed order `tokens → base → layout →
+components`. Component CSS uses the semantic role aliases declared in
+`tokens.css`, not raw palette names and never raw hex. See
+[`references/components.md`](references/components.md) for the exact
+CSS file ownership table, component class inventory, and token alias
+list.
 
-Stylesheets load in the fixed order `tokens → base → layout → components`.
-
-### Palette tokens
-
-The approved palette is authoritative, declared in the repository's bindings,
-and lives only in `tokens.css`. Component CSS uses the **semantic role
-aliases** — `--page-background`, `--panel-background`, `--text-primary`,
-`--brand-primary`, `--link-color`, and the `--status-*` roles — not raw
-palette names, and never raw hex. Feature templates must contain no raw hex
-values.
-
-Reusable component classes include `.app-header`, `.app-brand`, `.app-logo`,
-`.app-navigation`, `.page-header`, `.breadcrumbs`, `.action-bar`, `.panel`,
-`.record-list`, `.record-metadata`, `.form-field`, `.field-help`,
-`.field-error`, `.error-summary`, `.feedback`, `.empty-state`, `.button`,
-`.button-primary`, `.button-secondary`. Do not add feature-named classes
-(e.g. `.invoice-card`) to the shared sheet; those belong to feature work.
+Do not add feature-named classes (e.g. `.invoice-card`) to the shared
+sheet; those belong to feature work.
 
 ## The logo
 
@@ -184,6 +128,13 @@ page may show a correlation reference.
 * no raw hex in feature templates; component CSS uses tokens, not raw hex;
 * no `<script>`, `javascript:` URL, or inline event handler — the shell
   requires no JavaScript.
+
+## References
+
+* [`references/fragments.md`](references/fragments.md) — fragment
+  ownership table, Thymeleaf dialect constraint, ShellViewModel fields
+* [`references/components.md`](references/components.md) — CSS file
+  ownership, component class inventory, semantic role aliases
 
 ## Final rule
 

@@ -21,27 +21,10 @@ does not paper over it.
 
 ## Required fields
 
-Every workorder names:
-
-* **Workorder key** — unique identifier for citation in reports and results.
-* **Executing role** and its role file, where roles are defined.
-* **Execution surface** — where the work happens (repository and branches,
-  document set, environment). For repository work: base and target branch.
-* **Allowed surface** — files, package areas, or artifacts the agent may touch.
-* **In-scope work**, stated as obligations. One sentence, one obligation.
-* **Out-of-scope work**, stated explicitly. Silence is not exclusion.
-* **Required validation** — tests, checks, or review criteria that define done.
-* **Expected report** — what the completion report or pull-request body must
-  contain.
-* **Authorized mutations** — exactly which persistent or remote state changes
-  are granted (commits, pushes, branches, pull requests, publications), or the
-  statement that none are granted.
-* **Temporary artifacts** — everything created to execute this workorder
-  that is not a deliverable (CI checks, scripts, fixtures, helper
-  branches), each with its removal condition. Removal on condition is
-  part of this workorder's validation, or is explicitly assigned to a
-  named successor workorder. If the field is absent, no temporary
-  artifact is authorized.
+Every workorder names the fields defined in
+[`assets/workorder-template.md`](assets/workorder-template.md).
+The template is the authoritative field list; the sections below
+govern how each field is drafted.
 
 If a field does not apply, the workorder says so. A missing field is not an
 implied grant.
@@ -239,6 +222,13 @@ Stop and escalate when:
   a decision.
 
 A good stop is not failure. A confident guess is.
+
+## Assets
+
+* [`assets/workorder-template.md`](assets/workorder-template.md) — blank
+  workorder scaffold with all required fields pre-labelled. Copy when
+  drafting a new workorder; fill every placeholder before submitting for
+  approval.
 
 ## Final rule
 

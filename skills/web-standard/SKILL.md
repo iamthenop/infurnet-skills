@@ -53,7 +53,7 @@ recreate the shell; they compose the layout:
 
 Each fragment owns one concern. Do not fold feature behaviour into a
 fragment; pass typed model data in and let the page supply its own action
-markup. See `references/fragments.md` for the exact fragment ownership
+markup. See [`references/fragments.md`](references/fragments.md) for the exact fragment ownership
 table, Thymeleaf dialect constraint, and `ShellViewModel` field
 specification.
 
@@ -75,6 +75,9 @@ components`. Component CSS uses the semantic role aliases declared in
 [`references/components.md`](references/components.md) for the exact
 CSS file ownership table, component class inventory, and token alias
 list.
+
+Do not add feature-named classes (e.g. `.invoice-card`) to the shared
+sheet; those belong to feature work.
 
 ## The logo
 

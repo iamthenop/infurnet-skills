@@ -252,6 +252,21 @@ Verify against the actual database catalogue, not only SQL text:
 * verify grants target approved roles and approved objects only;
 * verify `CONNECT` and schema `USAGE` have not been conflated with object access.
 
+## Validation
+
+* Foundational invariant tests initialize `0000` alone.
+* Full initialization tests execute every approved file in filename
+  order with SQL errors treated as fatal.
+* Schema tests verify the actual database catalogue: columns and types,
+  constraints, foreign-key actions, indexes, triggers, function
+  security, privileges, and initialization boundaries.
+* Behaviour tests prove the named invariant or failure condition.
+* Run tests through the build system.
+* Do not suppress SQL errors, skip failing strata, weaken existing
+  invariant tests, replace catalogue assertions with comments or text
+  matching, or claim a constraint was tested when another trigger or
+  privilege caused the failure.
+
 Stop conditions
 Stop and report when:
 

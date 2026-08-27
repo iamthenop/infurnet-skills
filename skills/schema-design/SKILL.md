@@ -99,19 +99,13 @@ remain in their separate strata.
 
 ## Validation
 
-* Foundational invariant tests initialize `0000` alone.
-* Full initialization tests execute every approved file in filename order
-  with SQL errors treated as fatal.
-* Schema tests verify the actual database catalogue: columns and types,
+* Run tests through the build system.
+* Schema tests verify the actual database catalogue — columns, types,
   constraints, foreign-key actions, indexes, triggers, function security,
   privileges, and initialization boundaries.
-* Behaviour tests prove the named invariant or failure condition.
-* Run tests through the build system.
-
-Do not suppress SQL errors, skip failing strata, weaken existing invariant
-tests, replace catalogue assertions with comments or text matching, or
-claim a constraint was tested when another trigger or privilege caused the
-failure.
+* Do not suppress SQL errors, skip failing strata, weaken existing
+  invariant tests, or claim a constraint was tested when another trigger
+  or privilege caused the failure.
 
 ## Multiple databases
 
@@ -122,22 +116,9 @@ each.
 
 ## Refuse and escalate
 
-Stop and report when:
-
-* required schema authority is missing, or a required file is outside the
-  commissioned scope;
-* an object belongs to more than one stratum;
-* a foundational invariant depends on a later stratum;
-* a view, grant, or writer would bypass foundational enforcement;
-* a service account or privilege is not approved;
-* a new stratum appears necessary but is not approved;
-* a seed record must be invented;
-* work in one database requires changing another without authorization;
-* SQL conflicts with approved architecture;
-* an out-of-scope defect cannot be corrected mechanically;
-* an existing test must be weakened to pass.
-
-Do not infer the solution. Report the conflict and await instruction.
+See [`references/strata.md`](references/strata.md) for the full stop
+condition list. Do not infer the resolution. Report the conflict and
+await instruction.
 
 ## References
 

@@ -1,0 +1,145 @@
+-- =========================================================
+-- 0020_<db>_service_accounts.sql
+-- =========================================================
+-- Approved database service accounts and connection bootstrap privileges.
+--
+-- This stratum instantiates database identities that have already been
+-- approved by repository authority.
+--
+-- PERMITTED:
+--   approved LOGIN roles / service accounts
+--   approved connection bootstrap privileges
+--   approved schema USAGE required to reach later-granted objects
+--
+-- NOT PERMITTED:
+--   inventing, renaming, merging, splitting, or removing service accounts
+--   foundational schemas, types, tables, constraints, or invariants
+--   audit or notification behavior
+--   application views
+--   table, sequence, view, or function object privileges
+--   application writer functions
+--   role membership not explicitly approved
+--   ownership transfer
+--   superuser, replication, bypass-RLS, role-creation, or database-creation
+--   authority unless explicitly approved
+--   baseline seed records
+--   development fixtures
+--
+-- A role name and its service boundary must already be defined by repository
+-- authority. This stratum does not design the database privilege model.
+--
+-- Object privileges belong to 0100.
+-- Writer EXECUTE privileges belong with the approved writer boundary in 0200.
+--
+-- This template is a drafting aid only. Its presence does not authorize
+-- creation of this stratum or any database identity. Repository bindings and
+-- the governing workorder provide that authority.
+
+BEGIN;
+
+-- =========================================================
+-- <approved service account>
+-- =========================================================
+-- Service boundary:
+--   <name the approved application/service boundary>
+--
+-- Approved bootstrap access:
+--   CONNECT on <database>
+--   USAGE on <schema(s)>
+--
+-- Object access is intentionally absent here.
+--
+-- Do not add privileges merely because the service will eventually need them.
+-- Those grants belong to the stratum that owns application-facing privileges.
+
+-- CREATE ROLE <approved-role>
+--     LOGIN
+--     NOSUPERUSER
+--     NOCREATEDB
+--     NOCREATEROLE
+--     NOINHERIT
+--     NOREPLICATION
+--     NOBYPASSRLS;
+--
+-- GRANT CONNECT
+--     ON DATABASE <database>
+--     TO <approved-role>;
+--
+-- GRANT USAGE
+--     ON SCHEMA <schema>
+--     TO <approved-role>;
+
+
+-- =========================================================
+-- Credentials
+-- =========================================================
+-- Do not commit production credentials or generated secrets to this file.
+--
+-- Credential provisioning must follow the repository's approved deployment
+-- mechanism.
+--
+-- If local-development initialization requires a placeholder credential,
+-- that behavior must be explicitly authorized and must not be represented as
+-- a production credential-management pattern.
+--
+-- Do not invent credential values while filling this template.
+
+
+-- =========================================================
+-- Role attributes
+-- =========================================================
+-- Every non-default PostgreSQL role attribute is an explicit authority grant.
+--
+-- Do not add:
+--   SUPERUSER
+--   CREATEDB
+--   CREATEROLE
+--   REPLICATION
+--   BYPASSRLS
+--   role membership
+--   object ownership
+--   elevated INHERIT behavior
+-- unless the governing architecture and workorder explicitly authorize it.
+--
+-- A service account needing one of these capabilities is a design decision,
+-- not a template-completion decision.
+
+
+-- =========================================================
+-- Schema reachability
+-- =========================================================
+-- USAGE permits the role to resolve objects in the approved schema.
+-- It does not grant access to those objects.
+--
+-- Keep bootstrap reachability separate from object authority.
+--
+-- Example:
+--
+-- GRANT USAGE ON SCHEMA <schema> TO <approved-role>;
+--
+-- SELECT / INSERT / UPDATE / DELETE / REFERENCES / TRIGGER and similar object
+-- privileges do not belong here.
+
+
+-- =========================================================
+-- Final service-account check
+-- =========================================================
+-- Before this file is accepted, verify:
+--
+--   [ ] every role is explicitly approved;
+--   [ ] every role name matches the approved vocabulary exactly;
+--   [ ] every role maps to one documented service boundary;
+--   [ ] no role was invented, renamed, merged, split, or removed;
+--   [ ] privileges are limited to approved connection/bootstrap access;
+--   [ ] object privileges are absent;
+--   [ ] writer EXECUTE privileges are absent;
+--   [ ] no unapproved role memberships exist;
+--   [ ] no ownership changes exist;
+--   [ ] no SUPERUSER, CREATEDB, CREATEROLE, REPLICATION, or BYPASSRLS
+--       authority exists unless explicitly approved;
+--   [ ] no production credential is committed;
+--   [ ] credential handling follows the approved deployment mechanism;
+--   [ ] no foundational, audit, notification, view, writer, or seed objects
+--       are present.
+
+COMMIT;

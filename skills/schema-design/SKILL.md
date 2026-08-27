@@ -120,6 +120,25 @@ See [`references/strata.md`](references/strata.md) for the full stop
 condition list. Do not infer the resolution. Report the conflict and
 await instruction.
 
+## Scripts
+
+* [`scripts/validate-strata.py`](scripts/validate-strata.py) — structural
+  validator for initialization strata. Checks filename ordering, canonical
+  stratum numbers, naming consistency, and conservative boundary rules.
+  Does not require a database connection.
+
+```text
+python3 <vendor-path>/skills/schema-design/scripts/validate-strata.py \
+    db/<database>/init/
+```
+
+or, to scan all declared databases:
+
+```text
+python3 <vendor-path>/skills/schema-design/scripts/validate-strata.py \
+    --root <repo-root>
+```
+
 ## References
 
 * [`references/strata.md`](references/strata.md) — per-stratum boundary

@@ -31,17 +31,9 @@ or required.
 
 ## Language mappings
 
-| Value class | Java | Python |
-| --- | --- | --- |
-| UUID identifier | `java.util.UUID` or value object | `uuid.UUID` or value object |
-| Closed vocabulary | enum | enum or literal-backed type |
-| Confusable identifiers | distinct value objects | distinct value objects |
-| Cross-process timestamp | `java.time.Instant` | timezone-aware UTC `datetime.datetime` |
-| Filesystem path | `java.nio.file.Path` | `pathlib.Path` |
-| Hash / digest | byte array or typed wrapper | fixed-width `bytes` |
-| Exact decimal | `java.math.BigDecimal` | `decimal.Decimal` |
-
-Other languages map by analogy: the rule is the value class, not the library.
+See [`references/language-mappings.md`](references/language-mappings.md)
+for the canonical per-language type table. The rule is the value class,
+not the library; other languages map by analogy.
 
 ## Absence, failure, mutation
 
@@ -57,6 +49,11 @@ Other languages map by analogy: the rule is the value class, not the library.
 Apply these rules to new and touched code. Do not launch unrelated type
 refactors: a type migration is its own authorized change, not a side effect of
 passing through a file.
+
+## References
+
+* [`references/language-mappings.md`](references/language-mappings.md) —
+  Java and Python type mappings by value class
 
 ## Final rule
 

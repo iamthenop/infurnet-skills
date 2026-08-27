@@ -52,7 +52,7 @@ role_names = {p.parent.name for p in roles}
 governed = list(skills) + list(roles) + list(refs) + [
     ROOT / "eval" / "triggers.md",
     ROOT / "tools" / "validate.py",
-]
+] + sorted((ROOT / "skills").glob("*/assets/*"))
 skill_meta = {}
 
 # --- skill frontmatter ---
@@ -150,7 +150,7 @@ for p in roles:
             err(f"{p}: bundle names missing skill {s!r}")
 
 # --- skill#Section references (roles and skills) ---
-for p in list(skills) + list(roles):
+for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/assets/*")):
     t = p.read_text()
     for m in re.finditer(r"`([a-z][a-z0-9-]*)#([^`]+)`", t):
         sk, heading = m.group(1), m.group(2)

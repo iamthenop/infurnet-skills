@@ -11,22 +11,22 @@
 ## Operations List
 
 ### GET
-- [<Operation name>](#get1)
+- [<Operation name>](#get-list-items)
 
 ### POST
-- [<Operation name>](#post1)
+- [<Operation name>](#post-create-item)
 
 ### PUT
-- [<Operation name>](#put1)
+- [<Operation name>](#put-update-item)
 
 ### DELETE
-- [<Operation name>](#delete1)
+- [<Operation name>](#delete-remove-item)
 
 ## Operations
 
 ### `/<version>/<system>/<surface>/<action>/{reference}`
 
-<span id="get1"></span>
+<span id="get-list-items"></span>
 #### <Human-friendly operation name>
 
 <Purpose, caller and authority, asynchronous behaviour, idempotency rules, integrity gates, and the workflow link where one exists.>

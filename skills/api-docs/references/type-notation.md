@@ -40,9 +40,9 @@ Array notation lives in the `Type` column. Do not write `<field>[]` in the
 An `object[]` whose member shape is short is stated inline in the
 Description cell:
 
-````text
+```text
 | items | object[] | Array of `{ id, name, value }` |
-````
+```
 
 An object shape too large for a cell is defined once in the operation
 description as a fenced JSON block, and the cell references it. A shape

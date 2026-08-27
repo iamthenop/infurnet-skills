@@ -19,7 +19,10 @@ allowed_surface:
   - "<path/to/file>"
   - "<path/to/dir/>"
 
-temporary_artifacts: "<none|see Temporary artifacts section>"
+temporary_artifacts: "none"
+# or, if temporary artifacts are authorized:
+# temporary_artifacts:
+#   - "<artifact-name>"
 ---
 
 # `<workorder-key>` — `<title>`

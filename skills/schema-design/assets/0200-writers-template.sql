@@ -1,0 +1,342 @@
+-- =========================================================
+-- 0200_<db>_writers.sql
+-- =========================================================
+-- Purpose-built application writer functions and execution privileges.
+--
+-- This stratum defines approved callable mutation surfaces for application
+-- services.
+--
+-- PERMITTED:
+--   purpose-built application writer functions
+--   database-boundary input and referent validation
+--   transaction-scoped context required by approved audit mechanisms
+--   explicit EXECUTE grants to approved service roles
+--   revocation of PUBLIC execution
+--
+-- NOT PERMITTED:
+--   foundational schemas, tables, constraints, or lifecycle enforcement
+--   replacing or weakening foundational invariants
+--   audit or notification ownership
+--   service-account creation
+--   application views
+--   direct table DML grants used as a substitute for a writer
+--   authorization decisions owned by another component or service
+--   inferred principals, authority, vocabulary, defaults, or identities
+--   swallowed constraint failures
+--   implicit idempotency
+--   baseline seed records
+--   development fixtures
+--
+-- A writer is an application mutation boundary, not a new source of database
+-- truth.
+--
+-- Writers may reject invalid input early for useful, bounded failures.
+-- Foundational constraints and triggers in 0000 remain authoritative even
+-- when equivalent checks are performed here.
+--
+-- This template is a drafting aid only. Its presence does not authorize
+-- creation of this stratum, any writer, any callable mutation surface, or any
+-- execution grant. Repository bindings and the governing workorder provide
+-- that authority.
+
+BEGIN;
+
+-- =========================================================
+-- <approved writer>
+-- =========================================================
+-- Purpose:
+--   <state exactly one application mutation this writer performs>
+--
+-- Owning caller:
+--   <approved service role>
+--
+-- Mutation surface:
+--   <tables / state affected>
+--
+-- Authorization boundary:
+--   <name the component or prior decision that authorizes the operation>
+--
+-- This function may validate that required database facts exist or have the
+-- correct structural relationship. It must not silently take ownership of an
+-- authorization decision assigned elsewhere.
+--
+-- Before drafting the function, answer:
+--
+--   What mutation is this writer authorized to perform?
+--   Which role alone may invoke it?
+--   Which underlying objects does that role intentionally lack direct DML on?
+--   Which checks are boundary validation?
+--   Which decisions remain outside the database writer?
+--   Which 0000 constraints remain authoritative?
+--   Is idempotency defined, explicitly absent, or owned elsewhere?
+--   What does the function return after successful mutation?
+--
+-- If any answer requires inventing architecture, stop.
+
+
+-- =========================================================
+-- Function contract
+-- =========================================================
+-- Inputs must reflect the approved contract exactly.
+--
+-- Do not:
+--   invent optional parameters;
+--   infer missing authority-bearing values;
+--   accept caller-supplied values that the database should derive;
+--   add convenience defaults without approval;
+--   accept a secret merely to echo it back in the result.
+--
+-- Return the canonical committed result required by the approved contract.
+-- Prefer returning database-assigned identifiers and normalized persisted
+-- values over reconstructing them in application code.
+
+-- CREATE OR REPLACE FUNCTION <schema>.<writer>(
+--     p_<argument> <type>
+-- )
+-- RETURNS <approved-return-type>
+-- LANGUAGE plpgsql
+-- SECURITY DEFINER
+-- SET search_path = pg_catalog, pg_temp
+-- AS $$
+-- DECLARE
+--     ...
+-- BEGIN
+--     ...
+-- END;
+-- $$;
+
+
+-- =========================================================
+-- Database-boundary validation
+-- =========================================================
+-- Writers may validate inputs or referents before mutation when doing so:
+--   provides a clear contract failure;
+--   prevents unnecessary partial work;
+--   confirms a required database relationship;
+--   avoids exposing objects the caller is not permitted to read directly.
+--
+-- Examples may include:
+--   required principal exists;
+--   referenced vocabulary value is registered;
+--   owning row exists;
+--   acting principal has the structural relationship required by the
+--   already-approved application contract.
+--
+-- Distinguish validation from authorization.
+--
+-- Validation asks:
+--   "Is the supplied database fact structurally admissible for this call?"
+--
+-- Authorization asks:
+--   "Is this actor permitted to perform this action?"
+--
+-- Do not move an authorization decision into this function merely because
+-- the necessary data is available here.
+
+
+-- =========================================================
+-- Foundational enforcement
+-- =========================================================
+-- Writer validation is not the integrity boundary.
+--
+-- Do not suppress or replace:
+--   UNIQUE constraints;
+--   CHECK constraints;
+--   foreign keys;
+--   exclusion constraints;
+--   foundational lifecycle triggers;
+--   immutable / append-only enforcement;
+--   concurrency rules owned by 0000.
+--
+-- If the same condition is checked early for a better error, the underlying
+-- foundational rule must still independently reject an invalid state.
+--
+-- Never weaken a foundational constraint to make a writer succeed.
+
+
+-- =========================================================
+-- Atomicity
+-- =========================================================
+-- A writer call should leave either the complete approved mutation or no
+-- mutation.
+--
+-- Related writes performed by one writer normally belong to one transaction.
+--
+-- Do not catch an error and preserve partial state unless the approved
+-- architecture explicitly requires that behavior.
+--
+-- When several rows establish one logical fact, document why they must commit
+-- or roll back together.
+
+
+-- =========================================================
+-- Idempotency
+-- =========================================================
+-- Idempotency must be explicit.
+--
+-- Exactly one should be true:
+--
+--   this writer is intentionally non-idempotent;
+--   this writer has an approved idempotency key and behavior;
+--   idempotency is owned by another layer and this writer does not implement
+--   it.
+--
+-- Do not infer idempotency from duplicate suppression.
+-- Do not convert foundational uniqueness failures into success unless the
+-- approved contract explicitly defines that behavior.
+-- Do not use ON CONFLICT DO NOTHING as an accidental idempotency policy.
+
+
+-- =========================================================
+-- Acting identity and audit context
+-- =========================================================
+-- If the audit architecture requires the writer to establish transaction-
+-- local acting identity, use only the approved mechanism.
+--
+-- Never trust a caller-controlled session value as authoritative attribution
+-- when the writer contract provides the acting principal explicitly.
+--
+-- Where required, overwrite the transaction-local value from the validated
+-- writer input before mutation.
+--
+-- Example:
+--
+-- PERFORM set_config(
+--     '<approved-audit-context-key>',
+--     p_acting_principal::text,
+--     true
+-- );
+--
+-- This records attribution context. It does not itself authorize the write.
+
+
+-- =========================================================
+-- SECURITY DEFINER
+-- =========================================================
+-- Application writers normally use SECURITY DEFINER only because the owning
+-- application role intentionally lacks direct DML on the underlying tables.
+--
+-- Every SECURITY DEFINER writer must:
+--   use a fixed trusted search_path;
+--   place pg_catalog first;
+--   place pg_temp last;
+--   schema-qualify application objects where practical;
+--   revoke execution from PUBLIC;
+--   grant execution only to approved roles.
+--
+-- Do not include writable application schemas in search_path merely for
+-- convenience.
+--
+-- Do not rely on caller-controlled object resolution.
+--
+-- SECURITY DEFINER grants the function owner's database authority while the
+-- function executes. Keep the body narrower than that authority.
+
+
+-- =========================================================
+-- Direct table privileges
+-- =========================================================
+-- Where the writer is the approved mutation boundary, the application role
+-- should not also hold direct INSERT / UPDATE / DELETE privileges on the
+-- underlying tables.
+--
+-- Otherwise the writer is advisory rather than controlling.
+--
+-- Verify the privilege catalogue, not merely the SQL text, to prove that the
+-- direct bypass path is absent.
+
+
+-- =========================================================
+-- Execution privilege
+-- =========================================================
+-- PUBLIC must not inherit callable access to an application writer.
+--
+-- Revoke first, then grant only to the approved owning role.
+--
+-- Use the complete function signature so overloaded functions cannot create
+-- ambiguous privilege behavior.
+
+-- REVOKE ALL
+--     ON FUNCTION <schema>.<writer>(<argument-types>)
+--     FROM PUBLIC;
+--
+-- GRANT EXECUTE
+--     ON FUNCTION <schema>.<writer>(<argument-types>)
+--     TO <approved-role>;
+
+
+-- =========================================================
+-- Failure behavior
+-- =========================================================
+-- Expected failures should correspond to the approved writer contract.
+--
+-- Use PostgreSQL error categories deliberately where callers are expected to
+-- distinguish failure classes.
+--
+-- Do not:
+--   catch arbitrary exceptions and return success;
+--   translate every database failure into one generic result;
+--   hide foundational constraint violations;
+--   expose secrets or sensitive internal values in error messages.
+--
+-- A writer failure must not leave an apparently successful partial mutation.
+
+
+-- =========================================================
+-- Return behavior
+-- =========================================================
+-- Return only information required by the approved contract.
+--
+-- Prefer canonical state read back from the database after mutation where the
+-- database assigned, normalized, derived, or constrained any returned value.
+--
+-- Do not return:
+--   reusable bearer secrets unless explicitly required;
+--   internal-only audit values;
+--   authority-bearing material not granted to the caller;
+--   unrelated rows merely because they are convenient to fetch.
+
+
+-- =========================================================
+-- Concurrency
+-- =========================================================
+-- If correctness depends on row locking, uniqueness, serialization, advisory
+-- locks, or another concurrency mechanism, state that behavior immediately
+-- above the writer.
+--
+-- Prefer foundational database constraints and locking semantics over
+-- application assumptions.
+--
+-- Do not add explicit locks without a named concurrency requirement.
+
+
+-- =========================================================
+-- Final writer check
+-- =========================================================
+-- Before this file is accepted, verify:
+--
+--   [ ] every function is a purpose-built approved application mutation;
+--   [ ] every writer has exactly identified owning caller(s);
+--   [ ] every argument and return value belongs to an approved contract;
+--   [ ] no authority-bearing value is inferred without approval;
+--   [ ] boundary validation is not being used to invent authorization policy;
+--   [ ] 0000 constraints and lifecycle enforcement remain authoritative;
+--   [ ] no foundational failure is suppressed merely to make the writer pass;
+--   [ ] atomicity is preserved;
+--   [ ] idempotency behavior is explicit;
+--   [ ] audit attribution, where required, uses the approved transaction-local
+--       mechanism;
+--   [ ] every SECURITY DEFINER writer has a fixed trusted search_path;
+--   [ ] pg_catalog is first and pg_temp is last;
+--   [ ] application objects are schema-qualified where practical;
+--   [ ] PUBLIC execution is revoked;
+--   [ ] EXECUTE is granted only to approved service roles;
+--   [ ] owning service roles lack direct DML where the writer is intended to
+--       be the sole mutation path;
+--   [ ] returned data is limited to the approved callable contract;
+--   [ ] secrets are not unnecessarily returned;
+--   [ ] concurrency behavior is documented where relevant;
+--   [ ] no foundational, audit, notification, view, service-account, or seed
+--       object is introduced.
+
+COMMIT;

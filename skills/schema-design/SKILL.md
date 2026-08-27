@@ -6,7 +6,7 @@ compatibility: Requires PostgreSQL and Bazel build system.
 metadata:
   infurnet-kind: stack-profile
   infurnet-compat: postgresql,bazel
-  infurnet-requires: code-comments,workorder-drafting
+  infurnet-requires: code-comments,workorder-drafting,prose-discipline
 ---
 
 # Schema design
@@ -39,18 +39,8 @@ grant design authority.
 ## Database strata
 
 Each database uses the numbered stratum pattern; the strata in force per
-database are declared in the repository's bindings.
-
-| File | Contents |
-| --- | --- |
-| `0000_<db>_init.sql` | Foundational schemas, types, tables, indexes, constraints, and invariant enforcement |
-| `0001_<db>_audit.sql` | Audit schema, records, functions, and triggers |
-| `0002_<db>_notify.sql` | Transactional notification functions and triggers |
-| `0020_<db>_service_accounts.sql` | Approved database service accounts |
-| `0100_<db>_views_and_grants.sql` | Application views, view triggers, and object privileges |
-| `0200_<db>_writers.sql` | Purpose-built application writer functions and execution privileges |
-| `0900_<db>_seeds.sql` | Approved baseline records required by the database |
-| `0901_<db>_dev_seeds.sql` | Approved local-development sample identities and fixtures |
+database are declared in the repository's bindings. See `## Assets` for
+the template and boundary detail for each stratum.
 
 ## Stratum boundaries
 
@@ -181,6 +171,21 @@ Stop and report when:
 * an existing test must be weakened to pass.
 
 Do not infer the solution. Report the conflict and await instruction.
+
+## Assets
+
+Stratum file templates — use only when the stratum is declared in the
+repository's bindings and authorized by a workorder. Templates are
+drafting aids; they do not authorize stratum creation.
+
+* [`assets/0000-init-template.sql`](assets/0000-init-template.sql) — foundational schemas, types, tables, constraints, indexes, invariant enforcement
+* [`assets/0001-audit-template.sql`](assets/0001-audit-template.sql) — audit records, functions, triggers
+* [`assets/0002-notify-template.sql`](assets/0002-notify-template.sql) — transactional notification functions and triggers
+* [`assets/0020-service-accounts-template.sql`](assets/0020-service-accounts-template.sql) — approved service roles and bootstrap privileges
+* [`assets/0100-views-and-grants-template.sql`](assets/0100-views-and-grants-template.sql) — application views, view triggers, object privileges
+* [`assets/0200-writers-template.sql`](assets/0200-writers-template.sql) — purpose-built writer functions and execution grants
+* [`assets/0900-seeds-template.sql`](assets/0900-seeds-template.sql) — approved production baseline data
+* [`assets/0901-dev-seeds-template.sql`](assets/0901-dev-seeds-template.sql) — local development fixtures
 
 ## Final rule
 

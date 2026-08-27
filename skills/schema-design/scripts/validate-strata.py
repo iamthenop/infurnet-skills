@@ -24,7 +24,8 @@ What it proves:
     filename order is stratum order
   * the four-digit prefix is a canonical stratum and carries that
     stratum's canonical name
-  * one database token across the directory, matching db/<database>
+  * one database token shared by every file in the directory; the
+    directory name is not consulted
   * a statement class the reference prohibits in that stratum — a view
     in 0000, a table in 0002, any schema object in 0900
   * 0020 grants nothing beyond CONNECT and USAGE, and 0200 grants
@@ -376,10 +377,7 @@ def check_directory(directory, findings):
         ))
         return 0
 
-    resolved = directory.resolve()
-    expected = None
-    if resolved.name == "init" and resolved.parent.parent.name == "db":
-        expected = resolved.parent.name
+    expected = None  # set from first file's <db> token; directory name not consulted
 
     seen = {}
     for path in files:
@@ -421,8 +419,9 @@ def check_directory(directory, findings):
         if database != expected:
             findings.append((
                 path, 0, "violation",
-                f"database token {database!r} differs from {expected!r} "
-                "used by this directory",
+                f"database token {database!r} is inconsistent — all files "
+                f"in this directory must use the same <db> token "
+                f"(first seen: {expected!r})",
             ))
 
         check_content(path, stratum, findings)

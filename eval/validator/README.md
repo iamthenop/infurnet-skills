@@ -1,11 +1,10 @@
-# Validator regression fixtures
+# Validator regressions
 
-Static test cases for `tools/validate.py` structural checks.
-Each subdirectory contains a minimal fixture demonstrating one
-validator invariant.
+`run.py` exercises structural regressions for `tools/validate.py` using
+isolated temporary fixtures created at runtime.
 
-These fixtures are not part of the governed skill/role corpus and
-do not participate in inventory counts.
+The fixtures are test inputs only. They are not part of the governed
+skill/role corpus and do not participate in inventory counts.
 
 ## Running
 
@@ -13,4 +12,4 @@ do not participate in inventory counts.
 python3 eval/validator/run.py
 ```
 
-Exit 0 when all regressions pass. Non-zero on any failure.
+Exit 0 when all regressions pass. Non-zero on any regression failure.

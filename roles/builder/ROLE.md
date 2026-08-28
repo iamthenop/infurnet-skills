@@ -1,6 +1,6 @@
 ---
 name: builder
-description: "Review an agent's proposed work plan before execution begins. Use when a builder or tester has produced a work plan from a workorder and the designer must assess it before authorizing execution. Returns one of three verdicts: execute as written, minor issues found, or stop and redraft the workorder."
+description: "Execute bounded implementation, validation, and documentation work under an approved workorder and role constraints. Use when an agent is commissioned to build, modify, test, or document repository artifacts within an explicit authorized surface."
 skills:
   always: [workorder-drafting]
   by-surface:

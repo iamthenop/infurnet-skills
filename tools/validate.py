@@ -133,10 +133,12 @@ for n in sorted(skill_names):
         dfs(n, [])
 
 # --- roles ---
+role_meta = {}
 for p in roles:
     d = frontmatter(p)
     if d is None:
         continue
+    role_meta[p.parent.name] = d
     if d.get("name") != p.parent.name:
         err(f"{p}: name != folder")
     bundle = d.get("skills") or {}
@@ -148,6 +150,22 @@ for p in roles:
     for s in entries:
         if s not in skill_names:
             err(f"{p}: bundle names missing skill {s!r}")
+
+# --- duplicate description detection ---
+desc_seen = {}  # description -> first owner label
+for label, meta_dict in [("skill", skill_meta), ("role", role_meta)]:
+    for name, d in meta_dict.items():
+        desc = d.get("description") or ""
+        if not desc:
+            continue
+        owner = f"{label}:{name}"
+        if desc in desc_seen:
+            err(
+                f"duplicate description between {desc_seen[desc]} and {owner} — "
+                f"descriptions must be unique across all skills and roles"
+            )
+        else:
+            desc_seen[desc] = owner
 
 # --- skill#Section references (roles and skills) ---
 for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/assets/*")):

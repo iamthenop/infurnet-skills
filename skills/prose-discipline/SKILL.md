@@ -155,6 +155,28 @@ In order to, It is important to, As mentioned
 Sentence case for all headings and titles. Capitalize only the first
 word, proper nouns, and established acronyms. Avoid title case.
 
+## Reviewing existing prose
+
+A review applies the same criteria as drafting. It reaches a different
+conclusion when the prose already meets them.
+
+Prose that meets the criteria stands as written. Rewriting conforming
+text risks the meaning that text already carried and returns nothing the
+reader can use.
+
+Name the failing criterion before proposing any change to existing
+prose. A change that cannot name one is preference, and preference does
+not displace established text.
+
+Where a criterion does fail, revise the span that carries the failure
+and leave the surrounding structure as the author set it.
+
+The section-flow cycle describes how a section is built. It is not a
+quota to apply to a passage under review, and a passage that already
+resolves needs no structural line added.
+
+A review that finds nothing says so.
+
 ## Pre-submission clarity check
 
 Before submitting any prose deliverable, verify:

@@ -1,10 +1,10 @@
 # Behavioral evaluation corpus
 
-Status: client-neutral behavioral corpus for neural-code evaluation.
+Status: client-neutral behavioral corpus for pseudocode evaluation.
 
 This corpus evaluates behavior after a package is loaded. It does not evaluate description triggering; `triggers.md` owns trigger evaluation.
 
-Run each case in an isolated context twice where practical: once without the named package and once with the package loaded. Record results separately per client and model. The purpose is to show what behavior the neural code materially contributes, not to require identical prose across runs.
+Run each case in an isolated context twice where practical: once without the named package and once with the package loaded. Record results separately per client and model. The purpose is to show what behavior the pseudocode materially contributes, not to require identical prose across runs.
 
 ## `workorder-drafting`
 
@@ -106,6 +106,6 @@ For each case record:
 * package loaded: yes/no;
 * pass/fail for each required property;
 * concise evidence for each failure;
-* whether neural-code modification was required.
+* whether pseudocode modification was required.
 
 A package passes this corpus when every required property passes with the package loaded. Differences in wording are not failures unless they violate a required property.

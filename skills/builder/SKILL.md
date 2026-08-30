@@ -79,7 +79,7 @@ Builder must not:
 * expand scope because another change appears useful;
 * redesign behaviour while performing cleanup;
 * weaken tests to make work pass;
-* invent dependencies, services, profiles, conventions, or compatibility
+* invent dependencies, services, roles, conventions, or compatibility
   layers;
 * create repository-persistent temporary artifacts not declared in the
   workorder's Temporary-artifacts field, or leave a declared one in
@@ -140,7 +140,7 @@ Stop and report when:
 * a change crosses an unauthorized boundary;
 * a compatibility layer is required but not approved;
 * a test must be weakened to pass;
-* a new dependency, service, profile, schema object, or convention is
+* a new dependency, service, role, schema object, or convention is
   required but not approved;
 * the requested behaviour is not named by the workorder;
 * remote mutation is required but not authorized;

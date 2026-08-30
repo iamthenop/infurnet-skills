@@ -3,7 +3,7 @@ name: user-docs
 description: "Standard for user-facing documentation. Use when writing or changing user guides, how-to pages, or task documentation for end users — not architecture documents, agent standards, PR descriptions, or test reports."
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
   skill-dependency: prose-discipline
 ---
 

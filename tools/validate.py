@@ -7,7 +7,7 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SKILL_TYPES = {"profile", "standard", "skill"}
+SKILL_TYPES = {"profile", "standard", "deliverable"}
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
 PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
@@ -188,7 +188,7 @@ for rf in refs:
 readme = (ROOT / "README.md").read_text()
 skill_rows = re.findall(
     r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| "
-    r"(profile|standard|skill) \| .+ \|$",
+    r"(profile|standard|deliverable) \| .+ \|$",
     readme,
 )
 seen = {}

@@ -3,7 +3,7 @@ name: project-bindings
 description: Author and maintain the repository bindings file — the single mutable declaration of project-specific values that standards dereference. Use when creating a bindings file, adding or changing a binding (package ownership, module locations, gate keys, namespaces, palettes, tag vocabularies, registry contracts, architecture sets), or renaming or retiring one.
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
   skill-dependency: vocabulary-control,design-docs
 ---
 

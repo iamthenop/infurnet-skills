@@ -45,8 +45,8 @@ README = """\
 
 | Skill | Skill type | Purpose |
 | --- | --- | --- |
-| [`alpha`](skills/alpha/SKILL.md) | skill | Fixture deliverable |
-| [`beta`](skills/beta/SKILL.md) | skill | Fixture deliverable |
+| [`alpha`](skills/alpha/SKILL.md) | deliverable | Fixture deliverable |
+| [`beta`](skills/beta/SKILL.md) | deliverable | Fixture deliverable |
 | [`fixture-profile`](skills/fixture-profile/SKILL.md) | profile | Fixture profile |
 """
 
@@ -61,9 +61,10 @@ def build_repo(root, alpha_description, profile_description):
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     write(root / "skills" / "alpha" / "SKILL.md",
           PACKAGE.format(name="alpha", description=alpha_description,
-                         skill_type="skill"))
+                         skill_type="deliverable"))
     write(root / "skills" / "beta" / "SKILL.md",
-          PACKAGE.format(name="beta", description=BETA, skill_type="skill"))
+          PACKAGE.format(name="beta", description=BETA,
+                         skill_type="deliverable"))
     write(root / "skills" / "fixture-profile" / "SKILL.md",
           PACKAGE.format(name="fixture-profile",
                          description=profile_description,

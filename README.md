@@ -17,11 +17,6 @@ single-profile rule are defined in `AGENTS.md`.
 compatibility or package dependencies. Compatibility and dependencies remain
 separate concerns; package dependencies use `skill-dependency`.
 
-During the staged R3 migration, current packages with `skill-type: skill`
-retain their existing on-disk representation until their migration PR lands.
-That representation is transitional and does not define an additional skill
-type.
-
 ## Profiles
 
 A `profile` defines an agent's authority, operating boundaries, permitted
@@ -61,20 +56,16 @@ recognizable class of output that a profile may be permitted to produce or
 review. A deliverable does not authorize itself; permission comes from the
 assigned profile and the accepted work.
 
-The packages below are the current R2 `skill` inventory. They are presented as
-deliverables under the R3 model while their frontmatter retains the transitional
-`skill-type: skill` value until the package-migration PR.
-
 | Skill | Skill type | Governs |
 | --- | --- | --- |
-| [`api-docs`](skills/api-docs/SKILL.md) | skill | API document and operation shape |
-| [`design-docs`](skills/design-docs/SKILL.md) | skill | Design file taxonomy, writing rules, diagram conventions |
-| [`plan-review`](skills/plan-review/SKILL.md) | skill | Work plan verdict before execution begins |
-| [`project-bindings`](skills/project-bindings/SKILL.md) | skill | Repository bindings file authoring |
-| [`schema-design`](skills/schema-design/SKILL.md) | skill | Initialization ordering, strata, destructive changes |
-| [`user-docs`](skills/user-docs/SKILL.md) | skill | Task-oriented user documentation |
-| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | skill | Gates as states; work package vocabulary |
-| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | skill | Bounded execution authority for agents |
+| [`api-docs`](skills/api-docs/SKILL.md) | deliverable | API document and operation shape |
+| [`design-docs`](skills/design-docs/SKILL.md) | deliverable | Design file taxonomy, writing rules, diagram conventions |
+| [`plan-review`](skills/plan-review/SKILL.md) | deliverable | Work plan verdict before execution begins |
+| [`project-bindings`](skills/project-bindings/SKILL.md) | deliverable | Repository bindings file authoring |
+| [`schema-design`](skills/schema-design/SKILL.md) | deliverable | Initialization ordering, strata, destructive changes |
+| [`user-docs`](skills/user-docs/SKILL.md) | deliverable | Task-oriented user documentation |
+| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | deliverable | Gates as states; work package vocabulary |
+| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | deliverable | Bounded execution authority for agents |
 
 ## Layout
 

@@ -1,141 +1,142 @@
-# infurnet-skills
+# Skills
 
-Portable [Agent Skills](https://github.com/agentskills/agentskills) (`SKILL.md`)
-for coding-agent governance: language standards, documentation conventions, and
-workorder discipline. Extracted from the Infurnet project; project-neutral;
-MIT-licensed.
+`infurnet-skills` is a library of portable [Agent Skills](https://github.com/agentskills/agentskills)
+for coding-agent governance. The library supplies agent profiles, conformance
+standards, and deliverable procedures. It is project-neutral and MIT-licensed.
 
-Skills contain portable rules and procedures. They acquire authority
-only when adopted by consuming repository governance; a skill file does
-not independently authorize work or mutation.
+Every governed package belongs to one of three skill types: `profile`,
+`standard`, or `deliverable`. Package content acquires authority only when
+adopted by consuming repository governance. Installation or native triggering
+does not independently authorize work or mutation.
 
-Role instances, authority chains, and deciding-authority identity stay
-in the consuming repository's own governance files.
+Profile assignment, authority chains, and deciding-authority identity stay in
+the consuming repository's governance files. The operational loading order and
+single-profile rule are defined in `AGENTS.md`.
 
-## Skill type
+`metadata.skill-type` records what a package supplies. It does not encode
+compatibility or package dependencies. Compatibility and dependencies remain
+separate concerns; package dependencies use `skill-dependency`.
 
-Every Agent Skills package in this repository declares `metadata.skill-type`.
+During the staged R3 migration, current packages with `skill-type: skill` and
+current profile sources under `roles/*/ROLE.md` retain their existing on-disk
+representation until their migration PRs land. Those representations are
+transitional and do not define additional skill types.
 
-`skill-type` states what the package supplies:
+## Profiles
 
-* `skill` — reusable procedure for performing a task.
-* `standard` — reusable conformance criteria for work, regardless of how that work was produced.
+A `profile` defines an agent's authority, operating boundaries, permitted
+deliverables, required standards, and stop conditions. Repository governance
+assigns exactly one profile to a session. A profile is never self-selected.
 
-`skill-type` does not grant authority, select a role, route work, encode compatibility, or declare dependencies. Authority comes from consuming repository governance. Compatibility and dependencies remain separate concerns; package dependencies use `skill-dependency`.
+The current profile sources remain under `roles/*/ROLE.md` until their conversion
+to ordinary `skills/<name>/SKILL.md` packages later in R3.
 
-## Skills
+| Profile | Frame | Current composition |
+| --- | --- | --- |
+| [`builder`](roles/builder/ROLE.md) | Executes bounded implementation under an approved workorder | current role bundle pending profile migration |
+| [`designer`](roles/designer/ROLE.md) | Drafts governing text, design, and workorders; never decides | current role bundle pending profile migration |
+| [`tester`](roles/tester/ROLE.md) | Falsifies approved work locally; no repository authority | current role bundle pending profile migration |
 
-The inventory is 8 skills and 11 standards.
+## Standards
+
+A `standard` defines reusable rules or conformance criteria that govern
+permitted work. A standard constrains execution but does not grant authority,
+permit a deliverable, or change the assigned profile.
+
+| Skill | Skill type | Governs |
+| --- | --- | --- |
+| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | standard | Dependency declaration, visibility, target separation |
+| [`code-comments`](skills/code-comments/SKILL.md) | standard | Comment doctrine; information-location discipline |
+| [`deploy-standard`](skills/deploy-standard/SKILL.md) | standard | Artifact classes, promotion, fixture discipline |
+| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | standard | Custom documentation tag system (Javadoc/docstring) |
+| [`error-handling`](skills/error-handling/SKILL.md) | standard | Exception selection, catching with intent, abstraction boundaries |
+| [`java-standard`](skills/java-standard/SKILL.md) | standard | Java layout, types, tests |
+| [`prose-discipline`](skills/prose-discipline/SKILL.md) | standard | Clarity, compression, voice, and structure for governed prose |
+| [`python-standard`](skills/python-standard/SKILL.md) | standard | Python typing, validation boundaries, dep isolation |
+| [`type-discipline`](skills/type-discipline/SKILL.md) | standard | Load-bearing value types; parse-once boundaries |
+| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | standard | Term introduction; drift control; one home per fact |
+| [`web-standard`](skills/web-standard/SKILL.md) | standard | Templates, page model, palette tokens, accessibility |
+
+## Deliverables
+
+A `deliverable` defines the form, procedure, or acceptance rules for a
+recognizable class of output that a profile may be permitted to produce or
+review. A deliverable does not authorize itself; permission comes from the
+assigned profile and the accepted work.
+
+The packages below are the current R2 `skill` inventory. They are presented as
+deliverables under the R3 model while their frontmatter retains the transitional
+`skill-type: skill` value until the package-migration PR.
 
 | Skill | Skill type | Governs |
 | --- | --- | --- |
 | [`api-docs`](skills/api-docs/SKILL.md) | skill | API document and operation shape |
-| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | standard | Dependency declaration, visibility, target separation |
-| [`code-comments`](skills/code-comments/SKILL.md) | standard | Comment doctrine; information-location discipline |
-| [`deploy-standard`](skills/deploy-standard/SKILL.md) | standard | Artifact classes, promotion, fixture discipline |
 | [`design-docs`](skills/design-docs/SKILL.md) | skill | Design file taxonomy, writing rules, diagram conventions |
-| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | standard | Custom documentation tag system (Javadoc/docstring) |
-| [`error-handling`](skills/error-handling/SKILL.md) | standard | Exception selection, catching with intent, abstraction boundaries |
-| [`java-standard`](skills/java-standard/SKILL.md) | standard | Java layout, types, tests |
 | [`plan-review`](skills/plan-review/SKILL.md) | skill | Work plan verdict before execution begins |
 | [`project-bindings`](skills/project-bindings/SKILL.md) | skill | Repository bindings file authoring |
-| [`prose-discipline`](skills/prose-discipline/SKILL.md) | standard | Clarity, compression, voice, and structure for governed prose |
-| [`python-standard`](skills/python-standard/SKILL.md) | standard | Python typing, validation boundaries, dep isolation |
 | [`schema-design`](skills/schema-design/SKILL.md) | skill | Initialization ordering, strata, destructive changes |
-| [`type-discipline`](skills/type-discipline/SKILL.md) | standard | Load-bearing value types; parse-once boundaries |
 | [`user-docs`](skills/user-docs/SKILL.md) | skill | Task-oriented user documentation |
-| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | standard | Term introduction; drift control; one home per fact |
-| [`web-standard`](skills/web-standard/SKILL.md) | standard | Templates, page model, palette tokens, accessibility |
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | skill | Gates as states; work package vocabulary |
 | [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | skill | Bounded execution authority for agents |
 
-## Roles
-
-A role is a set of operational boundaries plus a bundle of skills. Roles
-carry the may/must-not/stop-condition frame that keeps agent behaviour
-in-bounds; skills carry the procedure.
-
-The archetypes are project-neutral: authority chains, deciding-authority
-identity, and document homes are slots the consuming repository's
-governance and bindings fill.
-
-| Role | Frame | Bundle |
-| --- | --- | --- |
-| [`builder`](roles/builder/ROLE.md) | Executes bounded implementation under an approved workorder | core discipline skills + surface standards |
-| [`designer`](roles/designer/ROLE.md) | Drafts governing text, design, and workorders; never decides | authoring skills |
-| [`tester`](roles/tester/ROLE.md) | Falsifies approved work locally; no repository authority | surface standards for the target under test |
-
-Skills remain individually consumable; a role is one curated composition,
-not a prerequisite.
-
-### Role consumption contract
-
-`ROLE.md` is not part of the Agent Skills specification; no standard
-client interprets it. A consuming repository supplies a router — its
-governance entry point or tooling — that implements this contract:
-
-* the router reads the role frontmatter;
-* `skills.always` entries load for every invocation of the role;
-* `skills.by-surface` entries load only when the authorized work touches
-  that surface;
-* a bundle entry naming a missing skill is a validation failure;
-* a loaded skill's `skill-dependency` entries load with it, transitively;
-* an `always` or matched `by-surface` skill loads **in full**; a role
-  sentence naming `skill#Section` references is reading guidance inside
-  a loaded skill, not partial loading;
-* router-driven role loading and a client's native
-  description-triggering are separate mechanisms; the trigger corpus in
-  `eval/` evaluates only the latter;
-* the consuming repository supplies the governance entry point and the
-  bindings location.
-
 ## Layout
+
+The target package shape is one Agent Skills package format for all three skill
+types:
 
 | Template | Description |
 | --- | --- |
-| `skills/<name>/SKILL.md` | frontmatter (name, description) + procedure |
+| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
 | `skills/<name>/references` | optional bundled templates and reference material |
-| `roles/<name>/ROLE.md` | frontmatter (name, description, skills bundle) + boundaries |
+| `roles/<name>/ROLE.md` | transitional profile source removed when profile migration lands |
 
 ## Consuming
 
-* **Native (Claude Code)** — symlink or copy `skills/*` into
-  `.claude/skills/`; frontmatter descriptions drive triggering.
-* **Router (any agent)** — reference skills from the consuming repo's
-  `AGENTS.md` with mandatory-read-by-scope rules
-  ("read `skills/<name>/SKILL.md` before changing X").
-* **Vendored** — copy folders in via subtree or script; MIT requires only
-  license retention.
+A consuming repository assigns one profile in its governance entry point. The
+profile determines which deliverables are permitted, and the accepted
+deliverable determines which standards apply. `AGENTS.md` defines the normative
+load sequence and the prohibition on changing profiles within a session.
 
-Skills carry no tool-specific calls and use standard interpreters only.
-A skill with `skill-dependency` metadata is consumed together with its
+* **Native client** — installed packages may use frontmatter descriptions for
+  discovery after profile assignment. Native triggering never selects or
+  changes the profile and never grants authority.
+* **Governed router** — the consuming repository's governance entry point
+  assigns the profile and enforces the profile -> deliverable -> standards load
+  order.
+* **Vendored** — copy folders in via subtree or script; MIT requires license
+  retention.
+
+Packages carry no tool-specific calls and use standard interpreters only. A
+package with `skill-dependency` metadata is consumed together with its
 dependencies; see Installation semantics.
 
 ## Installation semantics
 
-* `skill-dependency` names sibling Agent Skills packages that must be installed together with the package. A missing dependency is an installation validation failure; at use time, a dangling package reference is a stop condition for the consuming agent.
-* A skill acquires authority in a repository only when that repository's
+* `skill-dependency` names sibling Agent Skills packages that must be installed
+  together with the package. A missing dependency is an installation validation
+  failure; at use time, a dangling package reference is a stop condition for the
+  consuming agent.
+* A package acquires authority in a repository only when that repository's
   governance adopts it; installation alone confers none.
-* The repository's governance entry point declares where its bindings
-  file lives; skills dereference bindings through it.
+* The repository's governance entry point declares where its bindings file
+  lives; packages dereference bindings through it.
 
 ## Adoption contract
 
 A consuming repository records its adoption in an `ADOPTION.md` at its
 governance-declared location, copied from this repository's
-[`ADOPTION.md`](ADOPTION.md) template. The manifest pins a
-cryptographically exact source revision; a governance dependency must
-not follow a mutable checkout or floating `main`.
+[`ADOPTION.md`](ADOPTION.md) template. The manifest pins a cryptographically
+exact source revision; a governance dependency must not follow a mutable
+checkout or floating `main`.
 
-It records: source repository; pinned commit (and tag if any); installed
-skills; installed roles; installation mode; consumer governance entry
-point; bindings file location; approved local deviations; last update.
+During R3, the adoption manifest retains its current installed-skills and
+installed-roles fields until the corresponding consumer-migration PR. That
+transitional storage does not create a separate role type.
 
-Updating the pin follows six steps: compare pinned and candidate
-revisions; enumerate changed obligations; identify affected consumer
-bindings and governance; obtain approval from the consuming
-repository's deciding authority; update the pin and installed content
-together; validate the consumer.
+Updating the pin follows six steps: compare pinned and candidate revisions;
+enumerate changed obligations; identify affected consumer bindings and
+governance; obtain approval from the consuming repository's deciding authority;
+update the pin and installed content together; validate the consumer.
 
 ## License
 

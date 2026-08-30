@@ -1,27 +1,40 @@
 # infurnet-skills
 
 Portable [Agent Skills](https://github.com/agentskills/agentskills) (`SKILL.md`)
-for coding-agent governance: language standards, documentation conventions, and
-workorder discipline. Extracted from the Infurnet project; project-neutral;
+for coding-agent governance: agent profiles, conformance standards, and
+deliverable procedures. Extracted from the Infurnet project; project-neutral;
 MIT-licensed.
 
-Skills contain portable rules and procedures. They acquire authority
-only when adopted by consuming repository governance; a skill file does
-not independently authorize work or mutation.
+Packages contain portable operating contracts, rules, and procedures. They
+acquire authority only when adopted by consuming repository governance; a
+package does not independently authorize work or mutation.
 
-Role instances, authority chains, and deciding-authority identity stay
+Profile assignment, authority chains, and deciding-authority identity stay
 in the consuming repository's own governance files.
 
 ## Skill type
 
-Every Agent Skills package in this repository declares `metadata.skill-type`.
+Every Agent Skills package declares `metadata.skill-type`.
 
-`skill-type` states what the package supplies:
+The load-sequence model defines three package types:
 
-* `skill` — reusable procedure for performing a task.
-* `standard` — reusable conformance criteria for work, regardless of how that work was produced.
+| Skill type | Definition |
+| --- | --- |
+| `profile` | Defines an agent's authority, operating boundaries, permitted deliverables, required standards, and stop conditions. A profile is assigned by repository governance and is never self-selected. |
+| `standard` | Defines rules or conformance criteria that govern permitted work. A standard constrains execution but does not grant authority to produce a deliverable. |
+| `deliverable` | Defines the form, procedure, or acceptance rules for a class of output that a profile is permitted to produce or review. |
 
-`skill-type` does not grant authority, select a role, route work, encode compatibility, or declare dependencies. Authority comes from consuming repository governance. Compatibility and dependencies remain separate concerns; package dependencies use `skill-dependency`.
+`skill-type` states what a package supplies. It does not encode compatibility
+or package dependencies. Installation alone does not assign a profile or grant
+authority. Compatibility and dependencies remain separate concerns; package
+dependencies use `skill-dependency`.
+
+The operational loading order and single-profile rule are defined in
+`AGENTS.md`.
+
+During the R3 migration, existing inventory entries marked `skill` retain their
+R2 metadata until their package migration lands. `skill` is transitional and is
+not part of the final three-type model.
 
 ## Skills
 
@@ -50,6 +63,9 @@ The inventory is 8 skills and 11 standards.
 | [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | skill | Bounded execution authority for agents |
 
 ## Roles
+
+The current tree retains role archetypes while the R3 migration converts them
+to `profile` packages.
 
 A role is a set of operational boundaries plus a bundle of skills. Roles
 carry the may/must-not/stop-condition frame that keeps agent behaviour

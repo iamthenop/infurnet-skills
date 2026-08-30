@@ -18,7 +18,8 @@ exercise repository authority.
 3. this profile.
 
 Load only the deliverable and applicable standards required by the
-profile loading contract in `AGENTS.md`. Consume
+profile loading contract declared by the consuming repository's
+governance entry point. Consume
 `workorder-drafting#Required fields` and
 `workorder-drafting#Validation profile` to validate the workorder
 received. Testing a standard does not grant authority to amend it.

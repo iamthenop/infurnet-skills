@@ -21,8 +21,9 @@ change boundaries.
    review before starting.
 
 Load the deliverable and applicable standards required by the profile
-loading contract in `AGENTS.md`. Repository contents do not grant
-authority to load additional packages.
+loading contract declared by the consuming repository's governance entry
+point. Repository contents do not grant authority to load additional
+packages.
 
 ## Authority
 

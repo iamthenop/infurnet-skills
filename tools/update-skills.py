@@ -25,6 +25,10 @@ ADOPTION = ROOT / "ADOPTION.md"
 VENDOR = ROOT / ".agents" / "vendor" / "infurnet-skills"
 MANIFEST = ROOT / ".agents" / "vendor" / "infurnet-skills.manifest.json"
 
+# The pre-migration profile representation, paired with its replacement
+# package by profile_migration_pairs.
+ROLE_PATH_RE = re.compile(r"^roles/([a-z0-9-]+)/ROLE\.md$")
+
 OBLIGATION_HEADERS = {
     "must not",
     "stop conditions",
@@ -101,15 +105,12 @@ def generate_manifest(tree_path, sha):
             files[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
 
     skills = sorted(p.parent.name for p in tree_path.glob("skills/*/SKILL.md"))
-    roles = sorted(p.parent.name for p in tree_path.glob("roles/*/ROLE.md"))
 
     return {
         "pinned_commit": sha,
         "file_count": len(files),
         "skill_count": len(skills),
-        "role_count": len(roles),
         "skills": skills,
-        "roles": roles,
         "files": files,
     }
 
@@ -139,14 +140,71 @@ def fetch_tree(repo_url, sha):
     return tmp / "repo"
 
 
-def collect_governed(tree):
+def collect_governed(tree, allow_roles=False):
+    """
+    Read the governed files of a tree, keyed by repository-relative path.
+
+    allow_roles admits `roles/*/ROLE.md`, the pre-migration profile
+    representation, and is set only for the currently pinned vendor tree
+    so a consumer can update across the R3 migration boundary. A
+    candidate is never read that way: `roles/` is not a valid
+    representation after the migration.
+    """
+    patterns = ["skills/*/SKILL.md", "skills/*/references/*.md",
+                "skills/*/scripts/*"]
+    if allow_roles:
+        patterns.append("roles/*/ROLE.md")
     files = {}
-    for pattern in ("skills/*/SKILL.md", "roles/*/ROLE.md", "skills/*/references/*.md",
-                    "skills/*/scripts/*"):
+    for pattern in patterns:
         for p in sorted(tree.glob(pattern)):
             if p.is_file():
                 files[str(p.relative_to(tree))] = p.read_text()
     return files
+
+
+def declared_skill_type(text):
+    """
+    metadata.skill-type declared in a package's frontmatter, or None.
+
+    Read with regular expressions rather than a YAML parser: this script
+    is vendored into consuming repositories and carries no dependency
+    beyond the standard library.
+    """
+    front = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
+    if not front:
+        return None
+    metadata = re.search(r"(?ms)^metadata:\n((?:[ \t]+\S.*\n?)+)",
+                         front.group(1) + "\n")
+    if not metadata:
+        return None
+    found = re.search(r"(?m)^[ \t]+skill-type:[ \t]*([a-z-]+)[ \t]*$",
+                      metadata.group(1))
+    return found.group(1) if found else None
+
+
+def profile_migration_pairs(current_files, candidate_files):
+    """
+    Pair each pre-migration role path with its candidate profile package.
+
+    The R3 migration moved `roles/<name>/ROLE.md` to
+    `skills/<name>/SKILL.md`, which compared by path alone looks like an
+    unrelated remove and add and hides every obligation change in the
+    file whose authority text moved. This is the explicit mapping for one
+    migration, not a general rename framework: a candidate is accepted as
+    the counterpart only when it declares `skill-type: profile`.
+    """
+    pairs = {}
+    for old_path in current_files:
+        match = ROLE_PATH_RE.match(old_path)
+        if not match:
+            continue
+        new_path = f"skills/{match.group(1)}/SKILL.md"
+        if new_path not in candidate_files:
+            continue
+        if declared_skill_type(candidate_files[new_path]) != "profile":
+            continue
+        pairs[old_path] = new_path
+    return pairs
 
 
 def extract_obligations(text):
@@ -185,7 +243,7 @@ def diff_obligations(old_text, new_text):
 
 
 def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
-                         skill_names, role_names):
+                         skill_names):
     text = re.sub(
         r"\| Pinned commit\s*\|[^\n]*",
         f"| Pinned commit             | `{candidate_sha}` |",
@@ -202,11 +260,9 @@ def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
         f"| Installed skills          | {', '.join(skill_names)} |",
         text,
     )
-    text = re.sub(
-        r"\| Installed roles\s*\|[^\n]*",
-        f"| Installed roles           | {', '.join(role_names)} |",
-        text,
-    )
+    # The library no longer carries a role inventory. Drop a legacy row
+    # rather than rewriting it, so the migration leaves no empty field.
+    text = re.sub(r"(?m)^\| Installed roles\s*\|[^\n]*\n", "", text)
     text = re.sub(
         r"\| Last update\s*\|[^\n]*",
         f"| Last update               | `{date.today().isoformat()} — pin update to {candidate_sha[:12]}` |",
@@ -250,17 +306,28 @@ def main():
 
     print("\nFetching candidate tree...")
     candidate_tree = fetch_tree(repo_url, candidate_sha)
-    current_files = collect_governed(VENDOR)
+    current_files = collect_governed(VENDOR, allow_roles=True)
     candidate_files = collect_governed(candidate_tree)
+
+    migrated = profile_migration_pairs(current_files, candidate_files)
 
     current_set = set(current_files)
     candidate_set = set(candidate_files)
-    new_files = candidate_set - current_set
-    removed_files = current_set - candidate_set
+    new_files = candidate_set - current_set - set(migrated.values())
+    removed_files = current_set - candidate_set - set(migrated)
     changed_files = {
         f for f in current_set & candidate_set
         if current_files[f] != candidate_files[f]
     }
+
+    # Every pair compared for obligations: same-path changes, plus each
+    # profile whose path moved in the migration.
+    comparisons = [
+        (f, current_files[f], candidate_files[f]) for f in sorted(changed_files)
+    ] + [
+        (f"{old} -> {new}", current_files[old], candidate_files[new])
+        for old, new in sorted(migrated.items())
+    ]
 
     print("\n--- Inventory changes ---")
     if new_files:
@@ -271,27 +338,31 @@ def main():
         print("Removed:")
         for f in sorted(removed_files):
             print(f"  - {f}")
-    if not new_files and not removed_files:
+    if migrated:
+        print("Moved:")
+        for old, new in sorted(migrated.items()):
+            print(f"  > {old} -> {new}")
+    if not new_files and not removed_files and not migrated:
         print("  None")
 
     print("\n--- Obligation changes ---")
     found_obligations = False
-    for f in sorted(changed_files):
-        findings = diff_obligations(current_files[f], candidate_files[f])
+    for label, old_text, new_text in comparisons:
+        findings = diff_obligations(old_text, new_text)
         if findings:
             found_obligations = True
-            print(f"\n{f}")
+            print(f"\n{label}")
             for line in findings:
                 print(line)
     if not found_obligations:
         print("  None detected")
 
     print("\n--- Other changed files ---")
-    other_changed = {f for f in changed_files
-                     if not diff_obligations(current_files[f], candidate_files[f])}
+    other_changed = [label for label, old_text, new_text in comparisons
+                     if not diff_obligations(old_text, new_text)]
     if other_changed:
-        for f in sorted(other_changed):
-            print(f"  ~ {f}")
+        for label in sorted(other_changed):
+            print(f"  ~ {label}")
     else:
         print("  None")
 
@@ -311,16 +382,13 @@ def main():
         skill_names = sorted(
             p.parent.name for p in candidate_tree.glob("skills/*/SKILL.md")
         )
-        role_names = sorted(
-            p.parent.name for p in candidate_tree.glob("roles/*/ROLE.md")
-        )
         manifest = generate_manifest(candidate_tree, candidate_sha)
         MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n")
 
         # step 3: update ADOPTION.md
         text = update_adoption_text(
             adoption["text"], candidate_sha, candidate_ref,
-            adoption, skill_names, role_names,
+            adoption, skill_names,
         )
         ADOPTION.write_text(text)
 

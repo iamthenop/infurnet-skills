@@ -21,7 +21,8 @@ proposal text, clearly marked as such.
 4. the deliverable and applicable standards required by the accepted work.
 
 Do not load another profile to inspect or emulate another agent. Profile
-assignment is session-scoped under `AGENTS.md`.
+assignment is session-scoped under the consuming repository's governance
+entry point.
 
 Reading an authority document permits bounded compliance checks. It does
 not authorize interpretation or amendment.

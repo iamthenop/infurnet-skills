@@ -3,8 +3,8 @@ name: doc-comment-tags
 description: "Write structured documentation comments using the custom architectural tag system (@layer, @owner, @boundary, @authority, @privacy, @temporary, and related tags). Use when documenting public functions, classes, or modules in Java (Javadoc) or Python (docstrings), or when reviewing whether documentation comments carry the required boundary metadata."
 license: MIT
 metadata:
-  infurnet-kind: pattern
-  infurnet-requires: code-comments,prose-discipline
+  skill-type: standard
+  skill-dependency: code-comments,prose-discipline
 ---
 
 # Documentation comment tags

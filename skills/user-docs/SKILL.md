@@ -3,8 +3,8 @@ name: user-docs
 description: "Standard for user-facing documentation. Use when writing or changing user guides, how-to pages, or task documentation for end users — not architecture documents, agent standards, PR descriptions, or test reports."
 license: MIT
 metadata:
-  infurnet-kind: core-skill
-  infurnet-requires: prose-discipline
+  skill-type: skill
+  skill-dependency: prose-discipline
 ---
 
 # User documentation standard

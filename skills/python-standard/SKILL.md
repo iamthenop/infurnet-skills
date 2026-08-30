@@ -4,9 +4,9 @@ description: Python implementation rules for module layout, typing posture, vali
 license: MIT
 compatibility: Requires Python 3, Bazel build system, and Pydantic.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: standard
   infurnet-compat: python,bazel,pydantic
-  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
+  skill-dependency: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
 ---
 
 # Python standard

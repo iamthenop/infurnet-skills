@@ -4,9 +4,9 @@ description: Database schema design discipline — initialization strata, stratu
 license: MIT
 compatibility: Requires PostgreSQL and Bazel build system.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: skill
   infurnet-compat: postgresql,bazel
-  infurnet-requires: code-comments,workorder-drafting,prose-discipline
+  skill-dependency: code-comments,workorder-drafting,prose-discipline
 ---
 
 # Schema design

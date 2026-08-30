@@ -12,41 +12,42 @@ not independently authorize work or mutation.
 Role instances, authority chains, and deciding-authority identity stay
 in the consuming repository's own governance files.
 
+## Skill type
+
+Every Agent Skills package in this repository declares `metadata.skill-type`.
+
+`skill-type` states what the package supplies:
+
+* `skill` — reusable procedure for performing a task.
+* `standard` — reusable conformance criteria for work, regardless of how that work was produced.
+
+`skill-type` does not grant authority, select a role, route work, encode compatibility, or declare dependencies. Authority comes from consuming repository governance. Compatibility and dependencies remain separate concerns; package dependencies use `skill-dependency`.
+
 ## Skills
-
-Every entry is an Agent Skills package, classified on two independent
-axes.
-
-**Class** states what the package supplies. A skill supplies reusable
-procedure for performing a task. A standard supplies reusable conformance
-criteria for work, whichever way that work was produced.
-
-**Kind** is the `infurnet-kind` value and states adoption semantics; see
-Installation semantics. Class does not constrain kind.
 
 The inventory is 8 skills and 11 standards.
 
-| Skill | Class | Governs | Kind |
-| --- | --- | --- | --- |
-| [`api-docs`](skills/api-docs/SKILL.md) | skill | API document and operation shape | pattern |
-| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | standard | Dependency declaration, visibility, target separation | stack-profile |
-| [`code-comments`](skills/code-comments/SKILL.md) | standard | Comment doctrine; information-location discipline | core-skill |
-| [`deploy-standard`](skills/deploy-standard/SKILL.md) | standard | Artifact classes, promotion, fixture discipline | stack-profile |
-| [`design-docs`](skills/design-docs/SKILL.md) | skill | Design file taxonomy, writing rules, diagram conventions | core-skill |
-| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | standard | Custom documentation tag system (Javadoc/docstring) | pattern |
-| [`error-handling`](skills/error-handling/SKILL.md) | standard | Exception selection, catching with intent, abstraction boundaries | core-skill |
-| [`java-standard`](skills/java-standard/SKILL.md) | standard | Java layout, types, tests | stack-profile |
-| [`plan-review`](skills/plan-review/SKILL.md) | skill | Work plan verdict before execution begins | core-skill |
-| [`project-bindings`](skills/project-bindings/SKILL.md) | skill | Repository bindings file authoring | core-skill |
-| [`prose-discipline`](skills/prose-discipline/SKILL.md) | standard | Clarity, compression, voice, and structure for governed prose | core-skill |
-| [`python-standard`](skills/python-standard/SKILL.md) | standard | Python typing, validation boundaries, dep isolation | stack-profile |
-| [`schema-design`](skills/schema-design/SKILL.md) | skill | Initialization ordering, strata, destructive changes | stack-profile |
-| [`type-discipline`](skills/type-discipline/SKILL.md) | standard | Load-bearing value types; parse-once boundaries | core-skill |
-| [`user-docs`](skills/user-docs/SKILL.md) | skill | Task-oriented user documentation | core-skill |
-| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | standard | Term introduction; drift control; one home per fact | core-skill |
-| [`web-standard`](skills/web-standard/SKILL.md) | standard | Templates, page model, palette tokens, accessibility | stack-profile |
-| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | skill | Gates as states; work package vocabulary | pattern |
-| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | skill | Bounded execution authority for agents | core-skill |
+| Skill | Skill type | Governs |
+| --- | --- | --- |
+| [`api-docs`](skills/api-docs/SKILL.md) | skill | API document and operation shape |
+| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | standard | Dependency declaration, visibility, target separation |
+| [`code-comments`](skills/code-comments/SKILL.md) | standard | Comment doctrine; information-location discipline |
+| [`deploy-standard`](skills/deploy-standard/SKILL.md) | standard | Artifact classes, promotion, fixture discipline |
+| [`design-docs`](skills/design-docs/SKILL.md) | skill | Design file taxonomy, writing rules, diagram conventions |
+| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | standard | Custom documentation tag system (Javadoc/docstring) |
+| [`error-handling`](skills/error-handling/SKILL.md) | standard | Exception selection, catching with intent, abstraction boundaries |
+| [`java-standard`](skills/java-standard/SKILL.md) | standard | Java layout, types, tests |
+| [`plan-review`](skills/plan-review/SKILL.md) | skill | Work plan verdict before execution begins |
+| [`project-bindings`](skills/project-bindings/SKILL.md) | skill | Repository bindings file authoring |
+| [`prose-discipline`](skills/prose-discipline/SKILL.md) | standard | Clarity, compression, voice, and structure for governed prose |
+| [`python-standard`](skills/python-standard/SKILL.md) | standard | Python typing, validation boundaries, dep isolation |
+| [`schema-design`](skills/schema-design/SKILL.md) | skill | Initialization ordering, strata, destructive changes |
+| [`type-discipline`](skills/type-discipline/SKILL.md) | standard | Load-bearing value types; parse-once boundaries |
+| [`user-docs`](skills/user-docs/SKILL.md) | skill | Task-oriented user documentation |
+| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | standard | Term introduction; drift control; one home per fact |
+| [`web-standard`](skills/web-standard/SKILL.md) | standard | Templates, page model, palette tokens, accessibility |
+| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | skill | Gates as states; work package vocabulary |
+| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | skill | Bounded execution authority for agents |
 
 ## Roles
 
@@ -78,7 +79,7 @@ governance entry point or tooling — that implements this contract:
 * `skills.by-surface` entries load only when the authorized work touches
   that surface;
 * a bundle entry naming a missing skill is a validation failure;
-* a loaded skill's `infurnet-requires` load with it, transitively;
+* a loaded skill's `skill-dependency` entries load with it, transitively;
 * an `always` or matched `by-surface` skill loads **in full**; a role
   sentence naming `skill#Section` references is reading guidance inside
   a loaded skill, not partial loading;
@@ -107,22 +108,12 @@ governance entry point or tooling — that implements this contract:
   license retention.
 
 Skills carry no tool-specific calls and use standard interpreters only.
-A skill with `infurnet-requires` metadata is consumed together with its
-requirements; see Installation semantics.
+A skill with `skill-dependency` metadata is consumed together with its
+dependencies; see Installation semantics.
 
 ## Installation semantics
 
-* `infurnet-kind` classifies each entry: `core-skill` (broadly reusable
-  discipline, no assumed stack), `stack-profile` (an opinionated
-  governance profile limited to the stacks named in `infurnet-compat` —
-  adopting it adopts the profile's policy model, not merely technical
-  stack compatibility), `pattern` (an opinionated approach consumers may
-  adopt), and `role-archetype` (operational composition, outside the
-  Agent Skills specification).
-* `infurnet-requires` names sibling skills that must be installed
-  together with the skill. A missing requirement is an installation
-  validation failure; at use time, a dangling skill reference is a stop
-  condition for the consuming agent.
+* `skill-dependency` names sibling Agent Skills packages that must be installed together with the package. A missing dependency is an installation validation failure; at use time, a dangling package reference is a stop condition for the consuming agent.
 * A skill acquires authority in a repository only when that repository's
   governance adopts it; installation alone confers none.
 * The repository's governance entry point declares where its bindings

@@ -4,7 +4,7 @@ description: Declare dependencies, enforce boundaries, and separate test tiers t
 license: MIT
 compatibility: Requires Bazel build system with MODULE.bazel workspace configuration.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: standard
   infurnet-compat: bazel
 ---
 

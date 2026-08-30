@@ -3,7 +3,7 @@ name: error-handling
 description: Choose, raise, and catch exceptions correctly. Use when writing or reviewing error handling, when deciding whether to introduce a custom exception, when a helper abstracts exception catching, or when control flow involves expected failure conditions.
 license: MIT
 metadata:
-  infurnet-kind: core-skill
+  skill-type: standard
 ---
 
 # Error handling

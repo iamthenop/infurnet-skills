@@ -3,8 +3,8 @@ name: workorder-drafting
 description: "Draft bounded execution authority for an agent. Use when writing, reviewing, or repairing a workorder, task brief, or delegation instruction for any executing agent — before commissioning implementation, testing, extraction, or documentation work. Also use when an executing agent stops on an ambiguous instruction: the fix belongs in the workorder."
 license: MIT
 metadata:
-  infurnet-kind: core-skill
-  infurnet-requires: prose-discipline
+  skill-type: skill
+  skill-dependency: prose-discipline
 ---
 
 # Workorder drafting

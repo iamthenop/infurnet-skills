@@ -3,7 +3,7 @@ name: prose-discipline
 description: "Govern the quality and form of prose in governing documents, design files, workorders, architecture documents, and delivery reports. Use when writing or reviewing any prose deliverable — not code, not tables, not frontmatter. Applies to all text a human will read."
 license: MIT
 metadata:
-  infurnet-kind: core-skill
+  skill-type: standard
 ---
 
 # Prose style

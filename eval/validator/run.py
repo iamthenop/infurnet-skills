@@ -32,7 +32,7 @@ name: {name}
 description: "{description}"
 license: MIT
 metadata:
-  infurnet-kind: core-skill
+  skill-type: skill
 ---
 
 # {name}
@@ -58,10 +58,10 @@ Fixture role body.
 README = """\
 # Fixture repository
 
-| Skill | Purpose | Kind |
+| Skill | Skill type | Purpose |
 | --- | --- | --- |
-| [`alpha`](skills/alpha/SKILL.md) | Fixture skill | core-skill |
-| [`beta`](skills/beta/SKILL.md) | Fixture skill | core-skill |
+| [`alpha`](skills/alpha/SKILL.md) | skill | Fixture skill |
+| [`beta`](skills/beta/SKILL.md) | skill | Fixture skill |
 
 | Role | Purpose |
 | --- | --- |

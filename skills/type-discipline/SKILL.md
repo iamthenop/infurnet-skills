@@ -3,7 +3,7 @@ name: type-discipline
 description: Choose types for load-bearing values so boundaries survive review and refactoring. Use when introducing identifiers, states, hashes, timestamps, or other controlled values; when parsing untrusted input; or when reviewing code that passes raw strings where a narrower type is required.
 license: MIT
 metadata:
-  infurnet-kind: core-skill
+  skill-type: standard
 ---
 
 # Type discipline

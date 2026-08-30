@@ -4,7 +4,7 @@ description: Server-rendered web shell standard for templates, fragments, page m
 license: MIT
 compatibility: Requires Java with Spring MVC and Thymeleaf.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: standard
   infurnet-compat: java,spring-mvc,thymeleaf
 ---
 

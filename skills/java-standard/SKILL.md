@@ -4,9 +4,9 @@ description: Java implementation rules for source layout, test placement, and do
 license: MIT
 compatibility: Requires Java toolchain and Bazel build system.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: standard
   infurnet-compat: java,bazel
-  infurnet-requires: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
+  skill-dependency: type-discipline,doc-comment-tags,bazel-discipline,deploy-standard
 ---
 
 # Java standard

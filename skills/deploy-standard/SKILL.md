@@ -4,7 +4,7 @@ description: Container build, distribution, and release promotion discipline. Us
 license: MIT
 compatibility: Requires Bazel with rules_oci, a Docker-compatible container runtime, and Docker Compose.
 metadata:
-  infurnet-kind: stack-profile
+  skill-type: standard
   infurnet-compat: bazel,rules_oci,docker-compatible-runtime,docker-compose
 ---
 

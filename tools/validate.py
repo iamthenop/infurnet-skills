@@ -7,7 +7,7 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-KINDS = {"core-skill", "stack-profile", "pattern"}
+SKILL_TYPES = {"skill", "standard"}
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
 PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
@@ -68,24 +68,20 @@ for p in skills:
     if not isinstance(meta, dict):
         err(f"{p}: metadata block missing or not a mapping")
         continue
-    unknown = set(meta) - {"infurnet-kind", "infurnet-compat", "infurnet-requires"}
+    unknown = set(meta) - {"skill-type", "infurnet-compat", "skill-dependency"}
     if unknown:
         err(f"{p}: unknown metadata keys {sorted(unknown)}")
-    kind = meta.get("infurnet-kind")
-    if kind not in KINDS:
-        err(f"{p}: infurnet-kind {kind!r} not in {sorted(KINDS)}")
-    if kind == "stack-profile" and not meta.get("infurnet-compat"):
-        err(f"{p}: stack-profile requires infurnet-compat")
-    if kind != "stack-profile" and meta.get("infurnet-compat"):
-        err(f"{p}: infurnet-compat only valid on stack-profile")
-    if kind == "stack-profile" and not d.get("compatibility"):
-        err(f"{p}: stack-profile requires compatibility field")
-    req = [s.strip() for s in (meta.get("infurnet-requires") or "").split(",") if s.strip()]
-    if len(req) != len(set(req)):
-        err(f"{p}: duplicate entries in infurnet-requires")
-    for rq in req:
-        if rq not in skill_names:
-            err(f"{p}: infurnet-requires names missing skill {rq!r}")
+    skill_type = meta.get("skill-type")
+    if skill_type not in SKILL_TYPES:
+        err(f"{p}: skill-type {skill_type!r} not in {sorted(SKILL_TYPES)}")
+    if meta.get("infurnet-compat") and not d.get("compatibility"):
+        err(f"{p}: infurnet-compat requires compatibility field")
+    dep = [s.strip() for s in (meta.get("skill-dependency") or "").split(",") if s.strip()]
+    if len(dep) != len(set(dep)):
+        err(f"{p}: duplicate entries in skill-dependency")
+    for dp in dep:
+        if dp not in skill_names:
+            err(f"{p}: skill-dependency names missing skill {dp!r}")
 
     # 500-line threshold
     lines = len(p.read_text().splitlines())
@@ -110,9 +106,9 @@ else:
                 if line.strip():
                     err(f"{p.parent.name}: skills-ref: {line.strip()}")
 
-# --- requires cycles ---
+# --- dependency cycles ---
 graph = {
-    n: [s.strip() for s in ((skill_meta.get(n, {}).get("metadata") or {}).get("infurnet-requires") or "").split(",") if s.strip()]
+    n: [s.strip() for s in ((skill_meta.get(n, {}).get("metadata") or {}).get("skill-dependency") or "").split(",") if s.strip()]
     for n in skill_names
 }
 state = {}
@@ -122,7 +118,7 @@ def dfs(node, stack):
     state[node] = 1
     for nxt in graph.get(node, []):
         if state.get(nxt) == 1:
-            err(f"infurnet-requires cycle: {' -> '.join(stack + [node, nxt])}")
+            err(f"skill-dependency cycle: {' -> '.join(stack + [node, nxt])}")
         elif state.get(nxt) is None:
             dfs(nxt, stack + [node])
     state[node] = 2
@@ -213,24 +209,24 @@ for rf in refs:
 # --- README inventory: exact structural parity ---
 readme = (ROOT / "README.md").read_text()
 skill_rows = re.findall(
-    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| .+? \| ([a-z-]+) \|$",
+    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| (skill|standard) \| .+ \|$",
     readme,
 )
 seen = {}
-for name, link, kind in skill_rows:
+for name, link, row_type in skill_rows:
     if name in seen:
         err(f"README.md: duplicate skill row {name!r}")
-    seen[name] = (link, kind)
+    seen[name] = (link, row_type)
 for name in sorted(skill_names):
     if name not in seen:
         err(f"README.md: missing skill row {name!r}")
         continue
-    link, kind = seen[name]
+    link, row_type = seen[name]
     if link != f"skills/{name}/SKILL.md":
         err(f"README.md: skill row {name!r} links {link!r}")
-    actual = (skill_meta.get(name, {}).get("metadata") or {}).get("infurnet-kind")
-    if kind != actual:
-        err(f"README.md: skill row {name!r} kind {kind!r} != frontmatter {actual!r}")
+    actual = (skill_meta.get(name, {}).get("metadata") or {}).get("skill-type")
+    if row_type != actual:
+        err(f"README.md: skill row {name!r} skill-type {row_type!r} != frontmatter {actual!r}")
 for name in seen:
     if name not in skill_names:
         err(f"README.md: skill row for nonexistent skill {name!r}")

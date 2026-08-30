@@ -39,7 +39,8 @@ What it proves:
     exactly
   * every required prose section is present and carries text once HTML
     comments are removed
-  * profile and every governance path exist in the repository
+  * profile and every governance path exist in the repository, and the
+    profile declares metadata.skill-type: profile where it declares one
   * base_branch and target_branch resolve; the declared
     work_branch_state matches what the refs show
   * no unfilled placeholder token and no durable issue reference remain
@@ -259,6 +260,34 @@ def sections(body, offset):
     return found
 
 
+def declared_skill_type(path):
+    """
+    Return metadata.skill-type declared by a package file.
+
+    None means the file declares none the script can read -- no
+    frontmatter, unparseable YAML, or no metadata mapping. A consuming
+    repository may carry a profile that predates the metadata model, so
+    absence is reported as a note rather than a breach.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("skill-type")
+
+
 def is_empty(text):
     """True when a section carries nothing once comments are removed."""
     return not COMMENT_RE.sub("", text).strip()
@@ -391,6 +420,20 @@ def check_paths(fm, root, findings):
                     "violation", "profile",
                     f"profile {profile!r} does not exist in the "
                     "repository"))
+            elif root is not None:
+                declared = declared_skill_type(root / profile)
+                if declared is None:
+                    findings.append(Finding(
+                        "note", "profile",
+                        f"profile {profile!r} declares no "
+                        "metadata.skill-type; confirm it is the assigned "
+                        "profile package and not a deliverable"))
+                elif declared != "profile":
+                    findings.append(Finding(
+                        "violation", "profile",
+                        f"profile {profile!r} declares skill-type "
+                        f"{declared!r}; the assigned profile must be a "
+                        "profile package"))
 
     for entry in fm.get("governance") or []:
         if not isinstance(entry, str) or not entry.strip():

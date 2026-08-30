@@ -22,6 +22,33 @@ Read before editing:
 | A role archetype | the role file itself plus `skills/workorder-drafting/SKILL.md` |
 | A specific skill | that skill in full — its own rules bind its edits |
 
+## Profile loading contract
+
+A consuming session loads Agent Skills packages in one order:
+
+1. the profile assigned by repository governance;
+2. a deliverable permitted by that profile and required by the accepted work;
+3. the standards applicable to that deliverable.
+
+An agent may load exactly one profile during a session. The assigned profile is
+immutable for the lifetime of that session. The agent must not select a profile
+from task wording, native description triggering, available packages, or its own
+judgment, and must not load a second profile to supplement, compare with, or
+replace the assigned profile.
+
+If the user asks to switch profiles, refuse the switch and instruct the user to
+start a new session with the desired profile assigned. Do not continue under the
+new profile in the current session.
+
+The assigned profile defines which deliverables the agent may produce or review.
+A requested deliverable outside that set is a stop condition, not a reason to
+change profiles. A deliverable or standard may constrain already-authorized work;
+neither may expand authority, authorize another deliverable, or alter the
+assigned profile.
+
+Native description triggering may discover an applicable deliverable or standard
+after profile assignment. It must never select, load, or switch a profile.
+
 ## Portability boundary
 
 Everything in `skills/` and `roles/` is project-neutral. Do not introduce:

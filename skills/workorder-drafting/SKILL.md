@@ -10,7 +10,7 @@ metadata:
 # Workorder drafting
 
 A workorder is the job-specific grant an agent executes under,
-subordinate to repository governance and role boundaries. If the workorder is
+subordinate to repository governance and profile boundaries. If the workorder is
 ambiguous, the failure belongs to the workorder, not the agent. A stop caused by
 an unbounded workorder is a drafting defect.
 
@@ -43,9 +43,9 @@ checks exact match.
 Required frontmatter fields:
 
 * `workorder_key` — unique identifier; must match `## Workorder key`
-* `profile` — one of: `implementation`, `validation`, `design`,
+* `work_type` — one of: `implementation`, `validation`, `design`,
   `pr-fix`, `delivery`
-* `executing_role` — repo-relative path to the role file
+* `profile` — repo-relative path to the assigned profile package
 * `base_branch` — starting-state ref; used for stale-base check
 * `work_branch` — branch the work executes on
 * `work_branch_state` — `existing` or `to_create`
@@ -81,7 +81,7 @@ Required frontmatter fields:
 
 ## Execution profiles
 
-The required fields are universal. Some executing roles carry additional
+The required fields are universal. Some work types carry additional
 minimums.
 
 ### Implementation profile

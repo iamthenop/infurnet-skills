@@ -1,7 +1,7 @@
 ---
 workorder_key: "<WO-...>"
-profile: "<implementation|validation|design|pr-fix|delivery>"
-executing_role: "roles/<role>/ROLE.md"
+work_type: "<implementation|validation|design|pr-fix|delivery>"
+profile: "skills/<profile>/SKILL.md"
 
 base_branch: "<main|...>"
 work_branch: "<feat/...>"
@@ -31,11 +31,11 @@ temporary_artifacts: "none"
 
 `<unique-workorder-key>`
 
-## Executing role
+## Assigned profile
 
-Role: see `executing_role` in frontmatter.
+Profile: see `profile` in frontmatter.
 
-Rationale: <explain any constraints on how the role applies>
+Rationale: <explain any constraints on how the profile applies>
 
 ## Authorizing source
 
@@ -195,7 +195,7 @@ On a stop, the executor must:
 
 ## Job-specific stop conditions
 
-In addition to repository and role stop conditions, stop when:
+In addition to repository and profile stop conditions, stop when:
 
 * <condition>;
 * <condition>;

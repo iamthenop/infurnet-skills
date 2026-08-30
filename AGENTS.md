@@ -6,9 +6,6 @@ content acquires authority only when adopted by a consuming repository's
 governance; in this repository it binds only as stated in the self-hosting rule
 below.
 
-During the staged R3 migration, current profile sources remain under
-`roles/*/ROLE.md` until they are converted to ordinary `skills/*/SKILL.md`
-packages. That transitional storage does not define a separate role type.
 Agents working here maintain the library; they do not run the profiles it
 defines.
 
@@ -22,9 +19,9 @@ Read before editing:
 
 | Surface | Governing instructions |
 | --- | --- |
-| Any package or transitional profile text | `skills/vocabulary-control/SKILL.md` |
+| Any package text | `skills/vocabulary-control/SKILL.md` |
 | Structure, diagrams, tables, representation choice | `skills/design-docs/SKILL.md` (representation selection and diagram conventions) |
-| A transitional profile source | that profile source plus `skills/workorder-drafting/SKILL.md` |
+| A profile package | that profile plus `skills/workorder-drafting/SKILL.md` |
 | A specific package | that package in full; its own rules bind its edits |
 
 ## Profile loading contract
@@ -56,8 +53,7 @@ after profile assignment. It must never select, load, or switch a profile.
 
 ## Portability boundary
 
-Everything in `skills/` and the transitional profile sources in `roles/` is
-project-neutral. Do not introduce:
+Everything in `skills/` is project-neutral. Do not introduce:
 
 * project names, product names, or named authorities (declare a slot instead:
   "the deciding authority", "the repository's bindings");
@@ -68,20 +64,17 @@ project-neutral. Do not introduce:
 
 ## Repository conventions
 
-* The target package shape is one package per folder:
-  `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and a
-  trigger-phrased `description`. Optional reference material lives under
+* Every governed profile, standard, and deliverable uses one package per
+  folder: `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and
+  a trigger-phrased `description`. Optional reference material lives under
   `skills/<name>/references/`.
 * Every package belongs to exactly one skill type: `profile`, `standard`, or
   `deliverable`.
-* `roles/<name>/ROLE.md` is transitional storage for profile sources only. Do
-  not create new role types or new role-specific consumption semantics.
 * Cross-references use backticked package names, never paths outside the
   repository.
 * One home per fact across the whole library: a rule lives in exactly one
-  package or transitional profile source; other instructions reference it by
-  name. A duplication found during an edit is a defect to report, not silently
-  to fix out of scope.
+  package; other instructions reference it by name. A duplication found during
+  an edit is a defect to report, not silently to fix out of scope.
 * No character-drawn diagrams; representation follows the selection ladder in
   `design-docs`.
 * `README.md` organizes the library under Profiles, Standards, and Deliverables.
@@ -92,7 +85,7 @@ project-neutral. Do not introduce:
 
 * Edits are surgical: amend the smallest text that carries the change.
 * No silent renames. Renaming a package enumerates every consumer in the same
-  change: cross-references, profile composition, and the README inventory.
+  change: cross-references and the README inventory.
 * A change that alters a rule's meaning and a change that restructures its
   presentation are two changes; do not combine them in one commit silently.
 * Work lands through a branch and pull request; the pull-request body states
@@ -104,10 +97,8 @@ Before submitting, verify:
 
 * frontmatter parses in every touched file, and `name` matches its folder where
   applicable;
-* every backticked package reference and every transitional profile-bundle entry
-  resolves to an existing package;
-* the README inventory matches the current package and transitional-profile
-  inventory;
+* every backticked package reference resolves to an existing package;
+* the README inventory matches the current package inventory;
 * no portability-boundary violation was introduced.
 
 ## Stop conditions

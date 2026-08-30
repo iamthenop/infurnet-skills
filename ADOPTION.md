@@ -10,8 +10,7 @@ An unfilled field is not an implied default.
 | Source repository | `<url>` |
 | Pinned commit | `<full SHA>` |
 | Release tag (if any) | `<tag or none>` |
-| Installed skills | `<comma-separated skill names>` |
-| Installed roles | `<comma-separated role names>` |
+| Installed skills | `<comma-separated package names, any skill type>` |
 | Installation mode | `<vendored copy / subtree / symlink / router-referenced>` |
 | Governance entry point | `<path in consuming repository>` |
 | Bindings file | `<path in consuming repository>` |

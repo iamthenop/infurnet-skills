@@ -19,40 +19,25 @@ import textwrap
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 VALIDATOR = REPO_ROOT / "tools" / "validate.py"
 
-# One description deliberately shared between a skill and a role, and the
-# distinct descriptions used for the passing case.
+# One description deliberately shared between two packages, and the distinct
+# descriptions used for the passing case.
 SHARED = "A single description that two different owners both claim."
-ALPHA_ONLY = "A description belonging to exactly one skill."
-ROLE_ONLY = "A description belonging to exactly one role."
-BETA = "A second skill description, distinct in every fixture."
+ALPHA_ONLY = "A description belonging to exactly one deliverable package."
+PROFILE_ONLY = "A description belonging to exactly one profile package."
+BETA = "A second package description, distinct in every fixture."
 
-SKILL = """\
+PACKAGE = """\
 ---
 name: {name}
 description: "{description}"
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: {skill_type}
 ---
 
 # {name}
 
-Fixture skill body.
-"""
-
-ROLE = """\
----
-name: {name}
-description: "{description}"
-skills:
-  always: [alpha]
-  by-surface:
-    documents: [beta]
----
-
-# {name}
-
-Fixture role body.
+Fixture package body.
 """
 
 README = """\
@@ -60,12 +45,9 @@ README = """\
 
 | Skill | Skill type | Purpose |
 | --- | --- | --- |
-| [`alpha`](skills/alpha/SKILL.md) | skill | Fixture skill |
-| [`beta`](skills/beta/SKILL.md) | skill | Fixture skill |
-
-| Role | Purpose |
-| --- | --- |
-| [`fixture-role`](roles/fixture-role/ROLE.md) | Fixture role |
+| [`alpha`](skills/alpha/SKILL.md) | skill | Fixture deliverable |
+| [`beta`](skills/beta/SKILL.md) | skill | Fixture deliverable |
+| [`fixture-profile`](skills/fixture-profile/SKILL.md) | profile | Fixture profile |
 """
 
 
@@ -74,15 +56,18 @@ def write(path, text):
     path.write_text(text)
 
 
-def build_repo(root, alpha_description, role_description):
+def build_repo(root, alpha_description, profile_description):
     """Create a minimal repository the validator accepts, then vary descriptions."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     write(root / "skills" / "alpha" / "SKILL.md",
-          SKILL.format(name="alpha", description=alpha_description))
+          PACKAGE.format(name="alpha", description=alpha_description,
+                         skill_type="skill"))
     write(root / "skills" / "beta" / "SKILL.md",
-          SKILL.format(name="beta", description=BETA))
-    write(root / "roles" / "fixture-role" / "ROLE.md",
-          ROLE.format(name="fixture-role", description=role_description))
+          PACKAGE.format(name="beta", description=BETA, skill_type="skill"))
+    write(root / "skills" / "fixture-profile" / "SKILL.md",
+          PACKAGE.format(name="fixture-profile",
+                         description=profile_description,
+                         skill_type="profile"))
     write(root / "README.md", README)
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
@@ -111,18 +96,18 @@ class Results:
 
 
 def duplicate_descriptions_are_rejected(results, workdir):
-    """A skill and a role sharing one description must fail validation, naming both."""
+    """Two packages sharing one description must fail validation, naming both."""
     root = build_repo(workdir / "duplicate", SHARED, SHARED)
     code, output = run_validator(root)
 
     results.check(
-        "duplicate skill descriptions — validator exits non-zero",
+        "duplicate package descriptions — validator exits non-zero",
         code != 0,
         f"expected a non-zero exit, got {code}. Output:\n{output}",
     )
-    for owner in ("skill:alpha", "role:fixture-role"):
+    for owner in ("package:alpha", "package:fixture-profile"):
         results.check(
-            f"duplicate skill descriptions — output identifies {owner}",
+            f"duplicate package descriptions — output identifies {owner}",
             owner in output,
             f"{owner!r} absent from validator output:\n{output}",
         )
@@ -130,7 +115,7 @@ def duplicate_descriptions_are_rejected(results, workdir):
 
 def distinct_descriptions_are_accepted(results, workdir):
     """The same fixture with unique descriptions must validate cleanly."""
-    root = build_repo(workdir / "distinct", ALPHA_ONLY, ROLE_ONLY)
+    root = build_repo(workdir / "distinct", ALPHA_ONLY, PROFILE_ONLY)
     code, output = run_validator(root)
 
     results.check(

@@ -1,21 +1,9 @@
 ---
 name: builder
-description: "Execute bounded implementation, validation, and documentation work under an approved workorder and role constraints. Use when an agent is commissioned to build, modify, test, or document repository artifacts within an explicit authorized surface."
-skills:
-  always: [workorder-drafting]
-  by-surface:
-    code: [code-comments, type-discipline, doc-comment-tags, error-handling]
-    build: [bazel-discipline]
-    java: [java-standard]
-    python: [python-standard]
-    web: [web-standard]
-    deployment: [deploy-standard]
-    schema: [schema-design]
-    workflow: [workflow-modeling]
-    design-documents: [vocabulary-control, design-docs]
-    api-documents: [api-docs]
-    user-documents: [user-docs]
-    bindings: [project-bindings]
+description: "Assigned Builder profile. Defines authority and operating boundaries for bounded implementation, validation, and documentation work. This profile is assigned by repository governance and is never self-selected."
+license: MIT
+metadata:
+  skill-type: profile
 ---
 
 # Builder
@@ -28,14 +16,13 @@ change boundaries.
 
 1. the consuming repository's governance entry point;
 2. the approved workorder;
-3. this role file;
+3. this profile;
 4. when a work plan has been reviewed: every finding from the plan
-   review before starting;
-5. every bundled skill governing a surface that the work touches.
+   review before starting.
 
-A bundled skill applies when the authorized work touches its surface;
-the repository merely containing a surface does not load its skill. Read
-every skill that applies. If ownership is unclear, stop and report.
+Load the deliverable and applicable standards required by the profile
+loading contract in `AGENTS.md`. Repository contents do not grant
+authority to load additional packages.
 
 ## Authority
 
@@ -65,7 +52,7 @@ receives; drafting workorders is designer work.
 | --- | --- |
 | Governing or architecture text | Stop unless exact approved text or an authorizing instruction is supplied |
 | Build workspace or target definitions | Change only when explicitly authorized |
-| Validation-only testing | Route to the tester role |
+| Validation-only testing | Route to the tester profile |
 | CI diagnosis without authorized fixes | Inspect and report only |
 | Remote branch, PR, tag, or release changes | Perform only when explicitly authorized |
 
@@ -92,7 +79,7 @@ Builder must not:
 * expand scope because another change appears useful;
 * redesign behaviour while performing cleanup;
 * weaken tests to make work pass;
-* invent dependencies, services, roles, conventions, or compatibility
+* invent dependencies, services, profiles, conventions, or compatibility
   layers;
 * create repository-persistent temporary artifacts not declared in the
   workorder's Temporary-artifacts field, or leave a declared one in
@@ -153,7 +140,7 @@ Stop and report when:
 * a change crosses an unauthorized boundary;
 * a compatibility layer is required but not approved;
 * a test must be weakened to pass;
-* a new dependency, service, role, schema object, or convention is
+* a new dependency, service, profile, schema object, or convention is
   required but not approved;
 * the requested behaviour is not named by the workorder;
 * remote mutation is required but not authorized;

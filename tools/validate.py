@@ -7,7 +7,7 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SKILL_TYPES = {"skill", "standard"}
+SKILL_TYPES = {"profile", "standard", "skill"}
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
 PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
@@ -42,14 +42,12 @@ def frontmatter(path):
 
 
 skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
-roles = sorted((ROOT / "roles").glob("*/ROLE.md"))
 refs = sorted(
     list((ROOT / "skills").glob("*/references/*.md")) +
     [p for p in (ROOT / "skills").glob("*/scripts/*") if p.is_file()]
 )
 skill_names = {p.parent.name for p in skills}
-role_names = {p.parent.name for p in roles}
-governed = list(skills) + list(roles) + list(refs) + [
+governed = list(skills) + list(refs) + [
     ROOT / "eval" / "triggers.md",
     ROOT / "tools" / "validate.py",
 ] + sorted((ROOT / "skills").glob("*/assets/*"))
@@ -128,43 +126,23 @@ for n in sorted(skill_names):
     if state.get(n) is None:
         dfs(n, [])
 
-# --- roles ---
-role_meta = {}
-for p in roles:
-    d = frontmatter(p)
-    if d is None:
-        continue
-    role_meta[p.parent.name] = d
-    if d.get("name") != p.parent.name:
-        err(f"{p}: name != folder")
-    bundle = d.get("skills") or {}
-    entries = list(bundle.get("always") or [])
-    for surface, v in (bundle.get("by-surface") or {}).items():
-        entries += list(v)
-    if len(entries) != len(set(entries)):
-        err(f"{p}: duplicate skills across bundle entries")
-    for s in entries:
-        if s not in skill_names:
-            err(f"{p}: bundle names missing skill {s!r}")
-
 # --- duplicate description detection ---
 desc_seen = {}  # description -> first owner label
-for label, meta_dict in [("skill", skill_meta), ("role", role_meta)]:
-    for name, d in meta_dict.items():
-        desc = d.get("description") or ""
-        if not desc:
-            continue
-        owner = f"{label}:{name}"
-        if desc in desc_seen:
-            err(
-                f"duplicate description between {desc_seen[desc]} and {owner} — "
-                f"descriptions must be unique across all skills and roles"
-            )
-        else:
-            desc_seen[desc] = owner
+for name, d in skill_meta.items():
+    desc = d.get("description") or ""
+    if not desc:
+        continue
+    owner = f"package:{name}"
+    if desc in desc_seen:
+        err(
+            f"duplicate description between {desc_seen[desc]} and {owner} — "
+            f"descriptions must be unique across all packages"
+        )
+    else:
+        desc_seen[desc] = owner
 
-# --- skill#Section references (roles and skills) ---
-for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/assets/*")):
+# --- skill#Section references ---
+for p in list(skills) + sorted((ROOT / "skills").glob("*/assets/*")):
     t = p.read_text()
     for m in re.finditer(r"`([a-z][a-z0-9-]*)#([^`]+)`", t):
         sk, heading = m.group(1), m.group(2)
@@ -176,7 +154,7 @@ for p in list(skills) + list(roles) + sorted((ROOT / "skills").glob("*/assets/*"
             err(f"{p}: section {heading!r} not found in skill {sk!r}")
 
 # --- markdown link resolution (repo-wide, relative links) ---
-md_files = list(skills) + list(roles) + list(refs) + [
+md_files = list(skills) + list(refs) + [
     ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "ADOPTION.md",
     ROOT / "eval" / "triggers.md",
 ]
@@ -209,7 +187,8 @@ for rf in refs:
 # --- README inventory: exact structural parity ---
 readme = (ROOT / "README.md").read_text()
 skill_rows = re.findall(
-    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| (skill|standard) \| .+ \|$",
+    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| "
+    r"(profile|standard|skill) \| .+ \|$",
     readme,
 )
 seen = {}
@@ -230,15 +209,6 @@ for name in sorted(skill_names):
 for name in seen:
     if name not in skill_names:
         err(f"README.md: skill row for nonexistent skill {name!r}")
-role_rows = re.findall(r"(?m)^\| \[`([a-z-]+)`\]\((roles/[a-z-]+/ROLE\.md)\) \|", readme)
-for name, link in role_rows:
-    if name not in role_names:
-        err(f"README.md: role row for nonexistent role {name!r}")
-    elif link != f"roles/{name}/ROLE.md":
-        err(f"README.md: role row {name!r} links {link!r}")
-for name in sorted(role_names):
-    if name not in {n for n, _ in role_rows}:
-        err(f"README.md: missing role row {name!r}")
 
 # --- text hygiene on all governed files ---
 for p in governed:
@@ -250,7 +220,7 @@ for p in governed:
         err(f"{rel}: invisible characters present (NBSP or zero-width)")
     if p.suffix == ".md" and GLYPHS.search(t):
         err(f"{rel}: character-drawn diagram glyphs present")
-    if str(rel).startswith(("skills/", "roles/")):
+    if str(rel).startswith("skills/"):
         for needle in PORTABILITY:
             if needle in t:
                 err(f"{rel}: project-specific reference {needle!r}")
@@ -265,4 +235,11 @@ if errors:
     sys.exit(1)
 ref_count = len([r for r in refs if "references" in r.parts])
 script_count = len([r for r in refs if "scripts" in r.parts])
-print(f"PASS — {len(skills)} skills, {len(roles)} roles, {ref_count} references, {script_count} scripts validated")
+by_type = ", ".join(
+    f"{sum(1 for d in skill_meta.values() if (d.get('metadata') or {}).get('skill-type') == st)} {st}"
+    for st in sorted(SKILL_TYPES)
+)
+print(
+    f"PASS — {len(skills)} packages ({by_type}), "
+    f"{ref_count} references, {script_count} scripts validated"
+)

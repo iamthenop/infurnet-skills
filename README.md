@@ -17,10 +17,10 @@ single-profile rule are defined in `AGENTS.md`.
 compatibility or package dependencies. Compatibility and dependencies remain
 separate concerns; package dependencies use `skill-dependency`.
 
-During the staged R3 migration, current packages with `skill-type: skill` and
-current profile sources under `roles/*/ROLE.md` retain their existing on-disk
-representation until their migration PRs land. Those representations are
-transitional and do not define additional skill types.
+During the staged R3 migration, current packages with `skill-type: skill`
+retain their existing on-disk representation until their migration PR lands.
+That representation is transitional and does not define an additional skill
+type.
 
 ## Profiles
 
@@ -28,14 +28,11 @@ A `profile` defines an agent's authority, operating boundaries, permitted
 deliverables, required standards, and stop conditions. Repository governance
 assigns exactly one profile to a session. A profile is never self-selected.
 
-The current profile sources remain under `roles/*/ROLE.md` until their conversion
-to ordinary `skills/<name>/SKILL.md` packages later in R3.
-
-| Profile | Frame | Current composition |
+| Profile | Skill type | Governs |
 | --- | --- | --- |
-| [`builder`](roles/builder/ROLE.md) | Executes bounded implementation under an approved workorder | current role bundle pending profile migration |
-| [`designer`](roles/designer/ROLE.md) | Drafts governing text, design, and workorders; never decides | current role bundle pending profile migration |
-| [`tester`](roles/tester/ROLE.md) | Falsifies approved work locally; no repository authority | current role bundle pending profile migration |
+| [`builder`](skills/builder/SKILL.md) | profile | Executes bounded implementation under an approved workorder |
+| [`designer`](skills/designer/SKILL.md) | profile | Drafts governing text, design, and workorders; never decides |
+| [`tester`](skills/tester/SKILL.md) | profile | Falsifies approved work locally; no repository authority |
 
 ## Standards
 
@@ -88,7 +85,6 @@ types:
 | --- | --- |
 | `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
 | `skills/<name>/references` | optional bundled templates and reference material |
-| `roles/<name>/ROLE.md` | transitional profile source removed when profile migration lands |
 
 ## Consuming
 
@@ -129,9 +125,8 @@ governance-declared location, copied from this repository's
 exact source revision; a governance dependency must not follow a mutable
 checkout or floating `main`.
 
-During R3, the adoption manifest retains its current installed-skills and
-installed-roles fields until the corresponding consumer-migration PR. That
-transitional storage does not create a separate role type.
+During R3, the adoption manifest records installed Agent Skills packages of
+any skill type in its installed-skills field.
 
 Updating the pin follows six steps: compare pinned and candidate revisions;
 enumerate changed obligations; identify affected consumer bindings and

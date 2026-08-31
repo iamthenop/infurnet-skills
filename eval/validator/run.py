@@ -40,14 +40,28 @@ metadata:
 Fixture skill body.
 """
 
+# The validator reads a row's skill type from the section it sits under, so
+# the fixture carries all three sections even though it declares no standard.
 README = """\
 # Fixture repository
 
-| Skill | Skill type | Purpose |
-| --- | --- | --- |
-| [`alpha`](skills/alpha/SKILL.md) | deliverable | Fixture deliverable |
-| [`beta`](skills/beta/SKILL.md) | deliverable | Fixture deliverable |
-| [`fixture-profile`](skills/fixture-profile/SKILL.md) | profile | Fixture profile |
+## Profiles
+
+| Profile | Governs |
+| --- | --- |
+| [`fixture-profile`](skills/fixture-profile/SKILL.md) | Fixture profile |
+
+## Standards
+
+| Standard | Governs |
+| --- | --- |
+
+## Deliverables
+
+| Deliverable | Governs |
+| --- | --- |
+| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
+| [`beta`](skills/beta/SKILL.md) | Fixture deliverable |
 """
 
 

@@ -185,27 +185,38 @@ for rf in refs:
         err(f"{rf}: not linked from its SKILL.md")
 
 # --- README inventory: exact structural parity ---
+# The section a row sits under declares the skill type, so a row does not
+# repeat it. The heading is the expectation the frontmatter must match.
 readme = (ROOT / "README.md").read_text()
-skill_rows = re.findall(
-    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| "
-    r"(profile|standard|deliverable) \| .+ \|$",
-    readme,
+SECTION_TYPES = [
+    ("Profiles", "profile"),
+    ("Standards", "standard"),
+    ("Deliverables", "deliverable"),
+]
+ROW_RE = re.compile(
+    r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| .+ \|$"
 )
 seen = {}
-for name, link, row_type in skill_rows:
-    if name in seen:
-        err(f"README.md: duplicate skill row {name!r}")
-    seen[name] = (link, row_type)
+for heading, section_type in SECTION_TYPES:
+    body = re.search(rf"(?ms)^## {heading}$(.*?)(?=^## |\Z)", readme)
+    if body is None:
+        err(f"README.md: missing inventory section {heading!r}")
+        continue
+    for name, link in ROW_RE.findall(body.group(1)):
+        if name in seen:
+            err(f"README.md: duplicate skill row {name!r}")
+        seen[name] = (link, section_type)
 for name in sorted(skill_names):
     if name not in seen:
         err(f"README.md: missing skill row {name!r}")
         continue
-    link, row_type = seen[name]
+    link, section_type = seen[name]
     if link != f"skills/{name}/SKILL.md":
         err(f"README.md: skill row {name!r} links {link!r}")
     actual = (skill_meta.get(name, {}).get("metadata") or {}).get("skill-type")
-    if row_type != actual:
-        err(f"README.md: skill row {name!r} skill-type {row_type!r} != frontmatter {actual!r}")
+    if section_type != actual:
+        err(f"README.md: skill row {name!r} sits under the {section_type!r} "
+            f"section but frontmatter declares {actual!r}")
 for name in seen:
     if name not in skill_names:
         err(f"README.md: skill row for nonexistent skill {name!r}")

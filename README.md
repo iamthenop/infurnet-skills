@@ -23,11 +23,11 @@ A `profile` defines an agent's authority, operating boundaries, permitted
 deliverables, required standards, and stop conditions. Repository governance
 assigns exactly one profile to a session. A profile is never self-selected.
 
-| Profile | Skill type | Governs |
-| --- | --- | --- |
-| [`builder`](skills/builder/SKILL.md) | profile | Executes bounded implementation under an approved workorder |
-| [`designer`](skills/designer/SKILL.md) | profile | Drafts governing text, design, and workorders; never decides |
-| [`tester`](skills/tester/SKILL.md) | profile | Falsifies approved work locally; no repository authority |
+| Profile | Governs |
+| --- | --- |
+| [`builder`](skills/builder/SKILL.md) | Executes bounded implementation under an approved workorder |
+| [`designer`](skills/designer/SKILL.md) | Drafts governing text, design, and workorders; never decides |
+| [`tester`](skills/tester/SKILL.md) | Falsifies approved work locally; no repository authority |
 
 ## Standards
 
@@ -35,19 +35,19 @@ A `standard` defines reusable rules or conformance criteria that govern
 permitted work. A standard constrains execution but does not grant authority,
 permit a deliverable, or change the assigned profile.
 
-| Skill | Skill type | Governs |
-| --- | --- | --- |
-| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | standard | Dependency declaration, visibility, target separation |
-| [`code-comments`](skills/code-comments/SKILL.md) | standard | Comment doctrine; information-location discipline |
-| [`deploy-standard`](skills/deploy-standard/SKILL.md) | standard | Artifact classes, promotion, fixture discipline |
-| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | standard | Custom documentation tag system (Javadoc/docstring) |
-| [`error-handling`](skills/error-handling/SKILL.md) | standard | Exception selection, catching with intent, abstraction boundaries |
-| [`java-standard`](skills/java-standard/SKILL.md) | standard | Java layout, types, tests |
-| [`prose-discipline`](skills/prose-discipline/SKILL.md) | standard | Clarity, compression, voice, and structure for governed prose |
-| [`python-standard`](skills/python-standard/SKILL.md) | standard | Python typing, validation boundaries, dep isolation |
-| [`type-discipline`](skills/type-discipline/SKILL.md) | standard | Load-bearing value types; parse-once boundaries |
-| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | standard | Term introduction; drift control; one home per fact |
-| [`web-standard`](skills/web-standard/SKILL.md) | standard | Templates, page model, palette tokens, accessibility |
+| Standard | Governs |
+| --- | --- |
+| [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation |
+| [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline |
+| [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline |
+| [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) |
+| [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries |
+| [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests |
+| [`prose-discipline`](skills/prose-discipline/SKILL.md) | Clarity, compression, voice, and structure for governed prose |
+| [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation |
+| [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries |
+| [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact |
+| [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility |
 
 ## Deliverables
 
@@ -56,16 +56,16 @@ recognizable class of output that a profile may be permitted to produce or
 review. A deliverable does not authorize itself; permission comes from the
 assigned profile and the accepted work.
 
-| Skill | Skill type | Governs |
-| --- | --- | --- |
-| [`api-docs`](skills/api-docs/SKILL.md) | deliverable | API document and operation shape |
-| [`design-docs`](skills/design-docs/SKILL.md) | deliverable | Design file taxonomy, writing rules, diagram conventions |
-| [`plan-review`](skills/plan-review/SKILL.md) | deliverable | Work plan verdict before execution begins |
-| [`project-bindings`](skills/project-bindings/SKILL.md) | deliverable | Repository bindings file authoring |
-| [`schema-design`](skills/schema-design/SKILL.md) | deliverable | Initialization ordering, strata, destructive changes |
-| [`user-docs`](skills/user-docs/SKILL.md) | deliverable | Task-oriented user documentation |
-| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | deliverable | Gates as states; work package vocabulary |
-| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | deliverable | Bounded execution authority for agents |
+| Deliverable | Governs |
+| --- | --- |
+| [`api-docs`](skills/api-docs/SKILL.md) | API document and operation shape |
+| [`design-docs`](skills/design-docs/SKILL.md) | Design file taxonomy, writing rules, diagram conventions |
+| [`plan-review`](skills/plan-review/SKILL.md) | Work plan verdict before execution begins |
+| [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring |
+| [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes |
+| [`user-docs`](skills/user-docs/SKILL.md) | Task-oriented user documentation |
+| [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary |
+| [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents |
 
 ## Layout
 

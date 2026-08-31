@@ -10,6 +10,7 @@ Usage:
     python3 .agents/update-skills.py --verify         # verify current state only
 """
 import argparse
+import difflib
 import hashlib
 import json
 import re
@@ -242,6 +243,22 @@ def diff_obligations(old_text, new_text):
     return findings
 
 
+def diff_migrated_profile(old_text, new_text, old_path, new_path):
+    """
+    Deterministic line diff of one migrated profile body.
+
+    The obligation extractor reads `* ` list items under a fixed set of
+    headings, so a profile whose authority moved between headings or into
+    prose would otherwise report as changed with nothing shown. This path
+    exists to make the one-time role-to-profile representation change
+    reviewable, not to redesign obligation parsing.
+    """
+    return list(difflib.unified_diff(
+        old_text.splitlines(), new_text.splitlines(),
+        fromfile=old_path, tofile=new_path, lineterm="", n=2,
+    ))
+
+
 def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
                          skill_names):
     text = re.sub(
@@ -357,9 +374,27 @@ def main():
     if not found_obligations:
         print("  None detected")
 
+    if migrated:
+        print("\n--- Migrated profile contract changes ---")
+        shown = False
+        for old, new in sorted(migrated.items()):
+            if current_files[old] == candidate_files[new]:
+                continue
+            shown = True
+            print()
+            for line in diff_migrated_profile(
+                current_files[old], candidate_files[new], old, new
+            ):
+                print(f"  {line}")
+        if not shown:
+            print("  None")
+
+    # Migrated profiles carry their own section above, so this lists only
+    # same-path files whose change produced no obligation finding.
     print("\n--- Other changed files ---")
-    other_changed = [label for label, old_text, new_text in comparisons
-                     if not diff_obligations(old_text, new_text)]
+    other_changed = [f for f in changed_files
+                     if not diff_obligations(current_files[f],
+                                             candidate_files[f])]
     if other_changed:
         for label in sorted(other_changed):
             print(f"  ~ {label}")

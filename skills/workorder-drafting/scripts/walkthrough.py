@@ -40,7 +40,7 @@ What it proves:
   * every required prose section is present and carries text once HTML
     comments are removed
   * profile and every governance path exist in the repository, and the
-    profile declares metadata.skill-type: profile where it declares one
+    profile declares metadata.skill-type: profile
   * base_branch and target_branch resolve; the declared
     work_branch_state matches what the refs show
   * no unfilled placeholder token and no durable issue reference remain
@@ -265,9 +265,8 @@ def declared_skill_type(path):
     Return metadata.skill-type declared by a package file.
 
     None means the file declares none the script can read -- no
-    frontmatter, unparseable YAML, or no metadata mapping. A consuming
-    repository may carry a profile that predates the metadata model, so
-    absence is reported as a note rather than a breach.
+    frontmatter, unparseable YAML, or no metadata mapping. Every governed
+    package declares a skill type, so the caller treats None as a breach.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -424,10 +423,10 @@ def check_paths(fm, root, findings):
                 declared = declared_skill_type(root / profile)
                 if declared is None:
                     findings.append(Finding(
-                        "note", "profile",
-                        f"profile {profile!r} declares no "
-                        "metadata.skill-type; confirm it is the assigned "
-                        "profile package and not a deliverable"))
+                        "violation", "profile",
+                        f"profile {profile!r} declares no readable "
+                        "metadata.skill-type; the assigned profile must be "
+                        "a package declaring skill-type: profile"))
                 elif declared != "profile":
                     findings.append(Finding(
                         "violation", "profile",

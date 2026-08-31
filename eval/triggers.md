@@ -1,17 +1,20 @@
 # Trigger evaluation corpus
 
 Status: **not yet executed** — descriptions are unevaluated until a
-harness runs this corpus against the intended clients. Record results
-separately per client; router-driven role loading is a separate
-mechanism (see the README role consumption contract) and is not
-evaluated by this corpus.
+harness runs this corpus against the intended clients.
 
-Client-neutral queries for evaluating skill-description triggering.
-Each row: the query, the skill that SHOULD load, and the near-miss skill
-that should NOT. A harness presents the query with all frontmatter
-descriptions available and records which skills load.
+Profile assignment and the profile loading contract are not evaluated by this
+corpus. Trigger evaluation begins after profile assignment and evaluates
+discovery of deliverables and standards only. The consuming repository's
+governance entry point defines the profile loading contract.
 
-| # | Query | Should load | Should not load |
+Client-neutral queries for evaluating skill-description triggering after profile
+assignment. Each row: the query, the skill that SHOULD be discovered, and the
+near-miss skill that should NOT. A harness presents the query with the
+frontmatter descriptions of discoverable deliverables and standards and records
+which skills are discovered. Profiles are not trigger candidates.
+
+| # | Query | Should discover | Should not discover |
 | --- | --- | --- | --- |
 | 1 | "We keep calling this thing three different names in our docs — help me pick one and update the glossary" | vocabulary-control | user-docs |
 | 2 | "Fix the typos and tighten the wording in this paragraph" | (none) | vocabulary-control |
@@ -34,6 +37,7 @@ descriptions available and records which skills load.
 | 19 | "Where do I declare which package owns the gateway layer?" | project-bindings | design-docs |
 | 20 | "Add lodash as a dependency for the new report script" | bazel-discipline | deploy-standard |
 
-Scoring: a run passes when every "should load" skill loads and no
-"should not load" skill loads. "(none)" rows guard against
-over-triggering; they pass only when no library skill loads.
+Scoring: a run passes when every "should discover" skill is discovered and no
+"should not discover" skill is discovered. "(none)" rows guard against
+over-triggering; they pass only when no candidate deliverable or standard is
+discovered.

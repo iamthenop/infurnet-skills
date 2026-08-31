@@ -111,21 +111,23 @@ dependencies; see Installation semantics.
 A consuming repository records its adoption in an `ADOPTION.md` at its
 governance-declared location, copied from this repository's
 [`ADOPTION.md`](ADOPTION.md) template. The manifest pins a cryptographically
-exact source revision; a governance dependency must not follow a mutable
+exact source commit; a governance dependency must not follow a mutable
 checkout or floating `main`.
 
 During R3, the adoption manifest records installed skills of any skill type in
 its installed-skills field.
 
-Updating the pin follows six steps: compare pinned and candidate revisions;
+Updating the pin follows six steps: compare the pinned commit with head;
 enumerate changed obligations; identify affected consumer bindings and
 governance; obtain approval from the consuming repository's deciding authority;
 update the pin and installed content together; validate the consumer.
 
-The updater compares governed files by path, and a consumer runs its installed
-copy until the pin is applied. When a candidate moves governed files between
-paths, run the candidate's own updater against the consumer before approving;
-otherwise the obligation report omits every moved file.
+The updater matches governed files by path and resolves the consuming
+repository from its own file location, and head's updater is installed only
+after approval. When head moves governed files between paths, the reviewer runs
+head's updater from inside the consuming repository before approving, as the
+update procedure in [`ADOPTION.md`](ADOPTION.md) sets out; without that run the
+obligation report omits every moved file.
 
 ## License
 

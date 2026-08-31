@@ -79,12 +79,12 @@ Required frontmatter fields:
 * **Reference standards by location.** Do not restate them; restatement forks.
   Name the standard files that govern the surface, and require they be read.
 
-## Execution profiles
+## Work types
 
 The required fields are universal. Some work types carry additional
 minimums.
 
-### Implementation profile
+### Implementation
 
 Implementation workorders additionally name every file-creation, move, and
 dependency authorization. Creating files, moving files, and adding dependencies
@@ -113,7 +113,7 @@ describe the required behaviour without prescribing a new abstraction. If
 the workorder cannot name an identifier without inventing it, the builder
 proposes names before implementing and awaits approval.
 
-### Validation profile
+### Validation
 
 Validation workorders additionally:
 
@@ -123,13 +123,13 @@ Validation workorders additionally:
 * state which standards govern the surface under test;
 * state that remote mutation is not authorized, or name the narrow exception.
 
-### Design and drafting profile
+### Design and drafting
 
 Design and drafting workorders additionally name the decision or approved
 request the drafting flows from, and state that outputs are proposals until
 approved.
 
-### PR fix profile
+### PR fix
 
 A PR fix workorder addresses findings from a completed pull-request
 review. It commissions corrections only; it does not reopen the
@@ -165,7 +165,7 @@ in any review source is not a finding in the fix workorder. A fix
 workorder that introduces new findings of its own requires a further
 fix workorder, not inline expansion.
 
-### Delivery report profile
+### Delivery report
 
 A delivery report is the builder's or tester's account of completed
 work, submitted with the pull request. It is not a summary of the

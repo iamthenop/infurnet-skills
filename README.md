@@ -122,6 +122,11 @@ enumerate changed obligations; identify affected consumer bindings and
 governance; obtain approval from the consuming repository's deciding authority;
 update the pin and installed content together; validate the consumer.
 
+The updater compares governed files by path, and a consumer runs its installed
+copy until the pin is applied. When a candidate moves governed files between
+paths, run the candidate's own updater against the consumer before approving;
+otherwise the obligation report omits every moved file.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

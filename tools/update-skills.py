@@ -8,11 +8,13 @@ Usage:
     python3 .agents/update-skills.py --candidate SHA  # compare against specific SHA
     python3 .agents/update-skills.py --candidate v0.2.0  # compare against tag
     python3 .agents/update-skills.py --verify         # verify current state only
+    python3 .agents/update-skills.py --use-candidate-updater  # report under the candidate's updater
 """
 import argparse
 import difflib
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,6 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ADOPTION = ROOT / "ADOPTION.md"
 VENDOR = ROOT / ".agents" / "vendor" / "infurnet-skills"
 MANIFEST = ROOT / ".agents" / "vendor" / "infurnet-skills.manifest.json"
+
+# Set while the candidate's own updater runs, so it does not hop again.
+BOOTSTRAP_ENV = "INFURNET_SKILLS_CANDIDATE_UPDATER"
 
 # The pre-migration profile representation, paired with its replacement
 # profile by profile_migration_pairs.
@@ -139,6 +144,38 @@ def fetch_tree(repo_url, sha):
         check=True,
     )
     return tmp / "repo"
+
+
+def differing_candidate_updater(candidate_tree):
+    """The candidate's own updater, when it differs from the running one."""
+    path = candidate_tree / "tools" / "update-skills.py"
+    if not path.is_file():
+        return None
+    if path.read_bytes() == Path(__file__).resolve().read_bytes():
+        return None
+    return path
+
+
+def run_candidate_updater(candidate_script, argv):
+    """
+    Report under the candidate's updater against this repository, then exit.
+
+    The script resolves the repository from its own location, so the
+    candidate is staged beside the installed updater; run from the fetched
+    tree it would resolve the candidate checkout as the consumer
+    repository. BOOTSTRAP_ENV stops a second hop when a moving candidate
+    ref resolves to a newer updater than the one just staged.
+    """
+    own = Path(__file__).resolve()
+    staged = own.parent / ".update-skills-candidate.py"
+    env = dict(os.environ)
+    env[BOOTSTRAP_ENV] = "1"
+    try:
+        shutil.copy2(str(candidate_script), str(staged))
+        completed = subprocess.run([sys.executable, str(staged), *argv], env=env)
+    finally:
+        staged.unlink(missing_ok=True)
+    sys.exit(completed.returncode)
 
 
 def collect_governed(tree, allow_roles=False):
@@ -293,7 +330,20 @@ def main():
     parser.add_argument("--candidate", default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument(
+        "--use-candidate-updater", action="store_true",
+        help="produce the report using the candidate's updater, not the "
+             "installed one",
+    )
     args = parser.parse_args()
+
+    if args.use_candidate_updater and args.apply:
+        sys.exit(
+            "--use-candidate-updater reports only: the candidate updater is "
+            "unreviewed until the pin is approved, and applying under it "
+            "would leave the installed updater stale. Re-run without --apply, "
+            "then apply with the installed updater once the pin is approved."
+        )
 
     adoption = read_adoption()
     current_pin = adoption["pin"]
@@ -323,6 +373,24 @@ def main():
 
     print("\nFetching candidate tree...")
     candidate_tree = fetch_tree(repo_url, candidate_sha)
+
+    # The installed updater writes this whole report, and the candidate's own
+    # updater replaces it only during --apply. A candidate that moves governed
+    # files therefore reports them as an unrelated add and remove unless the
+    # reviewer asks for the candidate's report first.
+    newer_updater = differing_candidate_updater(candidate_tree)
+    if newer_updater is not None and not os.environ.get(BOOTSTRAP_ENV):
+        if args.use_candidate_updater:
+            print("Reporting under the candidate updater...")
+            run_candidate_updater(newer_updater, sys.argv[1:])
+        print(
+            "\n  NOTE: the candidate ships a different update-skills.py, and\n"
+            "  this report comes from the installed one. It may omit changes\n"
+            "  only the candidate updater can see, a path migration among\n"
+            "  them. Read that script's diff, then re-run with\n"
+            "  --use-candidate-updater for the candidate's own report."
+        )
+
     current_files = collect_governed(VENDOR, allow_roles=True)
     candidate_files = collect_governed(candidate_tree)
 

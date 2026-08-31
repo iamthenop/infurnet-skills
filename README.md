@@ -4,8 +4,8 @@
 for coding-agent governance. The library supplies agent profiles, conformance
 standards, and deliverable procedures. It is project-neutral and MIT-licensed.
 
-Every governed package belongs to one of three skill types: `profile`,
-`standard`, or `deliverable`. Package content acquires authority only when
+Every governed skill belongs to one of three skill types: `profile`,
+`standard`, or `deliverable`. Skill content acquires authority only when
 adopted by consuming repository governance. Installation or native triggering
 does not independently authorize work or mutation.
 
@@ -13,9 +13,9 @@ Profile assignment, authority chains, and deciding-authority identity stay in
 the consuming repository's governance files. The operational loading order and
 single-profile rule are defined in `AGENTS.md`.
 
-`metadata.skill-type` records what a package supplies. It does not encode
-compatibility or package dependencies. Compatibility and dependencies remain
-separate concerns; package dependencies use `skill-dependency`.
+`metadata.skill-type` records what a skill supplies. It does not encode
+compatibility or skill dependencies. Compatibility and dependencies remain
+separate concerns; skill dependencies use `skill-dependency`.
 
 ## Profiles
 
@@ -69,8 +69,7 @@ assigned profile and the accepted work.
 
 ## Layout
 
-The target package shape is one Agent Skills package format for all three skill
-types:
+Every skill uses one Agent Skills format, whatever its skill type:
 
 | Template | Description |
 | --- | --- |
@@ -84,7 +83,7 @@ profile determines which deliverables are permitted, and the accepted
 deliverable determines which standards apply. `AGENTS.md` defines the normative
 load sequence and the prohibition on changing profiles within a session.
 
-* **Native client** — installed packages may use frontmatter descriptions for
+* **Native client** — installed skills may use frontmatter descriptions for
   discovery after profile assignment. Native triggering never selects or
   changes the profile and never grants authority.
 * **Governed router** — the consuming repository's governance entry point
@@ -93,20 +92,19 @@ load sequence and the prohibition on changing profiles within a session.
 * **Vendored** — copy folders in via subtree or script; MIT requires license
   retention.
 
-Packages carry no tool-specific calls and use standard interpreters only. A
-package with `skill-dependency` metadata is consumed together with its
+Skills carry no tool-specific calls and use standard interpreters only. A
+skill with `skill-dependency` metadata is consumed together with its
 dependencies; see Installation semantics.
 
 ## Installation semantics
 
-* `skill-dependency` names sibling Agent Skills packages that must be installed
-  together with the package. A missing dependency is an installation validation
-  failure; at use time, a dangling package reference is a stop condition for the
-  consuming agent.
-* A package acquires authority in a repository only when that repository's
+* `skill-dependency` names sibling skills that must be installed together with
+  the skill. A missing dependency is an installation validation failure; at use
+  time, a dangling skill reference is a stop condition for the consuming agent.
+* A skill acquires authority in a repository only when that repository's
   governance adopts it; installation alone confers none.
 * The repository's governance entry point declares where its bindings file
-  lives; packages dereference bindings through it.
+  lives; skills dereference bindings through it.
 
 ## Adoption contract
 
@@ -116,8 +114,8 @@ governance-declared location, copied from this repository's
 exact source revision; a governance dependency must not follow a mutable
 checkout or floating `main`.
 
-During R3, the adoption manifest records installed Agent Skills packages of
-any skill type in its installed-skills field.
+During R3, the adoption manifest records installed skills of any skill type in
+its installed-skills field.
 
 Updating the pin follows six steps: compare pinned and candidate revisions;
 enumerate changed obligations; identify affected consumer bindings and

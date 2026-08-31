@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is a library of portable Agent Skills packages. The library
+This repository is a library of portable Agent Skills. The library
 recognizes three skill types: profiles, standards, and deliverables. Library
 content acquires authority only when adopted by a consuming repository's
 governance; in this repository it binds only as stated in the self-hosting rule
@@ -19,14 +19,14 @@ Read before editing:
 
 | Surface | Governing instructions |
 | --- | --- |
-| Any package text | `skills/vocabulary-control/SKILL.md` |
+| Any skill text | `skills/vocabulary-control/SKILL.md` |
 | Structure, diagrams, tables, representation choice | `skills/design-docs/SKILL.md` (representation selection and diagram conventions) |
-| A profile package | that profile plus `skills/workorder-drafting/SKILL.md` |
-| A specific package | that package in full; its own rules bind its edits |
+| A profile | that profile plus `skills/workorder-drafting/SKILL.md` |
+| A specific skill | that skill in full; its own rules bind its edits |
 
 ## Profile loading contract
 
-A consuming session loads Agent Skills packages in one order:
+A consuming session loads skills in one order:
 
 1. the profile assigned by repository governance;
 2. a deliverable permitted by that profile and required by the accepted work;
@@ -34,7 +34,7 @@ A consuming session loads Agent Skills packages in one order:
 
 An agent may load exactly one profile during a session. The assigned profile is
 immutable for the lifetime of that session. The agent must not select a profile
-from task wording, native description triggering, available packages, or its own
+from task wording, native description triggering, available skills, or its own
 judgment, and must not load a second profile to supplement, compare with, or
 replace the assigned profile.
 
@@ -60,20 +60,20 @@ Everything in `skills/` is project-neutral. Do not introduce:
 * concrete binding values (paths, palettes, gate keys, registry names) —
   placeholders only, marked as placeholders;
 * references to files outside this repository;
-* tool-specific instructions inside package or profile bodies.
+* tool-specific instructions inside skill bodies.
 
 ## Repository conventions
 
-* Every governed profile, standard, and deliverable uses one package per
+* Every governed profile, standard, and deliverable uses one skill per
   folder: `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and
   a trigger-phrased `description`. Optional reference material lives under
   `skills/<name>/references/`.
-* Every package belongs to exactly one skill type: `profile`, `standard`, or
+* Every skill belongs to exactly one skill type: `profile`, `standard`, or
   `deliverable`.
-* Cross-references use backticked package names, never paths outside the
+* Cross-references use backticked skill names, never paths outside the
   repository.
 * One home per fact across the whole library: a rule lives in exactly one
-  package; other instructions reference it by name. A duplication found during
+  skill; other instructions reference it by name. A duplication found during
   an edit is a defect to report, not silently to fix out of scope.
 * No character-drawn diagrams; representation follows the selection ladder in
   `design-docs`.
@@ -84,7 +84,7 @@ Everything in `skills/` is project-neutral. Do not introduce:
 ## Change discipline
 
 * Edits are surgical: amend the smallest text that carries the change.
-* No silent renames. Renaming a package enumerates every consumer in the same
+* No silent renames. Renaming a skill enumerates every consumer in the same
   change: cross-references and the README inventory.
 * A change that alters a rule's meaning and a change that restructures its
   presentation are two changes; do not combine them in one commit silently.
@@ -97,8 +97,8 @@ Before submitting, verify:
 
 * frontmatter parses in every touched file, and `name` matches its folder where
   applicable;
-* every backticked package reference resolves to an existing package;
-* the README inventory matches the current package inventory;
+* every backticked skill reference resolves to an existing skill;
+* the README inventory matches the current skill inventory;
 * no portability-boundary violation was introduced.
 
 ## Stop conditions

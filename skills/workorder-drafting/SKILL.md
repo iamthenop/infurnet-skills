@@ -45,7 +45,7 @@ Required frontmatter fields:
 * `workorder_key` — unique identifier; must match `## Workorder key`
 * `work_type` — one of: `implementation`, `validation`, `design`,
   `pr-fix`, `delivery`
-* `profile` — repo-relative path to the assigned profile package
+* `profile` — repo-relative path to the assigned profile
 * `base_branch` — starting-state ref; used for stale-base check
 * `work_branch` — branch the work executes on
 * `work_branch_state` — `existing` or `to_create`

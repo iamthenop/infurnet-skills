@@ -19,14 +19,14 @@ import textwrap
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 VALIDATOR = REPO_ROOT / "tools" / "validate.py"
 
-# One description deliberately shared between two packages, and the distinct
+# One description deliberately shared between two skills, and the distinct
 # descriptions used for the passing case.
 SHARED = "A single description that two different owners both claim."
-ALPHA_ONLY = "A description belonging to exactly one deliverable package."
-PROFILE_ONLY = "A description belonging to exactly one profile package."
-BETA = "A second package description, distinct in every fixture."
+ALPHA_ONLY = "A description belonging to exactly one deliverable."
+PROFILE_ONLY = "A description belonging to exactly one profile."
+BETA = "A second skill description, distinct in every fixture."
 
-PACKAGE = """\
+SKILL = """\
 ---
 name: {name}
 description: "{description}"
@@ -37,7 +37,7 @@ metadata:
 
 # {name}
 
-Fixture package body.
+Fixture skill body.
 """
 
 README = """\
@@ -60,13 +60,13 @@ def build_repo(root, alpha_description, profile_description):
     """Create a minimal repository the validator accepts, then vary descriptions."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     write(root / "skills" / "alpha" / "SKILL.md",
-          PACKAGE.format(name="alpha", description=alpha_description,
+          SKILL.format(name="alpha", description=alpha_description,
                          skill_type="deliverable"))
     write(root / "skills" / "beta" / "SKILL.md",
-          PACKAGE.format(name="beta", description=BETA,
+          SKILL.format(name="beta", description=BETA,
                          skill_type="deliverable"))
     write(root / "skills" / "fixture-profile" / "SKILL.md",
-          PACKAGE.format(name="fixture-profile",
+          SKILL.format(name="fixture-profile",
                          description=profile_description,
                          skill_type="profile"))
     write(root / "README.md", README)
@@ -97,18 +97,18 @@ class Results:
 
 
 def duplicate_descriptions_are_rejected(results, workdir):
-    """Two packages sharing one description must fail validation, naming both."""
+    """Two skills sharing one description must fail validation, naming both."""
     root = build_repo(workdir / "duplicate", SHARED, SHARED)
     code, output = run_validator(root)
 
     results.check(
-        "duplicate package descriptions — validator exits non-zero",
+        "duplicate skill descriptions — validator exits non-zero",
         code != 0,
         f"expected a non-zero exit, got {code}. Output:\n{output}",
     )
-    for owner in ("package:alpha", "package:fixture-profile"):
+    for owner in ("skill:alpha", "skill:fixture-profile"):
         results.check(
-            f"duplicate package descriptions — output identifies {owner}",
+            f"duplicate skill descriptions — output identifies {owner}",
             owner in output,
             f"{owner!r} absent from validator output:\n{output}",
         )

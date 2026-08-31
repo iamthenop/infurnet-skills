@@ -262,11 +262,11 @@ def sections(body, offset):
 
 def declared_skill_type(path):
     """
-    Return metadata.skill-type declared by a package file.
+    Return metadata.skill-type declared by a skill file.
 
     None means the file declares none the script can read -- no
     frontmatter, unparseable YAML, or no metadata mapping. Every governed
-    package declares a skill type, so the caller treats None as a breach.
+    skill declares a skill type, so the caller treats None as a breach.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -413,7 +413,7 @@ def check_paths(fm, root, findings):
                 findings.append(Finding(
                     "violation", "profile",
                     "profile names a directory; it must name the profile "
-                    "package file"))
+                    "skill file"))
             elif root is not None and not (root / profile).is_file():
                 findings.append(Finding(
                     "violation", "profile",
@@ -425,14 +425,14 @@ def check_paths(fm, root, findings):
                     findings.append(Finding(
                         "violation", "profile",
                         f"profile {profile!r} declares no readable "
-                        "metadata.skill-type; the assigned profile must be "
-                        "a package declaring skill-type: profile"))
+                        "metadata.skill-type; the assigned profile must "
+                        "declare skill-type: profile"))
                 elif declared != "profile":
                     findings.append(Finding(
                         "violation", "profile",
                         f"profile {profile!r} declares skill-type "
-                        f"{declared!r}; the assigned profile must be a "
-                        "profile package"))
+                        f"{declared!r}; the assigned profile must declare "
+                        "skill-type: profile"))
 
     for entry in fm.get("governance") or []:
         if not isinstance(entry, str) or not entry.strip():

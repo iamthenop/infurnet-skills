@@ -132,11 +132,11 @@ for name, d in skill_meta.items():
     desc = d.get("description") or ""
     if not desc:
         continue
-    owner = f"package:{name}"
+    owner = f"skill:{name}"
     if desc in desc_seen:
         err(
             f"duplicate description between {desc_seen[desc]} and {owner} — "
-            f"descriptions must be unique across all packages"
+            f"descriptions must be unique across all skills"
         )
     else:
         desc_seen[desc] = owner
@@ -240,6 +240,6 @@ by_type = ", ".join(
     for st in sorted(SKILL_TYPES)
 )
 print(
-    f"PASS — {len(skills)} packages ({by_type}), "
+    f"PASS — {len(skills)} skills ({by_type}), "
     f"{ref_count} references, {script_count} scripts validated"
 )

@@ -27,7 +27,7 @@ VENDOR = ROOT / ".agents" / "vendor" / "infurnet-skills"
 MANIFEST = ROOT / ".agents" / "vendor" / "infurnet-skills.manifest.json"
 
 # The pre-migration profile representation, paired with its replacement
-# package by profile_migration_pairs.
+# profile by profile_migration_pairs.
 ROLE_PATH_RE = re.compile(r"^roles/([a-z0-9-]+)/ROLE\.md$")
 
 OBLIGATION_HEADERS = {
@@ -165,7 +165,7 @@ def collect_governed(tree, allow_roles=False):
 
 def declared_skill_type(text):
     """
-    metadata.skill-type declared in a package's frontmatter, or None.
+    metadata.skill-type declared in a skill's frontmatter, or None.
 
     Read with regular expressions rather than a YAML parser: this script
     is vendored into consuming repositories and carries no dependency
@@ -185,7 +185,7 @@ def declared_skill_type(text):
 
 def profile_migration_pairs(current_files, candidate_files):
     """
-    Pair each pre-migration role path with its candidate profile package.
+    Pair each pre-migration role path with its candidate profile.
 
     The R3 migration moved `roles/<name>/ROLE.md` to
     `skills/<name>/SKILL.md`, which compared by path alone looks like an

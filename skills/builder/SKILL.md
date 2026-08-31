@@ -44,7 +44,7 @@ authorized mutations. If any required field is missing, stop. Do not infer
 permission.
 
 Builder consumes `workorder-drafting#Required fields` and
-`workorder-drafting#Implementation profile` to validate what it
+`workorder-drafting#Implementation` to validate what it
 receives; drafting workorders is designer work.
 
 ## Execution context

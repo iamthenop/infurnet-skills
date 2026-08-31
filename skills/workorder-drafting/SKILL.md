@@ -3,14 +3,14 @@ name: workorder-drafting
 description: "Draft bounded execution authority for an agent. Use when writing, reviewing, or repairing a workorder, task brief, or delegation instruction for any executing agent — before commissioning implementation, testing, extraction, or documentation work. Also use when an executing agent stops on an ambiguous instruction: the fix belongs in the workorder."
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
   skill-dependency: prose-discipline
 ---
 
 # Workorder drafting
 
 A workorder is the job-specific grant an agent executes under,
-subordinate to repository governance and role boundaries. If the workorder is
+subordinate to repository governance and profile boundaries. If the workorder is
 ambiguous, the failure belongs to the workorder, not the agent. A stop caused by
 an unbounded workorder is a drafting defect.
 
@@ -43,9 +43,9 @@ checks exact match.
 Required frontmatter fields:
 
 * `workorder_key` — unique identifier; must match `## Workorder key`
-* `profile` — one of: `implementation`, `validation`, `design`,
+* `work_type` — one of: `implementation`, `validation`, `design`,
   `pr-fix`, `delivery`
-* `executing_role` — repo-relative path to the role file
+* `profile` — repo-relative path to the assigned profile
 * `base_branch` — starting-state ref; used for stale-base check
 * `work_branch` — branch the work executes on
 * `work_branch_state` — `existing` or `to_create`
@@ -79,12 +79,12 @@ Required frontmatter fields:
 * **Reference standards by location.** Do not restate them; restatement forks.
   Name the standard files that govern the surface, and require they be read.
 
-## Execution profiles
+## Work types
 
-The required fields are universal. Some executing roles carry additional
+The required fields are universal. Some work types carry additional
 minimums.
 
-### Implementation profile
+### Implementation
 
 Implementation workorders additionally name every file-creation, move, and
 dependency authorization. Creating files, moving files, and adding dependencies
@@ -113,7 +113,7 @@ describe the required behaviour without prescribing a new abstraction. If
 the workorder cannot name an identifier without inventing it, the builder
 proposes names before implementing and awaits approval.
 
-### Validation profile
+### Validation
 
 Validation workorders additionally:
 
@@ -123,13 +123,13 @@ Validation workorders additionally:
 * state which standards govern the surface under test;
 * state that remote mutation is not authorized, or name the narrow exception.
 
-### Design and drafting profile
+### Design and drafting
 
 Design and drafting workorders additionally name the decision or approved
 request the drafting flows from, and state that outputs are proposals until
 approved.
 
-### PR fix profile
+### PR fix
 
 A PR fix workorder addresses findings from a completed pull-request
 review. It commissions corrections only; it does not reopen the
@@ -165,7 +165,7 @@ in any review source is not a finding in the fix workorder. A fix
 workorder that introduces new findings of its own requires a further
 fix workorder, not inline expansion.
 
-### Delivery report profile
+### Delivery report
 
 A delivery report is the builder's or tester's account of completed
 work, submitted with the pull request. It is not a summary of the

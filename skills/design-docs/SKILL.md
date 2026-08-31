@@ -3,7 +3,7 @@ name: design-docs
 description: "Author and structure design documentation — architecture files, boundary/contract/state/workflow documents, diagrams, placement, scoping, and linking. Use when creating or editing files under the architecture documentation tree, when choosing between prose, a table, a diagram, or a formula, or when reviewing design documents for form."
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
   skill-dependency: vocabulary-control,prose-discipline
 ---
 

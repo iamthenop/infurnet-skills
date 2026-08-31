@@ -1,14 +1,11 @@
 # AGENTS.md
 
-This repository is a library of portable Agent Skills packages. The library
+This repository is a library of portable Agent Skills. The library
 recognizes three skill types: profiles, standards, and deliverables. Library
 content acquires authority only when adopted by a consuming repository's
 governance; in this repository it binds only as stated in the self-hosting rule
 below.
 
-During the staged R3 migration, current profile sources remain under
-`roles/*/ROLE.md` until they are converted to ordinary `skills/*/SKILL.md`
-packages. That transitional storage does not define a separate role type.
 Agents working here maintain the library; they do not run the profiles it
 defines.
 
@@ -22,14 +19,14 @@ Read before editing:
 
 | Surface | Governing instructions |
 | --- | --- |
-| Any package or transitional profile text | `skills/vocabulary-control/SKILL.md` |
+| Any skill text | `skills/vocabulary-control/SKILL.md` |
 | Structure, diagrams, tables, representation choice | `skills/design-docs/SKILL.md` (representation selection and diagram conventions) |
-| A transitional profile source | that profile source plus `skills/workorder-drafting/SKILL.md` |
-| A specific package | that package in full; its own rules bind its edits |
+| A profile | that profile plus `skills/workorder-drafting/SKILL.md` |
+| A specific skill | that skill in full; its own rules bind its edits |
 
 ## Profile loading contract
 
-A consuming session loads Agent Skills packages in one order:
+A consuming session loads skills in one order:
 
 1. the profile assigned by repository governance;
 2. a deliverable permitted by that profile and required by the accepted work;
@@ -37,7 +34,7 @@ A consuming session loads Agent Skills packages in one order:
 
 An agent may load exactly one profile during a session. The assigned profile is
 immutable for the lifetime of that session. The agent must not select a profile
-from task wording, native description triggering, available packages, or its own
+from task wording, native description triggering, available skills, or its own
 judgment, and must not load a second profile to supplement, compare with, or
 replace the assigned profile.
 
@@ -56,32 +53,28 @@ after profile assignment. It must never select, load, or switch a profile.
 
 ## Portability boundary
 
-Everything in `skills/` and the transitional profile sources in `roles/` is
-project-neutral. Do not introduce:
+Everything in `skills/` is project-neutral. Do not introduce:
 
 * project names, product names, or named authorities (declare a slot instead:
   "the deciding authority", "the repository's bindings");
 * concrete binding values (paths, palettes, gate keys, registry names) —
   placeholders only, marked as placeholders;
 * references to files outside this repository;
-* tool-specific instructions inside package or profile bodies.
+* tool-specific instructions inside skill bodies.
 
 ## Repository conventions
 
-* The target package shape is one package per folder:
-  `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and a
-  trigger-phrased `description`. Optional reference material lives under
+* Every governed profile, standard, and deliverable uses one skill per
+  folder: `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and
+  a trigger-phrased `description`. Optional reference material lives under
   `skills/<name>/references/`.
-* Every package belongs to exactly one skill type: `profile`, `standard`, or
+* Every skill belongs to exactly one skill type: `profile`, `standard`, or
   `deliverable`.
-* `roles/<name>/ROLE.md` is transitional storage for profile sources only. Do
-  not create new role types or new role-specific consumption semantics.
-* Cross-references use backticked package names, never paths outside the
+* Cross-references use backticked skill names, never paths outside the
   repository.
 * One home per fact across the whole library: a rule lives in exactly one
-  package or transitional profile source; other instructions reference it by
-  name. A duplication found during an edit is a defect to report, not silently
-  to fix out of scope.
+  skill; other instructions reference it by name. A duplication found during
+  an edit is a defect to report, not silently to fix out of scope.
 * No character-drawn diagrams; representation follows the selection ladder in
   `design-docs`.
 * `README.md` organizes the library under Profiles, Standards, and Deliverables.
@@ -91,8 +84,8 @@ project-neutral. Do not introduce:
 ## Change discipline
 
 * Edits are surgical: amend the smallest text that carries the change.
-* No silent renames. Renaming a package enumerates every consumer in the same
-  change: cross-references, profile composition, and the README inventory.
+* No silent renames. Renaming a skill enumerates every consumer in the same
+  change: cross-references and the README inventory.
 * A change that alters a rule's meaning and a change that restructures its
   presentation are two changes; do not combine them in one commit silently.
 * Work lands through a branch and pull request; the pull-request body states
@@ -104,10 +97,8 @@ Before submitting, verify:
 
 * frontmatter parses in every touched file, and `name` matches its folder where
   applicable;
-* every backticked package reference and every transitional profile-bundle entry
-  resolves to an existing package;
-* the README inventory matches the current package and transitional-profile
-  inventory;
+* every backticked skill reference resolves to an existing skill;
+* the README inventory matches the current skill inventory;
 * no portability-boundary violation was introduced.
 
 ## Stop conditions

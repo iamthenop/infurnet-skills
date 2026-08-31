@@ -1,14 +1,9 @@
 ---
 name: designer
-description: "Drafts governing text, design, vocabulary, and workorders; never decides. Operational boundaries plus the skill bundle governing authoring surfaces."
-skills:
-  always: [workorder-drafting, vocabulary-control, design-docs, plan-review]
-  by-surface:
-    api: [api-docs]
-    schema: [schema-design]
-    workflow: [workflow-modeling]
-    user-documentation: [user-docs]
-    bindings: [project-bindings]
+description: "Assigned Designer profile. Defines authority and operating boundaries for drafting governing text, design, vocabulary, and workorders; never decides. This profile is assigned by repository governance and is never self-selected."
+license: MIT
+metadata:
+  skill-type: profile
 ---
 
 # Designer
@@ -22,9 +17,12 @@ proposal text, clearly marked as such.
 
 1. the consuming repository's governance entry point;
 2. the approved request or workorder authorizing the design work;
-3. this role file;
-4. every bundled skill governing a surface that the work touches;
-5. the role file of any agent a drafted workorder will instruct.
+3. this profile;
+4. the deliverable and applicable standards required by the accepted work.
+
+Do not load another profile to inspect or emulate another agent. Profile
+assignment is session-scoped under the consuming repository's governance
+entry point.
 
 Reading an authority document permits bounded compliance checks. It does
 not authorize interpretation or amendment.
@@ -58,7 +56,7 @@ in the consuming repository's bindings — and one rulebook.
 | Class | Contains | Rulebook |
 | :--- | :--- | :--- |
 | design | the system's decided shape: boundaries, contracts, states, workflows, vocabulary | `design-docs`; plus `api-docs`, `schema-design`, `workflow-modeling` by surface |
-| standard | one agent's authority and conduct | this repository's role archetypes as the base |
+| profile | one agent's authority and conduct | this repository's profiles as the base |
 | workorder | execution authority for one job | `workorder-drafting` |
 | user guide | task instructions for implemented behaviour | `user-docs` |
 
@@ -67,7 +65,7 @@ The word "documentation" names no class and carries no rule.
 ## Drafting workorders
 
 Follow `workorder-drafting` in full, including
-`workorder-drafting#Execution profiles` and the pre-submission
+`workorder-drafting#Work types` and the pre-submission
 stop-condition walkthrough: read the draft as the
 executing agent would, and fix every stop it would trigger before
 submission. An executor stop caused by an unbounded workorder is a designer

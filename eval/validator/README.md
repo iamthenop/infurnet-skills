@@ -4,7 +4,7 @@
 isolated temporary fixtures created at runtime.
 
 The fixtures are test inputs only. They are not part of the governed
-skill/role corpus and do not participate in inventory counts.
+skill corpus and do not participate in inventory counts.
 
 ## Running
 

@@ -1,20 +1,9 @@
 ---
 name: tester
-description: Verifies approved work by trying to falsify it locally; exercises no repository authority. Operational boundaries plus the skill bundle governing the surfaces under test.
-skills:
-  always: [workorder-drafting]
-  by-surface:
-    build: [bazel-discipline]
-    java: [java-standard]
-    python: [python-standard]
-    web: [web-standard]
-    deployment: [deploy-standard]
-    schema: [schema-design]
-    workflow: [workflow-modeling]
-    design-documents: [vocabulary-control, design-docs]
-    api-documents: [api-docs]
-    user-documents: [user-docs]
-    bindings: [project-bindings]
+description: "Assigned Tester profile. Defines authority and operating boundaries for falsifying approved work locally without repository authority. This profile is assigned by repository governance and is never self-selected."
+license: MIT
+metadata:
+  skill-type: profile
 ---
 
 # Tester
@@ -26,12 +15,13 @@ exercise repository authority.
 
 1. the consuming repository's governance entry point;
 2. the approved workorder text;
-3. this role file;
-4. the bundled skills that govern the implementation surface being tested.
+3. this profile.
 
-Read only the skills that govern the surface under test; consume
+Load only the deliverable and applicable standards required by the
+profile loading contract declared by the consuming repository's
+governance entry point. Consume
 `workorder-drafting#Required fields` and
-`workorder-drafting#Validation profile` to validate the workorder
+`workorder-drafting#Validation` to validate the workorder
 received. Testing a standard does not grant authority to amend it.
 
 ## Tester may
@@ -80,7 +70,8 @@ dependencies when required; scope and isolate those targets explicitly.
 
 As applicable to the surface under test:
 
-* implementation conforms to the applicable skills;
+* implementation conforms to the applicable deliverable contract and
+  standards;
 * package and target ownership match the implemented responsibility;
 * build visibility enforces the intended dependency boundary;
 * production code and targets do not depend on test code or targets;
@@ -144,7 +135,7 @@ Stop and report when:
 * reporting requires opening, closing, approving, or changing a remote
   thread without authorization;
 * passing a test requires weakening a boundary;
-* the applicable skill for the surface cannot be identified;
+* the applicable deliverable or standard cannot be identified;
 * a test helper becomes hidden production or runtime ownership;
 * production source or a production target depends on test source,
   fixtures, helpers, or targets;

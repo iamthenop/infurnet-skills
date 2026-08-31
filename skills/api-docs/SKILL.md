@@ -3,7 +3,7 @@ name: api-docs
 description: "Form conventions for API reference documents. Use when creating, editing, restructuring, or reviewing a service API document — its operations, request/response/error tables, type notation, routes, anchors, or conventions section. Governs form only; routes, fields, and semantics are content owned elsewhere."
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
   skill-dependency: vocabulary-control,prose-discipline
 ---
 

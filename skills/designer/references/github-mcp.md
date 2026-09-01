@@ -16,9 +16,9 @@ the provider currently exposes it.
 
 | Classification | Covers |
 | :--- | :--- |
-| Allowed | Reads of repository content, code, history, issues, pull requests, discussions, and platform metadata, plus ordinary issue, pull-request, and discussion comment operations |
-| Ask | Formal pull-request review operations that do more than ordinary discussion |
-| Forbidden | Mutation of repository content, branches and refs, pull-request lifecycle, merges, and other platform state |
+| Allowed | Reads of repository content, code, history, issues, pull requests, discussions, and platform metadata, plus issue, pull-request, and discussion authoring: comments, issue and sub-issue writes, and pull-request reviews |
+| Ask | Comments staged onto a pending pull-request review |
+| Forbidden | Mutation of repository content, branches and refs, pull-request creation, update, and merge, and other platform state |
 
 ## Actions
 
@@ -235,14 +235,18 @@ the provider currently exposes it.
 
 ## Classification notes
 
-`issue_write` is `Forbidden` because the same handle creates and updates pull
-requests, and pull-request lifecycle mutation is forbidden.
+Classification controls tool-selection ceremony. It grants no authority: an
+operation outside Designer scope stays prohibited by the profile whatever its
+handle is classified. [`mcp-policy.md`](mcp-policy.md) carries that rule.
 
-`add_comment_to_pending_review` and `pull_request_review_write` are `Ask`
-because a formal review carries a verdict beyond ordinary discussion.
-`add_issue_comment` and `add_reply_to_pull_request_comment` are the narrower
-handles that supply the ordinary discussion operation, so approval is required
-only when the formal form is genuinely needed.
+`issue_write` and `sub_issue_write` are `Allowed` as issue-authoring handles.
+`issue_write` also creates and updates pull requests, while
+`create_pull_request` and `update_pull_request` are `Forbidden`. The profile
+bounds that use, not this table.
+
+`pull_request_review_write` is `Allowed` as an ordinary review operation.
+`add_comment_to_pending_review` is `Ask` because it stages a comment onto a
+pending review that a separate call must then submit.
 
 `get_label` is published in two toolsets. Both entries carry the same
 classification, so no handle is classified more than one way.

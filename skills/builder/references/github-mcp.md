@@ -248,10 +248,9 @@ use, not this table.
 pending review that a separate call must then submit.
 
 `create_branch`, `create_or_update_file`, `delete_file`, `push_files`,
-`create_pull_request`, `update_pull_request`, and `merge_pull_request` are
-`Allowed` because they correspond to operations Builder may be explicitly
-authorized to perform. Their classification does not itself authorize those
-operations.
+`create_pull_request`, and `update_pull_request` are `Allowed` because they
+correspond to operations Builder may be explicitly authorized to perform. Their
+classification does not itself authorize those operations.
 
 `actions_run_trigger`, `label_write`, and `update_pull_request_branch` are `Ask`
 because their effects do not map cleanly to an established Builder mutation

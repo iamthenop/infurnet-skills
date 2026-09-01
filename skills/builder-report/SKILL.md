@@ -1,5 +1,4 @@
 ---
-
 name: builder-report
 description: "Produce the Builder delivery report for completed commissioned work. Use when reporting implementation or correction work for review, normally as the pull-request body."
 license: MIT

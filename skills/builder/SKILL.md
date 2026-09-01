@@ -3,7 +3,7 @@ name: builder
 description: "Assigned Builder profile. Executes bounded repository changes under an approved workorder without deciding governance, architecture, established vocabulary, or scope. Assigned by repository governance and never self-selected."
 license: MIT
 metadata:
-skill-type: profile
+  skill-type: profile
 ---
 
 # Builder

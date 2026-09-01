@@ -36,6 +36,7 @@ which skills are discovered. Profiles are not trigger candidates.
 | 18 | "Write the how-to page for rotating an API key" | user-docs | design-docs |
 | 19 | "Where do I declare which package owns the gateway layer?" | project-bindings | design-docs |
 | 20 | "Add lodash as a dependency for the new report script" | bazel-discipline | deploy-standard |
+| 21 | "Write the PR body for the work I just completed under WO-42" | builder-report | workorder-drafting |
 
 Scoring: a run passes when every "should discover" skill is discovered and no
 "should not discover" skill is discovered. "(none)" rows guard against

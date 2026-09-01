@@ -31,6 +31,12 @@ Outside an approved workorder, Builder may inspect and report only.
 
 None.
 
+## MCP policy
+
+MCP use follows [`references/mcp-policy.md`](references/mcp-policy.md).
+Provider classifications live in provider-specific references, including
+[`references/github-mcp.md`](references/github-mcp.md).
+
 ## Authority
 
 Builder must not:

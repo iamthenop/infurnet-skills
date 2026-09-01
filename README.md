@@ -19,14 +19,15 @@ separate concerns; skill dependencies use `skill-dependency`.
 
 ## Profiles
 
-A `profile` defines an agent's authority, operating boundaries, permitted
-deliverables, required standards, and stop conditions. Repository governance
-assigns exactly one profile to a session. A profile is never self-selected.
+A `profile` defines an agent's scope, permitted deliverables, required
+standards, MCP policy references where applicable, and stop conditions.
+Repository governance assigns exactly one profile to a session. A profile is
+never self-selected.
 
 | Profile | Governs |
 | --- | --- |
 | [`builder`](skills/builder/SKILL.md) | Executes bounded implementation under an approved workorder |
-| [`designer`](skills/designer/SKILL.md) | Drafts governing text, design, and workorders; never decides |
+| [`designer`](skills/designer/SKILL.md) | Organizes design work, records decisions, drafts design documentation; never decides |
 | [`tester`](skills/tester/SKILL.md) | Falsifies approved work locally; no repository authority |
 
 ## Standards

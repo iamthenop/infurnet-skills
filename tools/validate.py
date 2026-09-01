@@ -221,6 +221,77 @@ for name in seen:
     if name not in skill_names:
         err(f"README.md: skill row for nonexistent skill {name!r}")
 
+# --- profile composition tables ---
+# A profile names the deliverables it permits and the standards it requires.
+# Each named skill must exist and declare the skill type its table implies.
+PROFILE_TABLES = [
+    ("Permitted deliverables", "deliverable"),
+    ("Required standards", "standard"),
+]
+TABLE_ROW = re.compile(r"(?m)^\| `([a-z0-9-]+)` \| [^|]* \|$")
+
+
+def section_body(text, heading):
+    m = re.search(rf"(?ms)^## {re.escape(heading)}$(.*?)(?=^## |\Z)", text)
+    return m.group(1) if m else None
+
+
+for p in skills:
+    if ((skill_meta.get(p.parent.name) or {}).get("metadata") or {}).get(
+            "skill-type") != "profile":
+        continue
+    body_text = p.read_text()
+    named = {}  # skill name -> the table heading that already named it
+    for heading, required_type in PROFILE_TABLES:
+        section = section_body(body_text, heading)
+        if section is None:
+            continue
+        listed = set()
+        for name in TABLE_ROW.findall(section):
+            if name in listed:
+                err(f"{p}: {heading!r} lists {name!r} twice")
+                continue
+            listed.add(name)
+            if name in named:
+                err(f"{p}: {name!r} appears in both {named[name]!r} and "
+                    f"{heading!r} — one skill, one table")
+            else:
+                named[name] = heading
+            if name not in skill_names:
+                err(f"{p}: {heading!r} names missing skill {name!r}")
+                continue
+            actual = (skill_meta.get(name, {}).get("metadata") or {}).get("skill-type")
+            if actual == "profile":
+                err(f"{p}: {heading!r} names profile {name!r} — a profile "
+                    f"composition table may not name another profile")
+            elif actual != required_type:
+                err(f"{p}: {heading!r} names {name!r} of type {actual!r}, "
+                    f"expected {required_type!r}")
+
+# --- profile-local MCP policy references ---
+# A policy file classifies exact tool handles and nothing else. Classification
+# is structural here; the policy grants no authority and decides no access.
+MCP_CLASSES = ("Allowed", "Ask", "Forbidden")
+MCP_ROW = re.compile(r"(?m)^\| `([A-Za-z0-9_.-]+)` \| ([^|]*) \|$")
+
+for p in sorted((ROOT / "skills").glob("*/references/*-mcp.md")):
+    rel = p.relative_to(ROOT)
+    rows = MCP_ROW.findall(p.read_text())
+    if not rows:
+        err(f"{rel}: MCP policy classifies no tool handle")
+        continue
+    handles = {}
+    for handle, raw in rows:
+        cls = raw.strip()
+        if cls not in MCP_CLASSES:
+            err(f"{rel}: handle {handle!r} carries classification {cls!r}, "
+                f"not one of {list(MCP_CLASSES)}")
+            continue
+        prior = handles.setdefault(handle, cls)
+        if prior != cls:
+            err(f"{rel}: policy defect — handle {handle!r} classified both "
+                f"{prior!r} and {cls!r}")
+
 # --- text hygiene on all governed files ---
 for p in governed:
     if not p.exists():

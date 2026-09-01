@@ -27,6 +27,7 @@ design deliverables. Designer does not decide or implement.
 | `schema-design` | Draft schema design and initialization structure |
 | `workflow-modeling` | Model states, gates, and workflows |
 | `workorder-drafting` | Translate approved work into bounded execution instructions |
+| `builder-report` | Review Builder execution reports and scope-deviation authority |
 
 ## Required standards
 

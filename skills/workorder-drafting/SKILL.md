@@ -165,65 +165,15 @@ in any review source is not a finding in the fix workorder. A fix
 workorder that introduces new findings of its own requires a further
 fix workorder, not inline expansion.
 
-### Delivery report
+### Builder report
 
-A delivery report is the builder's or tester's account of completed
-work, submitted with the pull request. It is not a summary of the
-diff — it is an account of what happened against what was planned.
+Builder work delivered for review uses the `builder-report` deliverable.
+`builder-report` owns the generic Builder report content, structure, and
+pull-request-body scaffold.
 
-Every delivery report contains, in order:
-
-**Header**
-Workorder key, pull-request link, branch, and commit range.
-
-**What landed**
-Precise, measurable outcomes where the workorder defined them.
-Counts, pass/fail results, named targets, linter result (tool,
-target count, pass/fail), and prose check result (finding count
-by category — density and vocabulary). Not prose impressions.
-
-Each prose finding kept as-is must be acknowledged individually:
-state the file and line, the text flagged, and one sentence explaining
-why it was retained. "All findings justified" is not an acknowledgment.
-
-**Shape changes**
-Anything that differed from the approved plan and why. Each shape
-change names the cause and the effect on the work. A shape change
-is not a scope deviation — it is an execution difference within
-authorized scope.
-
-**Stops taken**
-Each point where the builder stopped rather than proceeded. States
-what was found, what decision or authorization was missing, and
-what partial work exists. A stop is not a failure; an undisclosed
-stop is.
-
-**Scope deviations**
-Anything done outside the explicit workorder grant. Each deviation
-names:
-
-* what was done;
-* the authorization that permitted it — deciding authority override, plan-review
-  correction, or explicit workorder clause;
-* if none of those apply, it was unauthorized and is stated as such.
-
-If there are no scope deviations, state none.
-
-**Items requiring attention**
-Bounded, actionable items for the deciding authority or designer. Each item
-states what decision or action is needed and who holds it. An item
-is not a finding until the designer has verified with the deciding authority
-whether any scope deviation it references was authorized.
-
-Before escalating a scope deviation as a blocker or finding, the
-designer verifies authorization with the deciding authority. A builder that
-stopped on an unauthorized deviation has behaved correctly; a
-builder that proceeded on one has not. The designer distinguishes
-the two before the deciding authority sees the report.
-
-**Final rule**
-The delivery report accounts for the work. It does not advocate for
-decisions the workorder did not make.
+A workorder adds only job-specific reporting requirements that are not already
+owned by `builder-report`. Do not restate the generic Builder report contract in
+the workorder.
 
 ## After drafting: the stop-condition walkthrough
 

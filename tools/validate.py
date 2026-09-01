@@ -126,6 +126,16 @@ for n in sorted(skill_names):
     if state.get(n) is None:
         dfs(n, [])
 
+# --- profile exclusivity in dependency closure ---
+# A session loads exactly one profile. An edge onto a profile would let
+# dependency closure pull in a second one, whatever the source skill's type.
+for n in sorted(skill_names):
+    for dp in graph.get(n, []):
+        target = (skill_meta.get(dp) or {}).get("metadata") or {}
+        if target.get("skill-type") == "profile":
+            err(f"skills/{n}/SKILL.md: skill-dependency names profile {dp!r} — "
+                f"dependency closure may not introduce a second profile")
+
 # --- duplicate description detection ---
 desc_seen = {}  # description -> first owner label
 for name, d in skill_meta.items():

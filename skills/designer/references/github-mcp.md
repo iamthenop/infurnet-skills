@@ -2,9 +2,9 @@
 
 Normative under `designer`. Read before using a GitHub MCP tool.
 
-Evaluation order, exact-match semantics, and the meaning of each
-classification are defined in the profile's MCP policy section. This file
-supplies one thing: the classification of exact tool handles.
+Evaluation order, exact-match semantics, and classification meaning are
+defined in [`mcp-policy.md`](mcp-policy.md). This file supplies one thing:
+the classification of exact tool handles.
 
 Groupings and ordering follow the tool inventory published by the
 `github/github-mcp-server` project. A handle absent from this file is

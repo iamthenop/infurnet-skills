@@ -305,6 +305,111 @@ def well_formed_composition_is_accepted(results, workdir):
     )
 
 
+# --- dependency closure fixtures ------------------------------------------
+# A session loads exactly one profile, so no dependency edge may name a
+# profile. The source skill's own type does not soften the rule.
+SKILL_WITH_DEPENDENCY = """\
+---
+name: {name}
+description: "{description}"
+license: MIT
+metadata:
+  skill-type: {skill_type}
+  skill-dependency: {dependency}
+---
+
+# {name}
+
+Fixture skill body.
+"""
+
+OTHER_PROFILE_ONLY = "A description belonging to exactly one second profile."
+
+DEPENDENCY_README = """\
+# Fixture repository
+
+## Profiles
+
+| Profile | Governs |
+| --- | --- |
+| [`fixture-profile`](skills/fixture-profile/SKILL.md) | Fixture profile |
+| [`other-profile`](skills/other-profile/SKILL.md) | Second fixture profile |
+
+## Standards
+
+| Standard | Governs |
+| --- | --- |
+| [`gamma`](skills/gamma/SKILL.md) | Fixture standard |
+
+## Deliverables
+
+| Deliverable | Governs |
+| --- | --- |
+| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
+"""
+
+FIXTURE_TYPES = {
+    "alpha": ("deliverable", ALPHA_ONLY),
+    "gamma": ("standard", GAMMA),
+    "fixture-profile": ("profile", PROFILE_ONLY),
+    "other-profile": ("profile", OTHER_PROFILE_ONLY),
+}
+
+
+def build_dependency_repo(root, source, dependency):
+    """Create a repository whose only variable is one skill-dependency edge."""
+    write(root / "tools" / "validate.py", VALIDATOR.read_text())
+    for name, (skill_type, description) in FIXTURE_TYPES.items():
+        template = SKILL if name != source else SKILL_WITH_DEPENDENCY
+        write(root / "skills" / name / "SKILL.md",
+              template.format(name=name, description=description,
+                              skill_type=skill_type, dependency=dependency))
+    write(root / "README.md", DEPENDENCY_README)
+    write(root / "AGENTS.md", "# Fixture governance\n")
+    write(root / "ADOPTION.md", "# Fixture adoption\n")
+    write(root / "eval" / "triggers.md", "# Fixture triggers\n")
+    return root
+
+
+# Each case: the source skill declaring the dependency, and its skill type.
+PROFILE_DEPENDENCY_SOURCES = [
+    ("fixture-profile", "profile"),
+    ("alpha", "deliverable"),
+    ("gamma", "standard"),
+]
+
+
+def profile_dependencies_are_rejected(results, workdir):
+    """No skill of any type may name a profile as a skill-dependency."""
+    for source, source_type in PROFILE_DEPENDENCY_SOURCES:
+        root = build_dependency_repo(
+            workdir / f"dependency-{source}", source, "other-profile")
+        code, output = run_validator(root)
+        label = f"{source_type} depends on a profile"
+        results.check(
+            f"{label} — validator exits non-zero",
+            code != 0,
+            f"expected a non-zero exit, got {code}. Output:\n{output}",
+        )
+        needle = f"skills/{source}/SKILL.md: skill-dependency names profile 'other-profile'"
+        results.check(
+            f"{label} — output names the defect",
+            needle in output,
+            f"{needle!r} absent from validator output:\n{output}",
+        )
+
+
+def non_profile_dependency_is_accepted(results, workdir):
+    """An edge onto a standard stays valid, so the rule stays narrow."""
+    root = build_dependency_repo(workdir / "dependency-ok", "alpha", "gamma")
+    code, output = run_validator(root)
+    results.check(
+        "deliverable depends on a standard — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
 def main():
     if not VALIDATOR.exists():
         print(f"FAIL  validator not found at {VALIDATOR}")
@@ -317,6 +422,8 @@ def main():
         distinct_descriptions_are_accepted(results, workdir)
         well_formed_composition_is_accepted(results, workdir)
         composition_defects_are_rejected(results, workdir)
+        non_profile_dependency_is_accepted(results, workdir)
+        profile_dependencies_are_rejected(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

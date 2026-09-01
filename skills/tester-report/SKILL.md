@@ -3,7 +3,7 @@ name: tester-report
 description: "Produce the Tester report for completed validation work. Use when recording validation performed, evidence obtained, failures, local experiments, and bounded adjacent findings."
 license: MIT
 metadata:
-skill-type: deliverable
+  skill-type: deliverable
 ---
 
 # Tester report

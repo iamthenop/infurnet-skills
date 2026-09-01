@@ -150,7 +150,7 @@ the provider currently exposes it.
 | `add_reply_to_pull_request_comment` | Allowed |
 | `create_pull_request` | Allowed |
 | `list_pull_requests` | Allowed |
-| `merge_pull_request` | Allowed |
+| `merge_pull_request` | Ask |
 | `pull_request_read` | Allowed |
 | `pull_request_review_write` | Allowed |
 | `search_pull_requests` | Allowed |

@@ -10,7 +10,7 @@
 
 | Check                | Result                                                       |
 | :------------------- | :----------------------------------------------------------- |
-| `<command or check>` | `<pass, fail, skip, or not run — include relevant evidence>` |
+| `<command or check>` | `<pass, fail, or skip — include relevant evidence>` |
 
 ## Exploratory checks
 

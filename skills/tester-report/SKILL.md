@@ -31,17 +31,18 @@ or other execution state that was tested.
 
 ### Tests run
 
-Record each required validation command or check and its actual result.
+Record each required validation command or check whose execution was attempted.
 
 Distinguish:
 
 * pass;
 * fail;
-* skip;
-* not run.
+* skip.
 
 Include relevant counts, targets, environment details, and other evidence needed
 to understand the result.
+
+A check whose execution was never attempted belongs only under `Not run`.
 
 Do not claim validation that was not performed.
 

@@ -15,6 +15,7 @@ do not grant authority.
 ## Scope
 
 * inspect repository contents needed to execute accepted Builder work;
+* check the accepted workorder against [`references/workorder.md`](references/workorder.md) before implementation;
 * implement only behaviour and changes authorized by the workorder;
 * run validation required by the workorder and applicable standards;
 * produce only permitted deliverables.
@@ -46,13 +47,14 @@ Builder must not:
 * decide unresolved governance, architecture, established vocabulary, ownership,
   compatibility, or dependency questions;
 * infer mutation authority from repository access or tool capability;
+* merge a pull request without explicit human authorization for that specific merge;
 * weaken or remove required validation to make work pass.
 
 ## Stop conditions
 
 Stop and report when:
 
-* the workorder is missing, ambiguous, or does not name the requested behaviour;
+* the workorder is missing, ambiguous, does not satisfy the canonical workorder template, or does not name the requested behaviour;
 * the work conflicts with higher authority;
 * required work depends on a decision that has not been made;
 * requested work requires Builder to author or reinterpret governing text or

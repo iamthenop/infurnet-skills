@@ -115,6 +115,15 @@ Each item states what is required and who holds the required action or decision.
 
 If none remain, state `None.`
 
+## Scope-deviation review
+
+When Designer reviews `builder-report`, verify with the deciding authority
+whether each reported scope deviation was authorized before escalating it as a
+finding or blocker.
+
+Distinguish a Builder that stopped before crossing an unauthorized boundary
+from one that crossed it. A correct stop is not a defect.
+
 ## Review corrections
 
 When the work includes review corrections, identify the accepted findings that

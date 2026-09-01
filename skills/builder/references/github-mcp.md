@@ -256,5 +256,9 @@ classification does not itself authorize those operations.
 because their effects do not map cleanly to an established Builder mutation
 grant.
 
+`merge_pull_request` is always `Ask`. Builder must obtain explicit human
+authorization for each specific merge. A workorder may place merge within the
+accepted work, but does not satisfy this per-merge approval requirement.
+
 `get_label` is published in two toolsets. Both entries carry the same
 classification, so no handle is classified more than one way.

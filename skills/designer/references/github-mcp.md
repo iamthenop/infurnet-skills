@@ -102,12 +102,12 @@ the provider currently exposes it.
 | `add_issue_comment` | Allowed |
 | `get_label` | Allowed |
 | `issue_read` | Allowed |
-| `issue_write` | Forbidden |
+| `issue_write` | Allowed |
 | `list_issue_fields` | Allowed |
 | `list_issue_types` | Allowed |
 | `list_issues` | Allowed |
 | `search_issues` | Allowed |
-| `sub_issue_write` | Forbidden |
+| `sub_issue_write` | Allowed |
 
 ## Labels
 
@@ -152,7 +152,7 @@ the provider currently exposes it.
 | `list_pull_requests` | Allowed |
 | `merge_pull_request` | Forbidden |
 | `pull_request_read` | Allowed |
-| `pull_request_review_write` | Ask |
+| `pull_request_review_write` | Allowed |
 | `search_pull_requests` | Allowed |
 | `update_pull_request` | Forbidden |
 | `update_pull_request_branch` | Forbidden |

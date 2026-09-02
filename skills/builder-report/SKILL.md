@@ -1,6 +1,6 @@
 ---
 name: builder-report
-description: "Produce the Builder delivery report for completed commissioned work. Use when reporting implementation or correction work for review, normally as the pull-request body."
+description: "Produce the Builder report for completed commissioned work. Use when reporting implementation or correction work for review, normally as the pull-request body."
 license: MIT
 metadata:
   skill-type: deliverable
@@ -51,6 +51,10 @@ Record required validation and its actual result.
 
 Distinguish pass, fail, skip, and not run. Record counts, exact targets,
 environmental gaps, and exact head where they are relevant evidence.
+
+When required validation reports non-blocking findings that remain in the
+delivered work, record each retained finding individually and state why it was
+retained.
 
 Do not claim validation that was not performed.
 

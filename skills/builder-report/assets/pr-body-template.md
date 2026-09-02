@@ -1,4 +1,4 @@
-# Builder delivery report
+# Builder report
 
 ## Workorder
 
@@ -37,6 +37,8 @@
 | `<command or check>` | `<pass, fail, skip, or not run — include relevant evidence>` |
 
 <Known environmental validation gaps, or `None.`>
+
+<Retained non-blocking findings and a one-sentence rationale for each, or `None.`>
 
 ## Shape changes
 

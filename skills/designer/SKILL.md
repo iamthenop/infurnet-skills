@@ -28,6 +28,9 @@ design deliverables. Designer does not decide or implement.
 | `workflow-modeling` | Model states, gates, and workflows |
 | `workorder-drafting` | Translate approved work into bounded execution instructions |
 | `builder-report` | Review Builder execution reports and scope-deviation authority |
+| `plan-review` | Review execution plans before implementation begins |
+| `project-bindings` | Author and maintain repository-specific bindings |
+| `user-docs` | Draft user-facing documentation for implemented behaviour |
 
 ## Required standards
 

@@ -138,6 +138,101 @@ def distinct_descriptions_are_accepted(results, workdir):
     )
 
 
+# --- skill-type and README inventory fixtures ----------------------------
+# Two fixtures share one builder because both vary the same pair of facts:
+# the skill type alpha declares, and the README section its inventory row
+# sits under. R3 retired the value 'skill', which the first fixture reuses.
+INVENTORY_README = """\
+# Fixture repository
+
+## Profiles
+
+| Profile | Governs |
+| --- | --- |
+
+## Standards
+
+| Standard | Governs |
+| --- | --- |
+{standards}
+
+## Deliverables
+
+| Deliverable | Governs |
+| --- | --- |
+{deliverables}
+"""
+
+ALPHA_ROW = "| [`alpha`](skills/alpha/SKILL.md) | Fixture skill |"
+
+
+def build_inventory_repo(root, declared, section):
+    """Create a repository varying alpha's declared type and README section."""
+    write(root / "tools" / "validate.py", VALIDATOR.read_text())
+    write(root / "skills" / "alpha" / "SKILL.md",
+          SKILL.format(name="alpha", description=ALPHA_ONLY,
+                       skill_type=declared))
+    write(root / "README.md", INVENTORY_README.format(
+        standards=ALPHA_ROW if section == "Standards" else "",
+        deliverables=ALPHA_ROW if section == "Deliverables" else ""))
+    write(root / "AGENTS.md", "# Fixture governance\n")
+    write(root / "ADOPTION.md", "# Fixture adoption\n")
+    write(root / "eval" / "triggers.md", "# Fixture triggers\n")
+    return root
+
+
+def legacy_type_rejected(results, workdir):
+    """The retired R2 value 'skill' is not a valid skill-type under R3."""
+    root = build_inventory_repo(workdir / "legacy-type", "skill",
+                                "Deliverables")
+    code, output = run_validator(root)
+    label = "legacy skill-type"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = ("skills/alpha/SKILL.md: skill-type 'skill' not in "
+              "['deliverable', 'profile', 'standard']")
+    results.check(
+        f"{label} — output names the invalid value",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def row_type_rejected(results, workdir):
+    """A deliverable whose README row sits under Standards breaks parity."""
+    root = build_inventory_repo(workdir / "row-type", "deliverable",
+                                "Standards")
+    code, output = run_validator(root)
+    label = "README inventory parity"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = ("README.md: skill row 'alpha' sits under the 'standard' section "
+              "but frontmatter declares 'deliverable'")
+    results.check(
+        f"{label} — output names the mismatch",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def inventory_accepted(results, workdir):
+    """The same fixture validates once the row sits under its own section."""
+    root = build_inventory_repo(workdir / "inventory-ok", "deliverable",
+                                "Deliverables")
+    code, output = run_validator(root)
+    results.check(
+        "matching README section and skill-type — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
 # --- profile composition fixtures ---------------------------------------
 # A profile names permitted deliverables and required standards in two tables.
 # The fixtures below vary those tables and the profile-local MCP policy.
@@ -356,14 +451,15 @@ FIXTURE_TYPES = {
 }
 
 
-def build_dependency_repo(root, source, dependency):
-    """Create a repository whose only variable is one skill-dependency edge."""
+def build_dependency_repo(root, edges):
+    """Create a repository whose only variable is its skill-dependency edges."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     for name, (skill_type, description) in FIXTURE_TYPES.items():
-        template = SKILL if name != source else SKILL_WITH_DEPENDENCY
+        template = SKILL_WITH_DEPENDENCY if name in edges else SKILL
         write(root / "skills" / name / "SKILL.md",
               template.format(name=name, description=description,
-                              skill_type=skill_type, dependency=dependency))
+                              skill_type=skill_type,
+                              dependency=edges.get(name, "")))
     write(root / "README.md", DEPENDENCY_README)
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
@@ -383,7 +479,7 @@ def profile_dependencies_are_rejected(results, workdir):
     """No skill of any type may name a profile as a skill-dependency."""
     for source, source_type in PROFILE_DEPENDENCY_SOURCES:
         root = build_dependency_repo(
-            workdir / f"dependency-{source}", source, "other-profile")
+            workdir / f"dependency-{source}", {source: "other-profile"})
         code, output = run_validator(root)
         label = f"{source_type} depends on a profile"
         results.check(
@@ -401,12 +497,36 @@ def profile_dependencies_are_rejected(results, workdir):
 
 def non_profile_dependency_is_accepted(results, workdir):
     """An edge onto a standard stays valid, so the rule stays narrow."""
-    root = build_dependency_repo(workdir / "dependency-ok", "alpha", "gamma")
+    root = build_dependency_repo(workdir / "dependency-ok", {"alpha": "gamma"})
     code, output = run_validator(root)
     results.check(
         "deliverable depends on a standard — validator exits zero",
         code == 0,
         f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def cycle_rejected(results, workdir):
+    """Two non-profile skills depending on each other must fail validation."""
+    root = build_dependency_repo(workdir / "cycle",
+                                 {"alpha": "gamma", "gamma": "alpha"})
+    code, output = run_validator(root)
+    label = "non-profile dependency cycle"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skill-dependency cycle: alpha -> gamma -> alpha"
+    results.check(
+        f"{label} — output names the cycle",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+    results.check(
+        f"{label} — no profile-exclusivity finding",
+        "names profile" not in output,
+        f"a profile-dependency finding also fired:\n{output}",
     )
 
 
@@ -420,10 +540,14 @@ def main():
         workdir = pathlib.Path(tmp)
         duplicate_descriptions_are_rejected(results, workdir)
         distinct_descriptions_are_accepted(results, workdir)
+        inventory_accepted(results, workdir)
+        legacy_type_rejected(results, workdir)
+        row_type_rejected(results, workdir)
         well_formed_composition_is_accepted(results, workdir)
         composition_defects_are_rejected(results, workdir)
         non_profile_dependency_is_accepted(results, workdir)
         profile_dependencies_are_rejected(results, workdir)
+        cycle_rejected(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

@@ -234,6 +234,8 @@ for name in seen:
 # --- profile composition tables ---
 # A profile names the deliverables it permits and the standards it requires.
 # Each named skill must exist and declare the skill type its table implies.
+# Both sections are required. An absent section leaves the composition
+# unstated; a section present and explicitly empty states it.
 PROFILE_TABLES = [
     ("Permitted deliverables", "deliverable"),
     ("Required standards", "standard"),
@@ -255,6 +257,9 @@ for p in skills:
     for heading, required_type in PROFILE_TABLES:
         section = section_body(body_text, heading)
         if section is None:
+            err(f"{p}: missing required profile section {heading!r} — "
+                f"a profile states its composition, explicitly empty when it "
+                f"names nothing")
             continue
         listed = set()
         for name in TABLE_ROW.findall(section):

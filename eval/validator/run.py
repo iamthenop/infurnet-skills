@@ -712,11 +712,19 @@ PROSE_REJECTIONS = [
      "prose-setting must name one setting as a non-empty string, got \'\'"),
     ("raw numeric threshold key", {"alpha": "  sentence-words-max: 20\n"},
      None, "unknown metadata keys [\'sentence-words-max\']"),
+    # The two cases below declare no metadata, so each also proves the
+    # canonical table is validated before any deliverable names a setting.
+    ("one setting carried by two table rows", {},
+     FIXTURE_SETTINGS + [("default", "extractor", "30")],
+     "table defect — setting 'default' appears more than once"),
+    ("unrecognized selection mechanism", {},
+     [("default", "whenever", "30")],
+     "setting 'default' is selected by 'whenever'"),
 ]
 
 
 def prose_setting_defects_are_rejected(results, workdir):
-    """Every malformed prose declaration must fail and name its defect."""
+    """Every malformed declaration or settings table must name its defect."""
     for index, (label, extras, settings, needle) in enumerate(PROSE_REJECTIONS):
         root = build_prose_repo(workdir / f"prose-reject-{index}", extras,
                                 settings)

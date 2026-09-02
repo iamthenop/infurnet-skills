@@ -299,16 +299,20 @@ def prose_setting_selection():
     """Map each canonical setting name to the mechanism that selects it.
 
     An unreadable table yields an empty mapping and one finding naming the file.
+    A name carried by two rows is a table defect, not a last-row-wins choice.
     """
     rel = PROSE_SETTINGS_REF.relative_to(ROOT)
-    if not PROSE_SETTINGS_REF.exists():
-        err(f"{rel}: canonical prose settings reference is missing")
-        return {}
     section = section_body(PROSE_SETTINGS_REF.read_text(), SETTINGS_HEADING)
     if section is None:
         err(f"{rel}: no {SETTINGS_HEADING!r} section — setting names unreadable")
         return {}
-    selection = dict(SETTING_ROW.findall(section))
+    selection = {}
+    for name, mechanism in SETTING_ROW.findall(section):
+        if name in selection:
+            err(f"{rel}: table defect — setting {name!r} appears more than "
+                f"once, selected by {selection[name]!r} and {mechanism!r}")
+            continue
+        selection[name] = mechanism
     if not selection:
         err(f"{rel}: the {SETTINGS_HEADING!r} table names no setting with a "
             f"selection mechanism")
@@ -320,12 +324,17 @@ def prose_setting_selection():
 
 
 # A deliverable names a prose setting; a profile or standard may not. Absence
-# of the key stays valid, so the settings table is read only when a skill
-# declares one.
+# of the key stays valid. The table is validated wherever it exists, so a
+# defect in it is a finding before any deliverable names a setting.
 prose_declared = sorted(
     n for n, d in skill_meta.items()
     if isinstance(d.get("metadata"), dict) and "prose-setting" in d["metadata"])
-setting_selection = prose_setting_selection() if prose_declared else {}
+setting_selection = {}
+if PROSE_SETTINGS_REF.exists():
+    setting_selection = prose_setting_selection()
+elif prose_declared:
+    err(f"{PROSE_SETTINGS_REF.relative_to(ROOT)}: canonical prose settings "
+        f"reference is missing")
 for n in prose_declared:
     meta = skill_meta[n]["metadata"]
     value = meta["prose-setting"]

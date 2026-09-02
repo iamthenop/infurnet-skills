@@ -28,13 +28,13 @@ Flesch-Kincaid Grade Level is measured by the separate readability script. The s
 
 ## Settings
 
-| Setting       | Sentence words | Prose unit words | Sentences per unit | Repeat overlap | Flesch-Kincaid Grade Level |
-| ------------- | -------------: | ---------------: | -----------------: | -------------: | -------------------------: |
-| `default`     |             30 |               75 |                  3 |            40% |                          9 |
-| `design`      |             25 |               60 |                  3 |            35% |                         10 |
-| `instruction` |             20 |               50 |                  2 |            25% |                          8 |
-| `inline`      |             20 |               40 |                  2 |            30% |                          7 |
-| `end-user`    |             20 |               50 |                  3 |            30% |                          5 |
+| Setting       | Selected by   | Sentence words | Prose unit words | Sentences per unit | Repeat overlap | Flesch-Kincaid Grade Level |
+| ------------- | ------------- | -------------: | ---------------: | -----------------: | -------------: | -------------------------: |
+| `default`     | `deliverable` |             30 |               75 |                  3 |            40% |                          9 |
+| `design`      | `deliverable` |             25 |               60 |                  3 |            35% |                         10 |
+| `instruction` | `deliverable` |             20 |               50 |                  2 |            25% |                          8 |
+| `inline`      | `extractor`   |             20 |               40 |                  2 |            30% |                          7 |
+| `end-user`    | `deliverable` |             20 |               50 |                  3 |            30% |                          5 |
 
 ## `default`
 
@@ -74,7 +74,9 @@ Prefer common words, short sentences, and direct actions. Introduce technical vo
 
 ## Selection
 
-A prose-producing deliverable declares one named setting:
+The `Selected by` column names the mechanism that chooses a setting. A setting marked `deliverable` is named in deliverable frontmatter. A setting marked `extractor` is applied by the prose extractor to the prose it identifies, and naming it in frontmatter is invalid.
+
+A prose-producing deliverable declares one deliverable-selected setting:
 
 ```yaml
 metadata:
@@ -86,7 +88,7 @@ The declaration names the setting only. Numeric thresholds must not be copied in
 
 An unknown setting name is invalid.
 
-The `inline` setting applies to prose identified by the prose extractor as inline source commentary. It does not change the governing deliverable or any authority relationship.
+Extractor selection does not change the governing deliverable or any authority relationship.
 
 ## Hard invariants
 

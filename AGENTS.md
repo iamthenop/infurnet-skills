@@ -26,11 +26,26 @@ Read before editing:
 
 ## Profile loading contract
 
-A consuming session loads skills in one order:
+A consuming session loads skills in one authority-preserving order:
 
 1. the profile assigned by repository governance;
-2. a deliverable permitted by that profile and required by the accepted work;
-3. the standards applicable to that deliverable.
+2. a deliverable permitted by that profile, when the accepted work requires a
+   library-defined deliverable;
+3. the standards applicable to the accepted work.
+
+Accepted work may use native model capability without loading a deliverable.
+A deliverable must not be invented or loaded solely to introduce applicable
+standards.
+
+Applicable standards may come from:
+
+* standards required by the assigned profile;
+* standards required by a selected deliverable;
+* standards explicitly required by the accepted commission, workorder, or
+  consuming-repository governance.
+
+Standards must not be inferred from file paths, directory names, surfaces,
+available tools, or agent judgment.
 
 An agent may load exactly one profile during a session. The assigned profile is
 immutable for the lifetime of that session. The agent must not select a profile
@@ -45,11 +60,12 @@ new profile in the current session.
 The assigned profile defines which deliverables the agent may produce or review.
 A requested deliverable outside that set is a stop condition, not a reason to
 change profiles. A deliverable or standard may constrain already-authorized work;
-neither may expand authority, authorize another deliverable, or alter the
-assigned profile.
+neither may expand authority, authorize another deliverable, alter the accepted
+scope, or change the assigned profile.
 
 Native description triggering may discover an applicable deliverable or standard
-after profile assignment. It must never select, load, or switch a profile.
+after profile assignment. It must never select, load, or switch a profile, and
+must not determine which standards govern accepted work.
 
 ## Portability boundary
 

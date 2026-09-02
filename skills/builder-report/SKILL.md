@@ -4,6 +4,7 @@ description: "Produce the Builder report for completed commissioned work. Use wh
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: default
 ---
 
 # Builder report

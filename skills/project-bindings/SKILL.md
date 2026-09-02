@@ -4,6 +4,7 @@ description: Author and maintain the repository bindings file — the single mut
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: default
   skill-dependency: vocabulary-control,design-docs
 ---
 

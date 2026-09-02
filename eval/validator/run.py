@@ -38,6 +38,28 @@ metadata:
 Fixture skill body.
 """
 
+# Every profile states both composition sections. The validator distinguishes
+# three dispositions, and the fixtures below exercise all three: the section
+# absent, present and explicitly empty, and present carrying table rows.
+ABSENT = object()
+EMPTY = object()
+
+
+def composition_section(heading, column, entries):
+    """Render one composition section in one of its three dispositions."""
+    if entries is ABSENT:
+        return ""
+    body = "None." if entries is EMPTY else (
+        f"| {column} | Purpose |\n| :--- | :--- |\n{rows(entries)}")
+    return f"\n## {heading}\n\n{body}\n"
+
+
+# A profile that does not exercise composition still states one, explicitly
+# empty, so its fixture isolates the defect it does exercise.
+EMPTY_COMPOSITION = (
+    composition_section("Permitted deliverables", "Deliverable", EMPTY)
+    + composition_section("Required standards", "Standard", EMPTY))
+
 # The validator reads a row's skill type from the section it sits under, so
 # the fixture carries all three sections even though it declares no standard.
 README = """\
@@ -80,7 +102,7 @@ def build_repo(root, alpha_description, profile_description):
     write(root / "skills" / "fixture-profile" / "SKILL.md",
           SKILL.format(name="fixture-profile",
                          description=profile_description,
-                         skill_type="profile"))
+                         skill_type="profile") + EMPTY_COMPOSITION)
     write(root / "README.md", README)
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
@@ -236,7 +258,7 @@ def inventory_accepted(results, workdir):
 # --- profile composition fixtures ---------------------------------------
 # A profile names permitted deliverables and required standards in two tables.
 # The fixtures below vary those tables and the profile-local MCP policy.
-PROFILE_BODY = """\
+PROFILE_HEAD = """\
 ---
 name: fixture-profile
 description: "A fixture profile carrying composition tables."
@@ -248,19 +270,9 @@ metadata:
 # fixture-profile
 
 Fixture profile body.
+"""
 
-## Permitted deliverables
-
-| Deliverable | Purpose |
-| :--- | :--- |
-{deliverables}
-
-## Required standards
-
-| Standard | Purpose |
-| :--- | :--- |
-{standards}
-
+PROFILE_TAIL = """
 ## MCP policy
 
 See [`references/fixture-mcp.md`](references/fixture-mcp.md).
@@ -319,8 +331,11 @@ def build_composition_repo(root, deliverables, standards, mcp=None):
           SKILL.format(name="gamma", description=GAMMA,
                        skill_type="standard"))
     write(root / "skills" / "fixture-profile" / "SKILL.md",
-          PROFILE_BODY.format(deliverables=rows(deliverables),
-                              standards=rows(standards)))
+          PROFILE_HEAD
+          + composition_section("Permitted deliverables", "Deliverable",
+                                deliverables)
+          + composition_section("Required standards", "Standard", standards)
+          + PROFILE_TAIL)
     write(root / "skills" / "fixture-profile" / "references" / "fixture-mcp.md",
           MCP_BODY.format(rows=rows(mcp or GOOD_MCP)))
     write(root / "README.md", COMPOSITION_README)
@@ -367,6 +382,12 @@ REJECTIONS = [
      GOOD_DELIVERABLES, GOOD_STANDARDS,
      GOOD_MCP + [("odd_thing", "Maybe")],
      "carries classification 'Maybe'"),
+    ("permitted-deliverables section absent",
+     ABSENT, GOOD_STANDARDS, None,
+     "missing required profile section 'Permitted deliverables'"),
+    ("required-standards section absent",
+     GOOD_DELIVERABLES, ABSENT, None,
+     "missing required profile section 'Required standards'"),
 ]
 
 
@@ -395,6 +416,17 @@ def well_formed_composition_is_accepted(results, workdir):
     code, output = run_validator(root)
     results.check(
         "well-formed profile composition — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def empty_composition_is_accepted(results, workdir):
+    """An explicitly empty section states a composition and must validate."""
+    root = build_composition_repo(workdir / "composition-empty", EMPTY, EMPTY)
+    code, output = run_validator(root)
+    results.check(
+        "explicitly empty profile composition — validator exits zero",
         code == 0,
         f"expected a zero exit, got {code}. Output:\n{output}",
     )
@@ -456,10 +488,12 @@ def build_dependency_repo(root, edges):
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     for name, (skill_type, description) in FIXTURE_TYPES.items():
         template = SKILL_WITH_DEPENDENCY if name in edges else SKILL
-        write(root / "skills" / name / "SKILL.md",
-              template.format(name=name, description=description,
-                              skill_type=skill_type,
-                              dependency=edges.get(name, "")))
+        text = template.format(name=name, description=description,
+                               skill_type=skill_type,
+                               dependency=edges.get(name, ""))
+        if skill_type == "profile":
+            text += EMPTY_COMPOSITION
+        write(root / "skills" / name / "SKILL.md", text)
     write(root / "README.md", DEPENDENCY_README)
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
@@ -544,6 +578,7 @@ def main():
         legacy_type_rejected(results, workdir)
         row_type_rejected(results, workdir)
         well_formed_composition_is_accepted(results, workdir)
+        empty_composition_is_accepted(results, workdir)
         composition_defects_are_rejected(results, workdir)
         non_profile_dependency_is_accepted(results, workdir)
         profile_dependencies_are_rejected(results, workdir)

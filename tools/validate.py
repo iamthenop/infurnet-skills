@@ -66,7 +66,8 @@ for p in skills:
     if not isinstance(meta, dict):
         err(f"{p}: metadata block missing or not a mapping")
         continue
-    unknown = set(meta) - {"skill-type", "infurnet-compat", "skill-dependency"}
+    unknown = set(meta) - {"skill-type", "infurnet-compat",
+                           "skill-dependency", "prose-setting"}
     if unknown:
         err(f"{p}: unknown metadata keys {sorted(unknown)}")
     skill_type = meta.get("skill-type")
@@ -282,6 +283,76 @@ for p in skills:
             elif actual != required_type:
                 err(f"{p}: {heading!r} names {name!r} of type {actual!r}, "
                     f"expected {required_type!r}")
+
+# --- prose-setting metadata ---
+# The settings reference owns the setting names and the mechanism that selects
+# each one. The validator reads both from its table, so a setting added to that
+# table needs no change here.
+PROSE_SETTINGS_REF = (ROOT / "skills" / "prose-discipline" / "references"
+                      / "complexity-settings.md")
+SETTINGS_HEADING = "Settings"
+SELECTION_MECHANISMS = ("deliverable", "extractor")
+SETTING_ROW = re.compile(r"(?m)^\|\s*`([a-z0-9-]+)`\s*\|\s*`([a-z-]+)`\s*\|")
+
+
+def prose_setting_selection():
+    """Map each canonical setting name to the mechanism that selects it.
+
+    An unreadable table yields an empty mapping and one finding naming the file.
+    A name carried by two rows is a table defect, not a last-row-wins choice.
+    """
+    rel = PROSE_SETTINGS_REF.relative_to(ROOT)
+    section = section_body(PROSE_SETTINGS_REF.read_text(), SETTINGS_HEADING)
+    if section is None:
+        err(f"{rel}: no {SETTINGS_HEADING!r} section — setting names unreadable")
+        return {}
+    selection = {}
+    for name, mechanism in SETTING_ROW.findall(section):
+        if name in selection:
+            err(f"{rel}: table defect — setting {name!r} appears more than "
+                f"once, selected by {selection[name]!r} and {mechanism!r}")
+            continue
+        selection[name] = mechanism
+    if not selection:
+        err(f"{rel}: the {SETTINGS_HEADING!r} table names no setting with a "
+            f"selection mechanism")
+    for name, mechanism in sorted(selection.items()):
+        if mechanism not in SELECTION_MECHANISMS:
+            err(f"{rel}: setting {name!r} is selected by {mechanism!r}, not "
+                f"one of {list(SELECTION_MECHANISMS)}")
+    return selection
+
+
+# A deliverable names a prose setting; a profile or standard may not. Absence
+# of the key stays valid. The table is validated wherever it exists, so a
+# defect in it is a finding before any deliverable names a setting.
+prose_declared = sorted(
+    n for n, d in skill_meta.items()
+    if isinstance(d.get("metadata"), dict) and "prose-setting" in d["metadata"])
+setting_selection = {}
+if PROSE_SETTINGS_REF.exists():
+    setting_selection = prose_setting_selection()
+elif prose_declared:
+    err(f"{PROSE_SETTINGS_REF.relative_to(ROOT)}: canonical prose settings "
+        f"reference is missing")
+for n in prose_declared:
+    meta = skill_meta[n]["metadata"]
+    value = meta["prose-setting"]
+    p = ROOT / "skills" / n / "SKILL.md"
+    declared_type = meta.get("skill-type")
+    if declared_type != "deliverable":
+        err(f"{p}: prose-setting declared by a {declared_type!r} — only a "
+            f"deliverable names a prose setting")
+    elif not isinstance(value, str) or not value.strip():
+        err(f"{p}: prose-setting must name one setting as a non-empty "
+            f"string, got {value!r}")
+    elif value not in setting_selection:
+        err(f"{p}: unknown prose-setting {value!r} — not named by "
+            f"{PROSE_SETTINGS_REF.relative_to(ROOT)}")
+    elif setting_selection[value] != "deliverable":
+        err(f"{p}: prose-setting {value!r} is selected by "
+            f"{setting_selection[value]!r} — deliverable metadata names only a "
+            f"deliverable-selected setting")
 
 # --- profile-local MCP policy references ---
 # A policy file classifies exact tool handles and nothing else. Classification

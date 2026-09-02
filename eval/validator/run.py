@@ -564,6 +564,227 @@ def cycle_rejected(results, workdir):
     )
 
 
+# --- prose-setting fixtures ----------------------------------------------
+# A deliverable names one prose setting, and the canonical settings table owns
+# the names. The fixtures below vary the declaring skill, the declared value,
+# and the table itself.
+SKILL_WITH_METADATA = """\
+---
+name: {name}
+description: "{description}"
+license: MIT
+metadata:
+  skill-type: {skill_type}
+{extra}---
+
+# {name}
+
+Fixture skill body.
+"""
+
+PROSE_OWNER = "A description belonging to exactly one settings owner."
+
+PROSE_SKILL = """\
+---
+name: prose-discipline
+description: "{description}"
+license: MIT
+metadata:
+  skill-type: standard
+---
+
+# prose-discipline
+
+Fixture settings owner. See
+[`references/complexity-settings.md`](references/complexity-settings.md).
+"""
+
+# The contract table sits above the settings table, so a fixture proves the
+# validator reads setting names from the settings table alone.
+SETTINGS_REF = """\
+# Fixture complexity settings
+
+## Setting contract
+
+| Field | Meaning |
+| :--- | :--- |
+| `contract-only` | A field name, not a setting name |
+
+## Settings
+
+| Setting | Selected by | Sentence words |
+| :--- | :--- | ---: |
+{rows}
+
+## Selection
+
+The `Selected by` column names the mechanism that chooses a setting.
+"""
+
+# Each row: the setting name, the mechanism that selects it, and one threshold.
+FIXTURE_SETTINGS = [("default", "deliverable", "30"),
+                    ("instruction", "deliverable", "20"),
+                    ("inline", "extractor", "20")]
+
+
+def settings_rows(entries):
+    return "\n".join(f"| `{name}` | `{mechanism}` | {words} |"
+                     for name, mechanism, words in entries)
+
+PROSE_README = """\
+# Fixture repository
+
+## Profiles
+
+| Profile | Governs |
+| --- | --- |
+| [`fixture-profile`](skills/fixture-profile/SKILL.md) | Fixture profile |
+
+## Standards
+
+| Standard | Governs |
+| --- | --- |
+| [`gamma`](skills/gamma/SKILL.md) | Fixture standard |
+| [`prose-discipline`](skills/prose-discipline/SKILL.md) | Fixture settings owner |
+
+## Deliverables
+
+| Deliverable | Governs |
+| --- | --- |
+| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
+"""
+
+PROSE_FIXTURE_TYPES = {
+    "alpha": ("deliverable", ALPHA_ONLY),
+    "gamma": ("standard", GAMMA),
+    "fixture-profile": ("profile", PROFILE_ONLY),
+}
+
+
+def build_prose_repo(root, extras, settings=None):
+    """Create a repository varying prose metadata and the settings table.
+
+    Each entry in extras adds metadata lines to the named skill.
+    """
+    write(root / "tools" / "validate.py", VALIDATOR.read_text())
+    for name, (skill_type, description) in PROSE_FIXTURE_TYPES.items():
+        text = SKILL_WITH_METADATA.format(
+            name=name, description=description, skill_type=skill_type,
+            extra=extras.get(name, ""))
+        if skill_type == "profile":
+            text += EMPTY_COMPOSITION
+        write(root / "skills" / name / "SKILL.md", text)
+    write(root / "skills" / "prose-discipline" / "SKILL.md",
+          PROSE_SKILL.format(description=PROSE_OWNER))
+    write(root / "skills" / "prose-discipline" / "references"
+          / "complexity-settings.md",
+          SETTINGS_REF.format(rows=settings_rows(settings or FIXTURE_SETTINGS)))
+    write(root / "README.md", PROSE_README)
+    write(root / "AGENTS.md", "# Fixture governance\n")
+    write(root / "ADOPTION.md", "# Fixture adoption\n")
+    write(root / "eval" / "triggers.md", "# Fixture triggers\n")
+    return root
+
+
+# Each case: label, the metadata each skill adds, the settings table the
+# fixture carries, and the substring the validator must print.
+PROSE_REJECTIONS = [
+    ("unknown prose setting", {"alpha": "  prose-setting: nowhere\n"}, None,
+     "unknown prose-setting 'nowhere'"),
+    ("prose setting named by a contract field",
+     {"alpha": "  prose-setting: contract-only\n"}, None,
+     "unknown prose-setting 'contract-only'"),
+    ("extractor-selected setting in deliverable metadata",
+     {"alpha": "  prose-setting: inline\n"}, None,
+     "prose-setting 'inline' is selected by 'extractor'"),
+    ("fixture setting marked extractor",
+     {"alpha": "  prose-setting: fixture-extracted\n"},
+     FIXTURE_SETTINGS + [("fixture-extracted", "extractor", "18")],
+     "prose-setting 'fixture-extracted' is selected by 'extractor'"),
+    ("prose setting on a profile",
+     {"fixture-profile": "  prose-setting: default\n"}, None,
+     "prose-setting declared by a 'profile'"),
+    ("prose setting on a standard", {"gamma": "  prose-setting: default\n"},
+     None, "prose-setting declared by a 'standard'"),
+    ("numeric prose setting value", {"alpha": "  prose-setting: 30\n"}, None,
+     "prose-setting must name one setting as a non-empty string, got 30"),
+    ("empty prose setting value", {"alpha": '  prose-setting: ""\n'}, None,
+     "prose-setting must name one setting as a non-empty string, got \'\'"),
+    ("raw numeric threshold key", {"alpha": "  sentence-words-max: 20\n"},
+     None, "unknown metadata keys [\'sentence-words-max\']"),
+    # The two cases below declare no metadata, so each also proves the
+    # canonical table is validated before any deliverable names a setting.
+    ("one setting carried by two table rows", {},
+     FIXTURE_SETTINGS + [("default", "extractor", "30")],
+     "table defect — setting 'default' appears more than once"),
+    ("unrecognized selection mechanism", {},
+     [("default", "whenever", "30")],
+     "setting 'default' is selected by 'whenever'"),
+]
+
+
+def prose_setting_defects_are_rejected(results, workdir):
+    """Every malformed declaration or settings table must name its defect."""
+    for index, (label, extras, settings, needle) in enumerate(PROSE_REJECTIONS):
+        root = build_prose_repo(workdir / f"prose-reject-{index}", extras,
+                                settings)
+        code, output = run_validator(root)
+        results.check(
+            f"{label} — validator exits non-zero",
+            code != 0,
+            f"expected a non-zero exit, got {code}. Output:\n{output}",
+        )
+        results.check(
+            f"{label} — output names the defect",
+            needle in output,
+            f"{needle!r} absent from validator output:\n{output}",
+        )
+
+
+def known_prose_setting_is_accepted(results, workdir):
+    """A deliverable naming a setting from the table must validate."""
+    root = build_prose_repo(workdir / "prose-known",
+                            {"alpha": "  prose-setting: instruction\n"})
+    code, output = run_validator(root)
+    results.check(
+        "known prose setting on a deliverable — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def absent_prose_setting_is_accepted(results, workdir):
+    """The key stays optional, so the same fixture without it must validate."""
+    root = build_prose_repo(workdir / "prose-absent", {})
+    code, output = run_validator(root)
+    results.check(
+        "no prose setting declared — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def table_owned_setting_is_accepted(results, workdir):
+    """A setting added only to the table must validate with no Python edit."""
+    root = build_prose_repo(
+        workdir / "prose-table-owned",
+        {"alpha": "  prose-setting: fixture-only\n"},
+        FIXTURE_SETTINGS + [("fixture-only", "deliverable", "18")])
+    code, output = run_validator(root)
+    label = "deliverable-selected setting added only to the settings table"
+    results.check(
+        f"{label} — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+    results.check(
+        f"{label} — the validator names no setting of its own",
+        "fixture-only" not in VALIDATOR.read_text(),
+        "the validator source carries the fixture setting name, so the "
+        "acceptance did not come from the settings table",
+    )
+
+
 def main():
     if not VALIDATOR.exists():
         print(f"FAIL  validator not found at {VALIDATOR}")
@@ -583,6 +804,10 @@ def main():
         non_profile_dependency_is_accepted(results, workdir)
         profile_dependencies_are_rejected(results, workdir)
         cycle_rejected(results, workdir)
+        known_prose_setting_is_accepted(results, workdir)
+        absent_prose_setting_is_accepted(results, workdir)
+        table_owned_setting_is_accepted(results, workdir)
+        prose_setting_defects_are_rejected(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

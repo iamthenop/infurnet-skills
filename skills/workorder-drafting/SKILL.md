@@ -115,13 +115,8 @@ proposes names before implementing and awaits approval.
 
 ### Validation
 
-Validation workorders additionally:
-
-* identify the exact target under review — branch, pull request, or file set;
-* define the checks: the validator validates defined checks and does not decide
-  what correctness means;
-* state which standards govern the surface under test;
-* state that remote mutation is not authorized, or name the narrow exception.
+Validation workorders additionally satisfy
+[`references/validation-workorder.md`](references/validation-workorder.md).
 
 ### Design and drafting
 

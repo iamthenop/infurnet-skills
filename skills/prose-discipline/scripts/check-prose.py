@@ -486,11 +486,6 @@ def main():
         f"\n{len(all_findings)} finding(s) across {len(by_file)} file(s) "
         f"— density: {density_count}, vocabulary: {vocab_count}"
     )
-    print(
-        "Findings do not block delivery. Each finding kept as-is must be "
-        "acknowledged individually in the delivery report with a one-sentence "
-        "rationale."
-    )
 
     if args.strict:
         sys.exit(1)

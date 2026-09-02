@@ -4,6 +4,7 @@ description: Model workflow gates as states, not object families. Use when desig
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: design
 ---
 
 # Workflow modeling

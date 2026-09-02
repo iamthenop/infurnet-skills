@@ -612,16 +612,24 @@ SETTINGS_REF = """\
 
 ## Settings
 
-| Setting | Sentence words |
-| :--- | ---: |
+| Setting | Selected by | Sentence words |
+| :--- | :--- | ---: |
 {rows}
 
 ## Selection
 
-A deliverable names one setting.
+The `Selected by` column names the mechanism that chooses a setting.
 """
 
-FIXTURE_SETTINGS = [("default", "30"), ("instruction", "20")]
+# Each row: the setting name, the mechanism that selects it, and one threshold.
+FIXTURE_SETTINGS = [("default", "deliverable", "30"),
+                    ("instruction", "deliverable", "20"),
+                    ("inline", "extractor", "20")]
+
+
+def settings_rows(entries):
+    return "\n".join(f"| `{name}` | `{mechanism}` | {words} |"
+                     for name, mechanism, words in entries)
 
 PROSE_README = """\
 # Fixture repository
@@ -670,7 +678,7 @@ def build_prose_repo(root, extras, settings=None):
           PROSE_SKILL.format(description=PROSE_OWNER))
     write(root / "skills" / "prose-discipline" / "references"
           / "complexity-settings.md",
-          SETTINGS_REF.format(rows=rows(settings or FIXTURE_SETTINGS)))
+          SETTINGS_REF.format(rows=settings_rows(settings or FIXTURE_SETTINGS)))
     write(root / "README.md", PROSE_README)
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
@@ -678,32 +686,40 @@ def build_prose_repo(root, extras, settings=None):
     return root
 
 
-# Each case: label, the metadata each skill adds, and the substring the
-# validator must print.
+# Each case: label, the metadata each skill adds, the settings table the
+# fixture carries, and the substring the validator must print.
 PROSE_REJECTIONS = [
-    ("unknown prose setting", {"alpha": "  prose-setting: nowhere\n"},
+    ("unknown prose setting", {"alpha": "  prose-setting: nowhere\n"}, None,
      "unknown prose-setting 'nowhere'"),
     ("prose setting named by a contract field",
-     {"alpha": "  prose-setting: contract-only\n"},
+     {"alpha": "  prose-setting: contract-only\n"}, None,
      "unknown prose-setting 'contract-only'"),
+    ("extractor-selected setting in deliverable metadata",
+     {"alpha": "  prose-setting: inline\n"}, None,
+     "prose-setting 'inline' is selected by 'extractor'"),
+    ("fixture setting marked extractor",
+     {"alpha": "  prose-setting: fixture-extracted\n"},
+     FIXTURE_SETTINGS + [("fixture-extracted", "extractor", "18")],
+     "prose-setting 'fixture-extracted' is selected by 'extractor'"),
     ("prose setting on a profile",
-     {"fixture-profile": "  prose-setting: default\n"},
+     {"fixture-profile": "  prose-setting: default\n"}, None,
      "prose-setting declared by a 'profile'"),
     ("prose setting on a standard", {"gamma": "  prose-setting: default\n"},
-     "prose-setting declared by a 'standard'"),
-    ("numeric prose setting value", {"alpha": "  prose-setting: 30\n"},
+     None, "prose-setting declared by a 'standard'"),
+    ("numeric prose setting value", {"alpha": "  prose-setting: 30\n"}, None,
      "prose-setting must name one setting as a non-empty string, got 30"),
-    ("empty prose setting value", {"alpha": '  prose-setting: ""\n'},
+    ("empty prose setting value", {"alpha": '  prose-setting: ""\n'}, None,
      "prose-setting must name one setting as a non-empty string, got \'\'"),
     ("raw numeric threshold key", {"alpha": "  sentence-words-max: 20\n"},
-     "unknown metadata keys [\'sentence-words-max\']"),
+     None, "unknown metadata keys [\'sentence-words-max\']"),
 ]
 
 
 def prose_setting_defects_are_rejected(results, workdir):
     """Every malformed prose declaration must fail and name its defect."""
-    for index, (label, extras, needle) in enumerate(PROSE_REJECTIONS):
-        root = build_prose_repo(workdir / f"prose-reject-{index}", extras)
+    for index, (label, extras, settings, needle) in enumerate(PROSE_REJECTIONS):
+        root = build_prose_repo(workdir / f"prose-reject-{index}", extras,
+                                settings)
         code, output = run_validator(root)
         results.check(
             f"{label} — validator exits non-zero",
@@ -745,9 +761,9 @@ def table_owned_setting_is_accepted(results, workdir):
     root = build_prose_repo(
         workdir / "prose-table-owned",
         {"alpha": "  prose-setting: fixture-only\n"},
-        FIXTURE_SETTINGS + [("fixture-only", "18")])
+        FIXTURE_SETTINGS + [("fixture-only", "deliverable", "18")])
     code, output = run_validator(root)
-    label = "setting added only to the settings table"
+    label = "deliverable-selected setting added only to the settings table"
     results.check(
         f"{label} — validator exits zero",
         code == 0,

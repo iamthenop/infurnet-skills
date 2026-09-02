@@ -163,16 +163,23 @@ The work is complete only when:
 
 ## Expected report
 
-The completion report must contain:
+The report deliverable the assigned profile requires owns the generic report
+contract: `builder-report` for Builder work, `tester-report` for validation
+work.
 
-* workorder key;
-* <required measurable outcomes>;
-* <tests and checks with pass/fail results>;
-* <shape changes from the approved plan>;
-* <stops taken>;
-* <scope deviations, or an explicit statement that there were none>;
-* <items requiring attention>;
-* <other job-specific reporting requirements>.
+<!--
+State only what this job adds beyond that contract: additional evidence,
+exact figures, or named confirmations the reviewer needs.
+
+Do not restate the generic report contract here.
+
+If the job adds nothing, state "No additions."
+-->
+
+Job-specific additions:
+
+* <job-specific reporting requirement>;
+* <job-specific reporting requirement>.
 
 ## Escalation path
 

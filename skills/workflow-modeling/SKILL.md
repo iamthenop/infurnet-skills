@@ -3,7 +3,7 @@ name: workflow-modeling
 description: Model workflow gates as states, not object families. Use when designing workflow schema, lifecycle stages, work packages, work results, derivations, or naming anything after a workflow gate or pipeline stage — or when reviewing a design that multiplies objects, services, enums, or tables per stage.
 license: MIT
 metadata:
-  skill-type: skill
+  skill-type: deliverable
 ---
 
 # Workflow modeling

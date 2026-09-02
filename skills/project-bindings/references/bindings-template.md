@@ -62,7 +62,7 @@ project imports.)
 | :--- | :--- |
 | Database directories | *not yet defined* (e.g. db/<database>/init/) |
 | Schema test directories | *not yet defined* (per database) |
-| Foundational threshold | *not yet defined* (stratum number only; the authorization rule lives in role or governance text) |
+| Foundational threshold | *not yet defined* (stratum number only; change authority comes from the accepted work and repository governance) |
 | Strata in force | *not yet defined* (per database; stratum classes are defined in `schema-design`) |
 
 ## Deployment
@@ -78,9 +78,7 @@ project imports.)
 
 ## Web
 
-<!-- Applies when `web-standard` is installed. The rendering stack
-itself is declared by installing the profile and recording it in the
-adoption manifest; do not restate it here. -->
+<!-- Applies when `web-standard` is installed. -->
 
 | Binding | Value |
 | :--- | :--- |
@@ -120,4 +118,4 @@ adoption manifest; do not restate it here. -->
 | :--- | :--- |
 | System architecture and boundaries | *not yet defined* (e.g. docs/arch/) |
 | Adoption manifest | *not yet defined* (e.g. repository root ADOPTION.md) |
-| Role instances | *not yet defined* |
+| Profile assignment | *not yet defined* (repository governance entry point) |

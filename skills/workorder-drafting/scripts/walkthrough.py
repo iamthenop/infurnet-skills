@@ -30,8 +30,8 @@ directory.
 What it proves:
   * every required frontmatter field is present and carries the declared
     type
-  * profile, work_branch_state, and every authorized mutation come from
-    the closed vocabulary
+  * work_type, work_branch_state, and every authorized mutation come
+    from the closed vocabulary
   * every path is repository-relative, free of parent traversal and
     glob characters, and carries the trailing separator that matches
     what it names
@@ -39,7 +39,8 @@ What it proves:
     exactly
   * every required prose section is present and carries text once HTML
     comments are removed
-  * executing_role and every governance path exist in the repository
+  * profile and every governance path exist in the repository, and the
+    profile declares metadata.skill-type: profile
   * base_branch and target_branch resolve; the declared
     work_branch_state matches what the refs show
   * no unfilled placeholder token and no durable issue reference remain
@@ -87,7 +88,7 @@ BLOCKING = "violation"
 # Frontmatter schema
 # ---------------------------------------------------------------------------
 
-PROFILES = {"implementation", "validation", "design", "pr-fix", "delivery"}
+WORK_TYPES = {"implementation", "validation", "design", "pr-fix", "delivery"}
 
 BRANCH_STATES = {"existing", "to_create"}
 
@@ -106,8 +107,8 @@ MUTATIONS = {
 
 SCALAR_FIELDS = [
     "workorder_key",
+    "work_type",
     "profile",
-    "executing_role",
     "base_branch",
     "work_branch",
     "work_branch_state",
@@ -127,7 +128,7 @@ ALL_FIELDS = SCALAR_FIELDS + LIST_FIELDS + ["temporary_artifacts"]
 
 REQUIRED_SECTIONS = [
     "Workorder key",
-    "Executing role",
+    "Assigned profile",
     "Authorizing source",
     "Governance",
     "Execution surface",
@@ -259,6 +260,33 @@ def sections(body, offset):
     return found
 
 
+def declared_skill_type(path):
+    """
+    Return metadata.skill-type declared by a skill file.
+
+    None means the file declares none the script can read -- no
+    frontmatter, unparseable YAML, or no metadata mapping. Every governed
+    skill declares a skill type, so the caller treats None as a breach.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("skill-type")
+
+
 def is_empty(text):
     """True when a section carries nothing once comments are removed."""
     return not COMMENT_RE.sub("", text).strip()
@@ -332,12 +360,12 @@ def check_types(fm, findings):
 
 
 def check_vocabulary(fm, findings):
-    """Closed vocabularies: profile, branch state, mutations."""
-    profile = fm.get("profile")
-    if isinstance(profile, str) and profile not in PROFILES:
-        findings.append(Finding("violation", "profile",
-                                f"profile {profile!r} is not one of "
-                                f"{', '.join(sorted(PROFILES))}"))
+    """Closed vocabularies: work type, branch state, mutations."""
+    work_type = fm.get("work_type")
+    if isinstance(work_type, str) and work_type not in WORK_TYPES:
+        findings.append(Finding("violation", "work_type",
+                                f"work_type {work_type!r} is not one of "
+                                f"{', '.join(sorted(WORK_TYPES))}"))
 
     state = fm.get("work_branch_state")
     if isinstance(state, str) and state not in BRANCH_STATES:
@@ -378,19 +406,33 @@ def check_path_shape(value, field, findings):
 
 def check_paths(fm, root, findings):
     """Path shape for every declared path, and existence where required."""
-    role = fm.get("executing_role")
-    if isinstance(role, str) and role.strip():
-        if check_path_shape(role, "executing_role", findings):
-            if role.endswith("/"):
+    profile = fm.get("profile")
+    if isinstance(profile, str) and profile.strip():
+        if check_path_shape(profile, "profile", findings):
+            if profile.endswith("/"):
                 findings.append(Finding(
-                    "violation", "executing_role",
-                    "executing_role names a directory; it must name the "
-                    "role file"))
-            elif root is not None and not (root / role).is_file():
+                    "violation", "profile",
+                    "profile names a directory; it must name the profile "
+                    "skill file"))
+            elif root is not None and not (root / profile).is_file():
                 findings.append(Finding(
-                    "violation", "executing_role",
-                    f"executing_role {role!r} does not exist in the "
+                    "violation", "profile",
+                    f"profile {profile!r} does not exist in the "
                     "repository"))
+            elif root is not None:
+                declared = declared_skill_type(root / profile)
+                if declared is None:
+                    findings.append(Finding(
+                        "violation", "profile",
+                        f"profile {profile!r} declares no readable "
+                        "metadata.skill-type; the assigned profile must "
+                        "declare skill-type: profile"))
+                elif declared != "profile":
+                    findings.append(Finding(
+                        "violation", "profile",
+                        f"profile {profile!r} declares skill-type "
+                        f"{declared!r}; the assigned profile must declare "
+                        "skill-type: profile"))
 
     for entry in fm.get("governance") or []:
         if not isinstance(entry, str) or not entry.strip():

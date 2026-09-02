@@ -66,8 +66,8 @@ for the canonical table.
   the code needs simplifying or the information belongs elsewhere.
 * Prose density and vocabulary sprawl are checked by the prose checker
   declared in the repository's build bindings. Run it locally before
-  commits reach review. Findings do not block delivery but must be
-  acknowledged individually in the delivery report.
+  commits reach review. Retained findings are reported according to
+  `builder-report`.
 
 ## Identifier naming
 

@@ -1,6 +1,6 @@
 ---
 name: prose-discipline
-description: "Govern the quality and form of prose in governing documents, design files, workorders, architecture documents, and delivery reports. Use when writing or reviewing any prose deliverable — not code, not tables, not frontmatter. Applies to all text a human will read."
+description: "Always-required standard wherever prose is used. Governs human legibility and semantic drift in documentation, instructions, reports, comments, reviews, and agent interaction. Use whenever prose is read, written, reviewed, or transformed."
 license: MIT
 metadata:
   skill-type: standard
@@ -12,11 +12,24 @@ Prose governs what humans read. Code governs what machines execute.
 These are different disciplines. A document that is correct but
 unreadable has failed its reader.
 
+## Applicability
+
+This standard is always required wherever prose is used.
+
+It applies to prose in governing text, documentation, instructions, workorders,
+reports, comments, reviews, and agent interaction, regardless of profile,
+deliverable, workflow, or user interaction.
+
+Human legibility and drift control are the same reliability concern. LLMs
+operate through human language; if prose is difficult for a human to interpret
+reliably, treat the model input or output as defective.
+
 ## Summary
 
-This skill sets the minimum quality bar for prose in governed documents.
+This skill sets the minimum quality bar wherever prose is used.
 Clarity comes before compression. The reader should understand on one
-pass. Authority is earned through precision, not volume.
+pass. Precision limits semantic drift for both human readers and language
+models.
 
 ## Priority order
 
@@ -31,7 +44,7 @@ Clarity and compression frequently conflict. Clarity wins.
 
 ## Voice
 
-Prose in governed documents is:
+Prose governed by this standard is:
 
 * calm — no urgency, no alarm, no hype
 * authoritative — states facts, not opinions dressed as facts
@@ -179,7 +192,7 @@ A review that finds nothing says so.
 
 ## Pre-submission clarity check
 
-Before submitting any prose deliverable, verify:
+Before submitting or sending prose, verify:
 
 * can a reader explain this section after one read?
 * is every concept introduced before it is compressed?

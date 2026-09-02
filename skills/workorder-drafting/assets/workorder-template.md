@@ -1,7 +1,7 @@
 ---
 workorder_key: "<WO-...>"
-profile: "<implementation|validation|design|pr-fix|delivery>"
-executing_role: "roles/<role>/ROLE.md"
+work_type: "<implementation|validation|design|pr-fix|delivery>"
+profile: "skills/<profile>/SKILL.md"
 
 base_branch: "<main|...>"
 work_branch: "<feat/...>"
@@ -31,11 +31,11 @@ temporary_artifacts: "none"
 
 `<unique-workorder-key>`
 
-## Executing role
+## Assigned profile
 
-Role: see `executing_role` in frontmatter.
+Profile: see `profile` in frontmatter.
 
-Rationale: <explain any constraints on how the role applies>
+Rationale: <explain any constraints on how the profile applies>
 
 ## Authorizing source
 
@@ -163,16 +163,23 @@ The work is complete only when:
 
 ## Expected report
 
-The completion report must contain:
+The report deliverable the assigned profile requires owns the generic report
+contract: `builder-report` for Builder work, `tester-report` for validation
+work.
 
-* workorder key;
-* <required measurable outcomes>;
-* <tests and checks with pass/fail results>;
-* <shape changes from the approved plan>;
-* <stops taken>;
-* <scope deviations, or an explicit statement that there were none>;
-* <items requiring attention>;
-* <other job-specific reporting requirements>.
+<!--
+State only what this job adds beyond that contract: additional evidence,
+exact figures, or named confirmations the reviewer needs.
+
+Do not restate the generic report contract here.
+
+If the job adds nothing, state "No additions."
+-->
+
+Job-specific additions:
+
+* <job-specific reporting requirement>;
+* <job-specific reporting requirement>.
 
 ## Escalation path
 
@@ -195,7 +202,7 @@ On a stop, the executor must:
 
 ## Job-specific stop conditions
 
-In addition to repository and role stop conditions, stop when:
+In addition to repository and profile stop conditions, stop when:
 
 * <condition>;
 * <condition>;

@@ -205,6 +205,18 @@ Before submitting or sending prose, verify:
 
 If any check fails, revise before submitting.
 
+## Complexity settings
+
+Named prose complexity settings are defined in
+[`references/complexity-settings.md`](references/complexity-settings.md).
+
+A prose setting defines density and readability limits only. It does not grant
+authority, select a profile, authorize a deliverable, or select any other
+policy.
+
+Complexity is not a measure of technical value. Use the simplest prose that
+preserves the required meaning.
+
 ## Scripts
 
 * [`scripts/check-prose.py`](scripts/check-prose.py) — checks prose

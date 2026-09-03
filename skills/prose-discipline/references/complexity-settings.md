@@ -74,7 +74,10 @@ Prefer common words, short sentences, and direct actions. Introduce technical vo
 
 ## Selection
 
-The `Selected by` column names the mechanism that chooses a setting. A setting marked `deliverable` is named in deliverable frontmatter. A setting marked `extractor` is applied by the prose extractor to the prose it identifies, and naming it in frontmatter is invalid.
+The `Selected by` column identifies the selection mechanism. Deliverable
+frontmatter carries any setting chosen by a deliverable. Extractor-selected
+limits attach to prose units identified by the extractor and are invalid in
+frontmatter.
 
 A prose-producing deliverable declares one deliverable-selected setting:
 

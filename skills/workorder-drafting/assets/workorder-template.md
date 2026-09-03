@@ -208,4 +208,4 @@ In addition to repository and profile stop conditions, stop when:
 * <condition>;
 * <condition>.
 
-Do not infer authority, design, vocabulary, or scope in order to continue.
+Do not infer authority, design, vocabulary, or scope to continue.

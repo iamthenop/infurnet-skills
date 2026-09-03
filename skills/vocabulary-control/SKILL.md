@@ -8,8 +8,8 @@ metadata:
 
 # Vocabulary control
 
-Every term is a cost. Every restatement is a fork. This skill governs when a
-term may enter the vocabulary and how the corpus is kept from drifting.
+Every term is a cost. Every restatement is a fork. This skill governs term
+admission and keeps the corpus from drifting.
 
 ## Introducing a term
 
@@ -52,9 +52,9 @@ behaviour.
   authoritative location. Other documents reference it by location; they do
   not restate it. Restatement forks; forks drift.
 * **Reference, don't paraphrase.** Paraphrase becomes a second version.
-  Exception: a standalone document may briefly restate conventions needed for
-  independent reading; restatements are subordinate, and a conflict is a
-  defect in the restatement.
+  Exception: a standalone document is permitted to restate briefly the
+  conventions needed for independent reading; restatements are subordinate,
+  and a conflict is a defect in the restatement.
 * **No silent renames.** Established names change only by explicit decision. A
   rename enumerates every occurrence to update; a partial rename is drift, not
   progress.

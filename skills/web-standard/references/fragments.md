@@ -21,10 +21,10 @@ carries the exact ownership detail.
 
 ## Thymeleaf dialect constraint
 
-Fragments and pages use only the core Thymeleaf `StandardDialect`:
-`th:text`, `th:each`, `th:if`, `th:insert`/`th:replace`/`th:fragment`,
-`th:with`, `th:attr`, `th:classappend`, `th:href="@{…}"`, and fragment
-expressions `~{…}`.
+Fragments and pages use only the core Thymeleaf `StandardDialect`. Permitted
+forms are `th:text`, `th:each`, `th:if`,
+`th:insert`/`th:replace`/`th:fragment`, `th:with`, `th:attr`,
+`th:classappend`, `th:href="@{…}"`, and fragment expressions `~{…}`.
 
 Do not use `th:field`/`#fields` or the Layout Dialect; neither is
 available and both break dependency-free rendering tests. Actions pass

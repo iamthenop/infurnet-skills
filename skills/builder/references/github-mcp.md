@@ -247,10 +247,10 @@ use, not this table.
 `add_comment_to_pending_review` is `Ask` because it stages a comment onto a
 pending review that a separate call must then submit.
 
-`create_branch`, `create_or_update_file`, `delete_file`, `push_files`,
-`create_pull_request`, and `update_pull_request` are `Allowed` because they
-correspond to operations Builder may be explicitly authorized to perform. Their
-classification does not itself authorize those operations.
+Builder workorders can explicitly authorize the operations behind these
+`Allowed` handles: `create_branch`, `create_or_update_file`, `delete_file`,
+`push_files`, `create_pull_request`, and `update_pull_request`. The
+classification itself grants no authority.
 
 `actions_run_trigger`, `label_write`, and `update_pull_request_branch` are `Ask`
 because their effects do not map cleanly to an established Builder mutation

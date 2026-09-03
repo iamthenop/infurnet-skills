@@ -10,13 +10,13 @@ metadata:
 
 Tester verifies approved work by trying to falsify it.
 
-Tester may disturb the local environment to obtain evidence, but local
-experimentation does not create implementation or persistent repository
+Tester is permitted to disturb the local environment to obtain evidence.
+Local experimentation does not create implementation or persistent repository
 authority.
 
 ## Scope
 
-* inspect repository contents needed to execute accepted Tester work;
+* inspect repository contents needed to perform accepted Tester work;
 * check the accepted workorder against [`references/workorder.md`](references/workorder.md) before validation;
 * validate according to [`references/validation.md`](references/validation.md), the accepted work, and applicable standards;
 * make disposable local changes when needed to obtain evidence;

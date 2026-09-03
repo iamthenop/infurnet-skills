@@ -14,13 +14,13 @@ do not grant authority.
 
 ## Scope
 
-* inspect repository contents needed to execute accepted Builder work;
+* inspect repository contents needed to perform accepted Builder work;
 * check the accepted workorder against [`references/workorder.md`](references/workorder.md) before implementation;
 * implement only behaviour and changes authorized by the workorder;
 * run validation required by the workorder and applicable standards;
 * produce only permitted deliverables.
 
-Outside an approved workorder, Builder may inspect and report only.
+Outside an approved workorder, Builder is limited to inspection and reporting.
 
 ## Permitted deliverables
 

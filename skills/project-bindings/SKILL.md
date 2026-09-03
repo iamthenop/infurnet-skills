@@ -10,10 +10,12 @@ metadata:
 
 # Repository bindings
 
-Standards stay project-neutral by naming declared values instead of
-hard-coding them: `approved compute module`, `strata in force`, `registry
-naming contract`. The repository bindings file declares each project value
-once. Standards dereference that file as project values change.
+Standards stay project-neutral by naming declared values instead of hard-coding
+them: `approved compute module`, `strata in force`, and
+`registry naming contract`.
+
+The bindings file is the one home for repository-specific values. Standards
+refer to those declarations instead of copying them.
 
 One bindings file per repository, at the repository root, named in the
 repository's governance entry point. It is mutable by design; that is why

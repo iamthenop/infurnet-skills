@@ -6,7 +6,6 @@ docstrings, and Markdown files.
 Usage:
     python3 skills/prose-discipline/scripts/check-prose.py [path ...]
     --setting NAME    # apply a deliverable-selected setting's density limits
-    --list-settings   # print each setting, its mechanism, and its limits
     --density         # density checks only
     --vocabulary      # vocabulary checks only
     --strict          # exit 1 on any finding
@@ -663,8 +662,6 @@ def build_parser():
         "--setting", metavar="NAME",
         help=f"Apply the density limits the named setting defines "
              f"(default: {DEFAULT_SETTING})")
-    parser.add_argument("--list-settings", action="store_true",
-                        help="Print the named settings and their limits")
     parser.add_argument("--density", action="store_true",
                         help="Run density checks only")
     parser.add_argument("--vocabulary", action="store_true",
@@ -672,15 +669,6 @@ def build_parser():
     parser.add_argument("--strict", action="store_true",
                         help="Exit 1 on any finding (for CI)")
     return parser
-
-
-def format_limits(limits):
-    parts = []
-    for field, _ in DENSITY_COLUMNS:
-        value = limits[field]
-        rendered = f"{value:.0%}" if field == "repeat_overlap_max" else value
-        parts.append(f"{field} {rendered}")
-    return "  ".join(parts)
 
 
 def main(argv=None):
@@ -691,11 +679,6 @@ def main(argv=None):
 
     try:
         settings = read_settings()
-        if args.list_settings:
-            for name in sorted(settings):
-                mechanism, limits = settings[name]
-                print(f"{name}  {mechanism}-selected  {format_limits(limits)}")
-            return 0
         caller_name = args.setting or DEFAULT_SETTING
         caller = (caller_name, resolve_caller_setting(settings, caller_name))
         by_extractor = extractor_limits(settings)

@@ -115,11 +115,13 @@ DATABASE` and `GRANT USAGE ON SCHEMA` establish reachability. `GRANT
 SELECT ON TABLE` grants object access. Reachability belongs here;
 object access belongs in `0100`.
 
-**Authority constraint:** never invent role names, privilege boundaries,
-or service accounts. Never rename, merge, split, or remove service
-accounts without explicit approval. Never add `SUPERUSER`, `CREATEDB`,
-`CREATEROLE`, `REPLICATION`, `BYPASSRLS`, or role membership without
-explicit approval.
+**Authority constraint:** role names, privilege boundaries, and service
+accounts require explicit approval before introduction. Existing service
+accounts require approval before rename, merge, split, or removal.
+
+Elevated capabilities such as `SUPERUSER`, `CREATEDB`, `CREATEROLE`,
+`REPLICATION`, and `BYPASSRLS` require explicit approval. Role membership
+also requires explicit approval.
 
 **Template:** [`assets/0020-service-accounts-template.sql`](../assets/0020-service-accounts-template.sql)
 
@@ -146,11 +148,13 @@ must not depend on `0200` or later.
 create new state or mutation surfaces? Exposure belongs here; mutation
 surfaces belong in `0200`.
 
-**Read-only view vs writable view vs writer function:** a read-only
-view selects from base tables. A writable view has an `INSTEAD OF`
-trigger that delegates to base-table DML — belongs here only when the
-view trigger does not replace writer authority. A writer function that
-owns the mutation surface belongs in `0200`.
+**Read-only view vs writable view vs writer function:** a read-only view
+selects from base tables. An `INSTEAD OF` trigger makes a view writable and
+delegates to base-table DML; it belongs here only when the trigger does not
+replace writer authority.
+
+A purpose-built mutation surface for a specific application role is a writer
+function and belongs in `0200`.
 
 **Boundary rule:** views and grants must not weaken, bypass, duplicate,
 or reinterpret foundational invariants established by `0000`.
@@ -295,9 +299,9 @@ Verify against the actual database catalogue, not only SQL text:
 
 ## Validation
 
-* Foundational invariant tests initialize `0000` alone.
-* Full initialization tests execute every approved file in filename
-  order with SQL errors treated as fatal.
+* Foundational invariant tests run against `0000` alone.
+* Full initialization tests run every approved file in filename order
+  with SQL errors treated as fatal.
 * Schema tests verify the actual database catalogue: columns and types,
   constraints, foreign-key actions, indexes, triggers, function
   security, privileges, and initialization boundaries.

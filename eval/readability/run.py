@@ -53,6 +53,11 @@ OVER_INLINE = ("The docstring records the calling contract a reader "
 SIMPLE_DOC = ("The check runs. The file passes. The list is short. It is "
               "done. The run ends. The next one starts. The log is clear.")
 
+# The fixture reference serves both scripts, so it carries every column each
+# one requires: the grade column the readability script reads, and the four
+# density columns check-prose.py reads. It also names `default`, the setting
+# check-prose.py resolves when a caller names none, so a bare checker run in
+# this tree is a real check rather than a reference error.
 SETTINGS_REFERENCE = """\
 # Complexity settings fixture
 
@@ -64,13 +69,23 @@ SETTINGS_REFERENCE = """\
 
 ## Settings
 
-| Setting     | Selected by     | Sentence words | Flesch-Kincaid Grade Level |
-| ----------- | --------------- | -------------: | -------------------------: |
-| `{setting}` | `deliverable`   |             30 |                  {maximum} |
-| `{extractor_setting}` | `extractor` |       20 |           {inline_maximum} |
+| Setting | Selected by | Sentence words | Prose unit words | \
+Sentences per unit | Repeat overlap | Flesch-Kincaid Grade Level |
+| ------- | ----------- | -------------: | ---------------: | \
+-----------------: | -------------: | -------------------------: |
+| `default` | `deliverable` | 30 | 75 | 3 | 40% | 9 |
+| `{setting}` | `deliverable` | 30 | 75 | 3 | 40% | {maximum} |
+| `{extractor_setting}` | `extractor` | 20 | 40 | 2 | 30% | {inline_maximum} |
 """
 
+# Prose carrying one check-prose.py vocabulary finding, so the separation
+# regression compares a finding set rather than two empty runs.
+PROSE_FINDING = "The report will utilize the record."
+
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
+PROSE_SUMMARY = re.compile(
+    r"^\d+ finding\(s\) across \d+ file\(s\) "
+    r"— density: \d+, vocabulary: \d+$", re.MULTILINE)
 
 
 def write(path, text):
@@ -446,11 +461,24 @@ def prose_results_are_untouched(results, workdir):
     fixtures = root / "fixtures"
     write(fixtures / "paragraph.md", PARAGRAPH + "\n")
     write(fixtures / "docstring.py", f'"""{PARAGRAPH}"""\n')
+    write(fixtures / "finding.md", PROSE_FINDING + "\n")
 
     before = run_script(checker, [str(fixtures)])
     run_script(script, [str(fixtures)])
     run_script(script, [str(fixtures), "--setting", SETTING])
     after = run_script(checker, [str(fixtures)])
+
+    # Two matching runs prove nothing when both failed to check anything.
+    # A finding summary is printed only by a run that read the reference and
+    # evaluated the prose, so it distinguishes evidence from a shared error.
+    before_code, before_output = before
+    results.check(
+        "check-prose.py — the compared runs are real checker executions",
+        before_code == 0 and PROSE_SUMMARY.search(before_output) is not None,
+        f"exit {before_code} with no finding summary means the checker "
+        f"rejected the request or the reference, so a matching pair of runs "
+        f"is not evidence. Output:\n{before_output}",
+    )
 
     results.check(
         "check-prose.py — same exit status and findings after a readability run",

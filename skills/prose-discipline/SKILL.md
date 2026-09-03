@@ -221,9 +221,12 @@ preserves the required meaning.
 
 * [`scripts/check-prose.py`](scripts/check-prose.py) — checks prose
   density and vocabulary sprawl in source comments, docstrings, and
-  Markdown files. Run it over changed source and document files before
-  commits reach review. Invoke as:
-  `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [path ...]`
+  Markdown files. Density checks use the named prose setting supplied
+  with `--setting`; when none is supplied, `default` applies. Inline
+  source commentary uses the extractor-selected `inline` setting.
+  Run it over changed source and document files before commits reach
+  review. Invoke as:
+  `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [--setting <name>] [path ...]`
 * [`scripts/check-readability.py`](scripts/check-readability.py) — measures
   Flesch-Kincaid Grade Level for the same Markdown prose, source comments,
   and docstrings. It reports the measured grade with or without a named

@@ -10,15 +10,15 @@ metadata:
 
 # Design documentation
 
-Code serves the design; design files state the design. A design file states
-decisions; it does not make them. On the mainline, every design file states
-decided design: no decision, no file. Do not write a design file as a
-substitute for authorized implementation work.
+Code serves the design; design files state it. A design file records decisions
+and does not make them. On the mainline, every design file contains decided
+design; without a decision, no file exists, and a design file never substitutes
+for authorized implementation work.
 
-Prose quality follows `prose-discipline`. The writing rules and drift-control
-discipline in `vocabulary-control` (obligations not narration, one home per
-fact, reference don't paraphrase, no history or aspiration in governing text,
-surgical changes) apply to all design documents.
+Prose quality follows `prose-discipline`. The writing and drift-control rules
+in `vocabulary-control` also apply to every design document. They require
+obligations, one home per fact, references instead of paraphrase, no history or
+aspiration, and surgical changes.
 
 ## Design file types
 
@@ -65,18 +65,16 @@ A diagram or table restating one sentence is a defect.
 
 ### Diagram conventions
 
-* **No character-drawn diagrams.** Box-drawing, arrow glyphs, and
-  indentation used to depict structure inside a code fence are the defect;
-  use Mermaid, a list, or a formula instead. Arrows inside prose, inside
-  code identifiers, or as established inline notation (an idempotency rule,
-  a privilege chain stated as a one-line sequence) are not diagrams and are
-  permitted.
-* **Sequence diagrams** illustrate cross-component workflows. A workflow
-  document may contain multiple bounded sequence diagrams when one complete
-  diagram would obscure distinct stages, branches, or authority boundaries;
-  each diagram shows one coherent interaction. Where the complete
-  end-to-end sequence remains useful, include it as an appendix rather than
-  forcing it to carry the entire explanation.
+* **No character-drawn diagrams.** Box-drawing, arrow glyphs, or indentation
+  that depicts structure inside a code fence is a defect; use Mermaid, a list,
+  or a formula. Arrows in prose, code identifiers, or established inline
+  notation such as an idempotency rule or privilege chain are permitted and
+  are not diagrams.
+* **Sequence diagrams** illustrate cross-component workflows; multiple bounded
+  diagrams are permitted when one complete diagram obscures distinct stages,
+  branches, or authority boundaries. Keep each interaction coherent. Where
+  the complete end-to-end sequence remains useful, include it as an appendix
+  rather than forcing it to carry the entire explanation.
 * **State diagrams** (Mermaid `stateDiagram-v2`) belong in state files and
   show the closed transition set; transition rules remain prose beside the
   diagram.
@@ -87,21 +85,18 @@ A diagram or table restating one sentence is a defect.
 * **Use-case level actor/goal structure** is written as structured prose or
   a table (actor, goal, outcome), not drawn; diagram support for use-case
   notation is weak and the content is a closed set, which is table work.
-* Diagrams are embedded in the Markdown document they illustrate, beside
-  the prose that owns the obligations. Standalone diagram files are legacy
-  form: do not create new ones. Existing files are grandfathered debt;
-  migration into the owning document occurs only when a workorder
-  explicitly authorizes it. When a semantic correction and a
-  representation migration share a pull request, they are separately
-  named scopes, preferably separate commits.
+* Diagrams stay in the Markdown document they illustrate, beside the prose
+  that owns the obligations. Standalone diagram files are legacy form; do not
+  create new ones, and migrate existing files only when a workorder explicitly
+  authorizes it. If semantic correction and representation migration share a
+  pull request, name them as separate scopes and preferably separate commits.
 
 ## Workflow documents
 
-A workflow is a Markdown document. Prose owns the workflow obligations and
-explains the boundaries around each diagram. Workflow documents identify
-their participants, state what they define and do not define, and link to
-the normative component, API, state, and contract documents instead of
-restating them.
+A workflow is a Markdown document. Prose owns workflow obligations and explains
+each diagram's boundaries. Workflow documents identify participants, state
+their scope, and link to normative component, API, state, and contract
+documents instead of restating them.
 
 ## Linking
 
@@ -112,18 +107,18 @@ substitute for the rule where the rule is normative.
 
 ## Pending decisions
 
-State an undecided value plainly as not yet defined. Track the decision in
-the issue tracker. No decision markers and no issue references in design
-files — issue numbers are mutable external state; the closing commit is the
-record. Do not resolve an undecided value, work around it, or silently
-remove the statement.
+State an undecided value plainly as not yet defined and track the decision in
+the issue tracker. Design files contain no decision markers or issue
+references; issue numbers are mutable external state, and the closing commit
+is the record. Do not resolve, work around, or silently remove an undecided
+value.
 
 ## Proposals
 
-Proposal apparatus — banners, term introductions, outcomes-considered — may
-live in a working branch. It must not survive a merge into the mainline;
-removal is a merge check. The decided rule remains; the choosing stays in
-the pull-request and issue record.
+Proposal apparatus — banners, term introductions, outcomes-considered — is
+permitted on a working branch. It must not survive a merge into the mainline;
+removal is a merge check. The decided rule remains; the choosing stays in the
+pull-request and issue record.
 
 ## Assets
 

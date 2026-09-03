@@ -8,9 +8,8 @@ metadata:
 
 # Prose style
 
-Prose governs what humans read. Code governs what machines execute.
-These are different disciplines. A document that is correct but
-unreadable has failed its reader.
+Prose governs what humans read; code governs what machines run. They need
+different disciplines. A correct but unreadable document has failed its reader.
 
 ## Applicability
 
@@ -26,10 +25,9 @@ reliably, treat the model input or output as defective.
 
 ## Summary
 
-This skill sets the minimum quality bar wherever prose is used.
-Clarity comes before compression. The reader should understand on one
-pass. Precision limits semantic drift for both human readers and language
-models.
+This skill sets the minimum prose quality bar. Clarity comes before
+compression, and the reader should understand on one pass. Precision limits
+semantic drift for humans and language models.
 
 ## Priority order
 
@@ -65,8 +63,7 @@ clear on first contact.
 * reduce cognitive load — if two readings of a sentence are possible,
   eliminate one
 * do not use ambiguity as a stylistic device
-* prefer explicit nouns over pronouns when the referent could be
-  unclear
+* prefer explicit nouns over pronouns when the referent is unclear
 * the reader should feel guided, not tested
 
 ## Sentence structure
@@ -219,13 +216,9 @@ preserves the required meaning.
 
 ## Scripts
 
-* [`scripts/check-prose.py`](scripts/check-prose.py) — checks prose
-  density and vocabulary sprawl in source comments, docstrings, and
-  Markdown files. Density checks use the named prose setting supplied
-  with `--setting`; when none is supplied, `default` applies. Inline
-  source commentary uses the extractor-selected `inline` setting.
-  Run it over changed source and document files before commits reach
-  review. Invoke as:
+* [`scripts/check-prose.py`](scripts/check-prose.py) — checks density and vocabulary in Markdown, source comments, and docstrings.
+  `--setting` selects a named setting; without it, `default` applies, while inline commentary uses `inline`.
+  Run it on changed source and documents before review:
   `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [--setting <name>] [path ...]`
 * [`scripts/check-readability.py`](scripts/check-readability.py) — measures
   Flesch-Kincaid Grade Level for the same Markdown prose, source comments,

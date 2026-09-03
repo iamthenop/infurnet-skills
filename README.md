@@ -79,6 +79,28 @@ Every skill uses one Agent Skills format, whatever its skill type:
 | `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
 | `skills/<name>/references` | optional bundled templates and reference material |
 
+## Skill metadata
+
+Repository-specific skill metadata lives under the frontmatter `metadata`
+mapping. These fields describe the skill; they do not grant authority or
+select a profile.
+
+| Field | Meaning |
+| --- | --- |
+| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, or `deliverable`. |
+| `skill-dependency` | Comma-separated sibling skills that must be installed with this skill. Dependencies do not grant authority and must not introduce a profile. |
+| `infurnet-compat` | Comma-separated compatibility tags for the requirements stated by the top-level `compatibility` field. It does not select or load a skill. |
+| `prose-setting` | For a deliverable, names the prose complexity setting for prose produced under that deliverable. It does not classify the `SKILL.md` instruction text itself. |
+
+`prose-setting` is valid only on a `deliverable`. The setting name must come
+from the canonical table in
+[`skills/prose-discipline/references/complexity-settings.md`](skills/prose-discipline/references/complexity-settings.md).
+That reference owns setting names and numeric limits.
+
+`skill-dependency` describes installation closure, not standard applicability.
+Applicable standards still come from the assigned profile, selected
+deliverable, accepted work, or consuming repository governance.
+
 ## Consuming
 
 A consuming repository assigns one profile in its governance entry point. The

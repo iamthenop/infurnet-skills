@@ -224,6 +224,12 @@ preserves the required meaning.
   Markdown files. Run it over changed source and document files before
   commits reach review. Invoke as:
   `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [path ...]`
+* [`scripts/check-readability.py`](scripts/check-readability.py) — measures
+  Flesch-Kincaid Grade Level for the same Markdown prose, source comments,
+  and docstrings. It reports the measured grade with or without a named
+  setting, and fails a file whose grade exceeds the maximum that setting
+  defines. Invoke as:
+  `python3 <vendor-path>/skills/prose-discipline/scripts/check-readability.py [--setting <name>] [path ...]`
 
 ## Final rule
 

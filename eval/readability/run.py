@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Regression harness for skills/prose-discipline/scripts/check-readability.py.
 
-Each regression builds a throwaway skill tree in a temporary directory, copies
-the real readability script, the real prose extractor, and a settings
-reference into it, then runs the script as a subprocess. Every assertion rests
-on the script's own exit status and printed output, and every maximum grade
-comes from the fixture reference rather than from the script.
+Each regression builds a temporary skill tree with the real readability script,
+prose extractor, and fixture settings reference. It runs that tree as a
+subprocess and checks the script's exit status, printed output, and the grade
+maximum defined by the fixture.
 """
 import pathlib
 import re

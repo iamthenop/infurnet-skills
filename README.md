@@ -142,17 +142,23 @@ checkout or floating `main`.
 During R3, the adoption manifest records installed skills of any skill type in
 its installed-skills field.
 
-Updating the pin follows six steps: compare the pinned commit with head;
-enumerate changed obligations; identify affected consumer bindings and
-governance; obtain approval from the consuming repository's deciding authority;
-update the pin and installed content together; validate the consumer.
+Updating the pin follows six steps:
+
+1. compare the pinned commit with head;
+2. enumerate changed obligations;
+3. identify affected consumer bindings and governance;
+4. obtain approval from the consuming repository's deciding authority;
+5. update the pin and installed content together;
+6. validate the consumer.
 
 The updater matches governed files by path and resolves the consuming
-repository from its own file location, and head's updater is installed only
-after approval. When head moves governed files between paths, the reviewer runs
-head's updater from inside the consuming repository before approving, as the
-update procedure in [`ADOPTION.md`](ADOPTION.md) sets out; without that run the
-obligation report omits every moved file.
+repository from its own file location. Install head's updater only after
+approval.
+
+When head moves governed files between paths, run head's updater from inside
+the consuming repository before approval. This follows the update procedure in
+[`ADOPTION.md`](ADOPTION.md); without that run, the obligation report omits
+every moved file.
 
 ## License
 

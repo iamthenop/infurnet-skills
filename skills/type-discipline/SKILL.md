@@ -25,9 +25,9 @@ memory.
   parsed, typed values, never raw payloads.
 
 Do not pass raw strings for controlled states, algorithms, encodings, MIME
-types, lifecycle states, review states, authority states, schema versions,
-UUID-shaped identifiers, hashes, or digests when a narrower type is available
-or required.
+types, lifecycle states, review states, or authority states when a narrower
+type is available or required. Apply the same rule to schema versions,
+UUID-shaped identifiers, hashes, and digests.
 
 ## Language mappings
 

@@ -55,7 +55,8 @@ runs locally before commits reach review.
 
 See `error-handling`. Java-specific addition: checked exceptions state a
 contract; unchecked exceptions signal a programming error or unrecoverable
-condition. Do not use unchecked exceptions as checked-exception substitutes.
+condition. Do not replace a checked-exception contract with an unchecked
+exception.
 
 ## Tests
 

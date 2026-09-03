@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""
-Update infurnet-skills vendor tree.
+"""Update the vendored infurnet-skills tree.
 
-Usage:
-    python3 .agents/update-skills.py                  # report + integrity check
-    python3 .agents/update-skills.py --apply          # report + apply
-    python3 .agents/update-skills.py --candidate SHA  # compare against specific SHA
-    python3 .agents/update-skills.py --candidate v0.2.0  # compare against tag
-    python3 .agents/update-skills.py --verify         # verify current state only
-    python3 .agents/update-skills.py --use-candidate-updater  # report under the candidate's updater
+Run with no option to report and verify; use `--apply` to apply changes or
+`--verify` for verification only. Use `--candidate REF` to compare a commit or
+tag, and `--use-candidate-updater` to report with the candidate updater.
 """
 import argparse
 import difflib
@@ -160,11 +155,9 @@ def run_candidate_updater(candidate_script, argv):
     """
     Report under the candidate's updater against this repository, then exit.
 
-    The script resolves the repository from its own location, so the
-    candidate is staged beside the installed updater; run from the fetched
-    tree it would resolve the candidate checkout as the consumer
-    repository. BOOTSTRAP_ENV stops a second hop when a moving candidate
-    ref resolves to a newer updater than the one just staged.
+    Stage the candidate beside the installed updater so repository resolution
+    still points to this consumer. `BOOTSTRAP_ENV` prevents a second hop when a
+    moving candidate ref resolves to a newer updater.
     """
     own = Path(__file__).resolve()
     staged = own.parent / ".update-skills-candidate.py"
@@ -224,12 +217,10 @@ def profile_migration_pairs(current_files, candidate_files):
     """
     Pair each pre-migration role path with its candidate profile.
 
-    The R3 migration moved `roles/<name>/ROLE.md` to
-    `skills/<name>/SKILL.md`, which compared by path alone looks like an
-    unrelated remove and add and hides every obligation change in the
-    file whose authority text moved. This is the explicit mapping for one
-    migration, not a general rename framework: a candidate is accepted as
-    the counterpart only when it declares `skill-type: profile`.
+    R3 moved `roles/<name>/ROLE.md` to `skills/<name>/SKILL.md`; a path-only
+    comparison hides obligation changes behind an unrelated remove and add. This
+    explicit one-time mapping accepts a counterpart only when it declares
+    `skill-type: profile`.
     """
     pairs = {}
     for old_path in current_files:
@@ -282,13 +273,12 @@ def diff_obligations(old_text, new_text):
 
 def diff_migrated_profile(old_text, new_text, old_path, new_path):
     """
-    Deterministic line diff of one migrated profile body.
+    Return a deterministic line diff for one migrated profile body.
 
-    The obligation extractor reads `* ` list items under a fixed set of
-    headings, so a profile whose authority moved between headings or into
-    prose would otherwise report as changed with nothing shown. This path
-    exists to make the one-time role-to-profile representation change
-    reviewable, not to redesign obligation parsing.
+    The obligation extractor reads list items under fixed headings, so moved
+    authority can otherwise appear changed without showing its text. This
+    one-time path makes the role-to-profile representation change reviewable
+    without redesigning obligation parsing.
     """
     return list(difflib.unified_diff(
         old_text.splitlines(), new_text.splitlines(),

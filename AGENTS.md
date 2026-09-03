@@ -47,21 +47,20 @@ Applicable standards may come from:
 Standards must not be inferred from file paths, directory names, surfaces,
 available tools, or agent judgment.
 
-An agent may load exactly one profile during a session. The assigned profile is
-immutable for the lifetime of that session. The agent must not select a profile
-from task wording, native description triggering, available skills, or its own
-judgment, and must not load a second profile to supplement, compare with, or
-replace the assigned profile.
+An agent loads exactly one profile during a session. The assignment is
+immutable for that session. Task wording, native description triggering,
+available skills, and agent judgment cannot select a profile; a second profile
+cannot supplement, compare with, or replace the assignment.
 
 If the user asks to switch profiles, refuse the switch and instruct the user to
 start a new session with the desired profile assigned. Do not continue under the
 new profile in the current session.
 
-The assigned profile defines which deliverables the agent may produce or review.
-A requested deliverable outside that set is a stop condition, not a reason to
-change profiles. A deliverable or standard may constrain already-authorized work;
-neither may expand authority, authorize another deliverable, alter the accepted
-scope, or change the assigned profile.
+The assigned profile defines which deliverables the agent is permitted to
+produce or review. A request outside that set is a stop condition, not a reason
+to change profiles. Deliverables and standards constrain authorized work but
+cannot expand authority, authorize another deliverable, alter scope, or change
+the assigned profile.
 
 Native description triggering may discover an applicable deliverable or standard
 after profile assignment. It must never select, load, or switch a profile, and

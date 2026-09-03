@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Regression harness for the structural checks in tools/validate.py.
 
-Each regression builds a throwaway repository in a temporary directory, copies
-the real validator into it, and runs that validator as a subprocess, so every
-assertion rests on the validator's own exit status and diagnostic output.
-Temporary fixtures are removed on the way out, including when a regression
-fails.
+Each regression builds a temporary repository containing the real validator
+and runs it as a subprocess. Assertions use only the validator's exit status
+and diagnostics; temporary fixtures are removed even when a regression fails.
 """
 import pathlib
 import subprocess

@@ -46,7 +46,7 @@ Comments describe only the code that currently exists. They must not contain:
 
 ## One home per kind of information
 
-Every kind of information has exactly one authoritative location. See
+Each kind of information has one authoritative home. See
 [`references/information-location.md`](references/information-location.md)
 for the canonical table.
 
@@ -59,8 +59,8 @@ for the canonical table.
   describe it accurately. Do not expand scope solely to clean unrelated
   comments.
 * Temporary code must be authorized by the commissioning instruction. A source
-  comment may describe the temporary behaviour and the concrete condition that
-  removes it, but must not carry the authorization itself.
+  comment is permitted to describe the temporary behaviour and its concrete
+  removal condition, but must not carry the authorization itself.
 * Inline comments are two sentences maximum. Docstrings and block comments
   are three sentences maximum. A comment that requires more is a signal
   the code needs simplifying or the information belongs elsewhere.

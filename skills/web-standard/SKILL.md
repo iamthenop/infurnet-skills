@@ -11,9 +11,9 @@ metadata:
 # Web standard
 
 The shell is the structure feature pages reuse. This standard assumes Spring
-MVC with Thymeleaf, server-rendered, with no JavaScript framework, CSS
-preprocessor, third-party design system, icon package, or web font — the
-shell requires none, and none may be introduced.
+MVC with Thymeleaf and server-rendered pages. The shell requires no JavaScript
+framework, CSS preprocessor, third-party design system, icon package, or web
+font; none is permitted.
 
 ## Template directory structure
 
@@ -39,11 +39,11 @@ way.
 
 ## Page skeleton and fragment ownership
 
-`layout/app.html` is the only place the document shell is defined: a
-parameterised fragment `page(shell, content)` providing, exactly once each,
-the document head, a skip-to-content link, the header, primary navigation,
-`<main id="main-content">`, and the footer. Feature templates must not
-recreate the shell; they compose the layout:
+`layout/app.html` is the only place the document shell is defined. Its
+parameterised `page(shell, content)` fragment provides exactly one document
+head, skip-to-content link, header, primary navigation,
+`<main id="main-content">`, and footer. Feature templates must not recreate
+the shell; they compose the layout:
 
 ```html
 <html th:replace="~{layout/app :: page(${shell}, ~{::content})}">
@@ -82,10 +82,10 @@ sheet; those belong to feature work.
 ## The logo
 
 The approved logo is served as a preserved static asset at its declared path.
-Do not rasterize, redraw, recolour, or embed its path into a template.
-Reference it as a static asset and size it through the `.app-logo` CSS rule,
-not image `width`/`height` attributes. Where the adjacent project name
-identifies it, the image may use an empty `alt`.
+Do not rasterize, redraw, recolour, or embed its path into a template; reference
+it as a static asset and size it through `.app-logo`, not image
+`width`/`height` attributes. When the adjacent project name identifies the
+logo, empty `alt` text is permitted.
 
 ## Accessibility baseline
 
@@ -110,16 +110,16 @@ identifies it, the image may use an empty `alt`.
 ## Feedback types
 
 `FeedbackLevel` supports `success`, `warning`, `danger`, and `info`. Each
-message shows a text label (severity is never colour-only), a heading, and
-body text, and selects a live-region role (`alert` for problems, `status` for
-information). Palette-backed colour only reinforces the label.
+message includes a text severity label, heading, body text, and a live-region
+role: `alert` for problems or `status` for information. Palette-backed colour
+only reinforces that text.
 
 ## Error-page conventions
 
 Every error page renders through the shell, shows a plain-language heading
 and a restrained explanation, and offers a safe route back. Error pages must
-not expose exception class names, stack traces, SQL, or credentials. A 500
-page may show a correlation reference.
+not expose exception class names, stack traces, SQL, or credentials. A
+correlation reference is permitted on a 500 page.
 
 ## Inline styling and raw values
 

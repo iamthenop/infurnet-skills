@@ -4,6 +4,7 @@ description: "Standard for user-facing documentation. Use when writing or changi
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: end-user
   skill-dependency: prose-discipline
 ---
 

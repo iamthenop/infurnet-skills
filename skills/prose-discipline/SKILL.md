@@ -205,13 +205,34 @@ Before submitting or sending prose, verify:
 
 If any check fails, revise before submitting.
 
+## Complexity settings
+
+Named prose complexity settings are defined in
+[`references/complexity-settings.md`](references/complexity-settings.md).
+
+A prose setting defines density and readability limits only. It does not grant
+authority, select a profile, authorize a deliverable, or select any other
+policy.
+
+Complexity is not a measure of technical value. Use the simplest prose that
+preserves the required meaning.
+
 ## Scripts
 
 * [`scripts/check-prose.py`](scripts/check-prose.py) — checks prose
   density and vocabulary sprawl in source comments, docstrings, and
-  Markdown files. Run it over changed source and document files before
-  commits reach review. Invoke as:
-  `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [path ...]`
+  Markdown files. Density checks use the named prose setting supplied
+  with `--setting`; when none is supplied, `default` applies. Inline
+  source commentary uses the extractor-selected `inline` setting.
+  Run it over changed source and document files before commits reach
+  review. Invoke as:
+  `python3 <vendor-path>/skills/prose-discipline/scripts/check-prose.py [--setting <name>] [path ...]`
+* [`scripts/check-readability.py`](scripts/check-readability.py) — measures
+  Flesch-Kincaid Grade Level for the same Markdown prose, source comments,
+  and docstrings. It reports the measured grade with or without a named
+  setting, and fails a file whose grade exceeds the maximum that setting
+  defines. Invoke as:
+  `python3 <vendor-path>/skills/prose-discipline/scripts/check-readability.py [--setting <name>] [path ...]`
 
 ## Final rule
 

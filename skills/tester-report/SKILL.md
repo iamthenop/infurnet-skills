@@ -4,6 +4,7 @@ description: "Produce the Tester report for completed validation work. Use when 
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: default
 ---
 
 # Tester report

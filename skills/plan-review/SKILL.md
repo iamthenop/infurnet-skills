@@ -4,6 +4,7 @@ description: "Review an agent's proposed work plan before execution begins. Use 
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: default
 ---
 
 # Plan review

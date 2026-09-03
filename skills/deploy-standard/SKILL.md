@@ -124,9 +124,10 @@ The fixture must require no manual developer preload or direct pull of a
 replacement image. It must derive from the same canonical image used by local
 orchestration.
 
-For tests that require real container behaviour, a local Docker-compatible
-daemon is a prerequisite. That requirement does not justify undeclared
-dependency resolution over the network.
+Prerequisite status is test-specific. A test that requires a local
+Docker-compatible daemon for real container behaviour must declare that
+prerequisite. That requirement does not justify undeclared dependency
+resolution over the network.
 
 ## Release artifacts
 

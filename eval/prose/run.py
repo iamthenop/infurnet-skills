@@ -333,6 +333,30 @@ def absent_setting_uses_default(results, workdir):
     )
 
 
+def malformed_overlap_rejected(results, workdir):
+    """An overlap limit outside 0-100% is a reference error, not a clean run.
+
+    A measured ratio never leaves that range, so a wider or non-finite limit
+    passes every comparison and reports no repetition at all.
+    """
+    for index, bad in enumerate(("40", "NaN%", "inf", "-10%", "250%")):
+        root = workdir / f"bad-overlap-{index}"
+        script = build_tree(root)
+        write(root / "skills" / "prose-discipline" / "references"
+              / "complexity-settings.md",
+              SETTINGS_REFERENCE.replace(f"{DEFAULT_OVERLAP}%", bad, 1))
+        fixture = root / "fixtures" / "overlap.md"
+        write(fixture, OVERLAP_OVER + "\n")
+
+        code, output = run_checker(script, [str(fixture)])
+        results.check(
+            f"repeat overlap {bad!r} — rejected as a reference error",
+            code == 2 and bad in output,
+            f"exit {code}, expected 2 naming the value. A limit outside "
+            f"0-100% silently disables the comparison. Output:\n{output}",
+        )
+
+
 def unknown_setting_rejected(results, workdir):
     """An unknown setting name is a request error, not a silent fallback."""
     root = workdir / "unknown-setting"
@@ -712,6 +736,7 @@ def main():
         compliant_governance_passes(results, workdir)
         caller_setting_resolves_from_reference(results, workdir)
         absent_setting_uses_default(results, workdir)
+        malformed_overlap_rejected(results, workdir)
         unknown_setting_rejected(results, workdir)
         extractor_setting_rejected_as_caller_setting(results, workdir)
         inline_prose_uses_the_inline_setting(results, workdir)

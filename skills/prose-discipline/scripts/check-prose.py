@@ -38,6 +38,7 @@ Exit status:
 import argparse
 import ast
 import io
+import math
 import re
 import sys
 import tokenize
@@ -191,7 +192,11 @@ def parse_count(name, column, raw):
 
 
 def parse_ratio(name, column, raw):
-    """Read a percentage limit from one settings-table cell as a fraction."""
+    """Read a percentage limit from one settings-table cell as a fraction.
+
+    A measured overlap ratio sits between zero and one. A limit outside that
+    range never reports repetition, so the reference is rejected instead.
+    """
     text = raw.strip()
     percent = text.endswith("%")
     try:
@@ -200,7 +205,13 @@ def parse_ratio(name, column, raw):
         raise ProseError(
             f"setting {name!r} carries {raw!r} under {column!r} — a limit "
             f"must be a percentage or a fraction") from exc
-    return value / 100.0 if percent else value
+    ratio = value / 100.0 if percent else value
+    if not math.isfinite(ratio) or not 0.0 <= ratio <= 1.0:
+        raise ProseError(
+            f"setting {name!r} carries {raw!r} under {column!r} — a limit "
+            f"must be a finite ratio from 0% to 100%; a value outside that "
+            f"range never reports repetition")
+    return ratio
 
 
 FIELD_PARSERS = {

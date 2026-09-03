@@ -115,13 +115,13 @@ DATABASE` and `GRANT USAGE ON SCHEMA` establish reachability. `GRANT
 SELECT ON TABLE` grants object access. Reachability belongs here;
 object access belongs in `0100`.
 
-**Authority constraint:** role names, privilege boundaries, and service
-accounts require explicit approval before introduction. Existing service
-accounts require approval before rename, merge, split, or removal.
+**Authority constraint:** explicit approval is required to introduce role names,
+privilege boundaries, or service accounts. Existing service accounts must not
+be renamed, merged, split, or removed without that approval.
 
 Elevated capabilities such as `SUPERUSER`, `CREATEDB`, `CREATEROLE`,
-`REPLICATION`, and `BYPASSRLS` require explicit approval. Role membership
-also requires explicit approval.
+`REPLICATION`, and `BYPASSRLS`, as well as role membership, require explicit
+approval.
 
 **Template:** [`assets/0020-service-accounts-template.sql`](../assets/0020-service-accounts-template.sql)
 
@@ -149,9 +149,9 @@ create new state or mutation surfaces? Exposure belongs here; mutation
 surfaces belong in `0200`.
 
 **Read-only view vs writable view vs writer function:** a read-only view
-selects from base tables. An `INSTEAD OF` trigger makes a view writable and
-delegates to base-table DML; it belongs here only when the trigger does not
-replace writer authority.
+selects from base tables. An `INSTEAD OF` trigger adds write behaviour through
+delegated base-table DML; that object remains here only when the trigger does
+not replace writer authority.
 
 A purpose-built mutation surface for a specific application role is a writer
 function and belongs in `0200`.

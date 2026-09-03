@@ -22,6 +22,13 @@ READABILITY = SCRIPTS / "check-readability.py"
 PROSE = SCRIPTS / "check-prose.py"
 
 SETTING = "fixture"
+EXTRACTOR_SETTING = "inline"
+INLINE_MAXIMUM = 7
+
+# The grade the approved textstat pin reports for PARAGRAPH. Pinning it here
+# catches a measurement-method change that the provenance regression cannot
+# see, because that regression asks the installed textstat for its own answer.
+PINNED_GRADE = 11.9
 
 # One paragraph on one line, closed by a full stop. The script collapses
 # whitespace and closes an open unit, so a one-line closed paragraph reaches
@@ -36,6 +43,16 @@ SIMPLE = "The check runs. The file passes."
 EXCLUDED = ("The instrumentation subsystem reconciles configuration "
             "parameters throughout a distributed environment.")
 
+# Prose that sits above the fixture's inline maximum but below its file
+# maximum, so an inline comment carrying it fails while a docstring passes.
+OVER_INLINE = ("The docstring records the calling contract a reader "
+               "satisfies beforehand.")
+
+# A docstring simple enough to hold the blended file grade well down, so a
+# dense inline comment in the same file cannot hide behind it.
+SIMPLE_DOC = ("The check runs. The file passes. The list is short. It is "
+              "done. The run ends. The next one starts. The log is clear.")
+
 SETTINGS_REFERENCE = """\
 # Complexity settings fixture
 
@@ -47,9 +64,10 @@ SETTINGS_REFERENCE = """\
 
 ## Settings
 
-| Setting     | Sentence words | Flesch-Kincaid Grade Level |
-| ----------- | -------------: | -------------------------: |
-| `{setting}` |             30 |                    {maximum} |
+| Setting     | Selected by     | Sentence words | Flesch-Kincaid Grade Level |
+| ----------- | --------------- | -------------: | -------------------------: |
+| `{setting}` | `deliverable`   |             30 |                  {maximum} |
+| `{extractor_setting}` | `extractor` |       20 |           {inline_maximum} |
 """
 
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
@@ -60,15 +78,18 @@ def write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
-def build_tree(root, maximum):
-    """Create a skill tree holding both scripts and one named setting."""
+def build_tree(root, maximum, inline_maximum=INLINE_MAXIMUM):
+    """Create a skill tree holding both scripts and both selection mechanisms."""
     scripts = root / "skills" / "prose-discipline" / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     shutil.copy(READABILITY, scripts / READABILITY.name)
     shutil.copy(PROSE, scripts / PROSE.name)
     write(root / "skills" / "prose-discipline" / "references"
           / "complexity-settings.md",
-          SETTINGS_REFERENCE.format(setting=SETTING, maximum=maximum))
+          SETTINGS_REFERENCE.format(
+              setting=SETTING, maximum=maximum,
+              extractor_setting=EXTRACTOR_SETTING,
+              inline_maximum=inline_maximum))
     return scripts / READABILITY.name
 
 
@@ -118,6 +139,23 @@ def repeated_runs_agree(results, workdir):
         "repeated runs — identical exit status and output",
         first == second,
         f"first run {first!r} differs from second run {second!r}",
+    )
+
+
+def fixture_grade_is_pinned(results, workdir):
+    """The fixed fixture reports the grade pinned for the approved textstat."""
+    root = workdir / "pinned-grade"
+    script = build_tree(root, 12)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, PARAGRAPH + "\n")
+
+    _, output = run_script(script, [str(fixture)])
+    results.check(
+        f"fixed fixture — reports the pinned grade {PINNED_GRADE}",
+        measured_grade(output) == PINNED_GRADE,
+        f"expected {PINNED_GRADE}, measured {measured_grade(output)!r}. "
+        f"A different value means the measurement method changed. "
+        f"Output:\n{output}",
     )
 
 
@@ -209,6 +247,130 @@ def unknown_setting_rejected(results, workdir):
         "'absent'" in output,
         f"the rejected name is absent from the output:\n{output}",
     )
+
+
+# --- selection mechanisms -------------------------------------------------
+
+def inline_maximum_binds_inline_prose(results, workdir):
+    """An over-limit inline comment fails though the file grade passes."""
+    root = workdir / "inline-bound"
+    script = build_tree(root, PINNED_GRADE + 1)
+    fixture = root / "fixtures" / "mixed.py"
+    write(fixture, f'"""{SIMPLE_DOC}"""\n\n\n# {EXCLUDED}\ndef run():\n    pass\n')
+
+    code, output = run_script(script, [str(fixture), "--setting", SETTING])
+    results.check(
+        "inline comment above its extractor maximum — script exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    results.check(
+        "inline comment above its extractor maximum — file grade still passes",
+        measured_grade(output) is not None
+        and measured_grade(output) <= PINNED_GRADE + 1,
+        f"the file grade should sit within its own maximum. Output:\n{output}",
+    )
+    results.check(
+        "inline comment above its extractor maximum — output names the bound",
+        f"OVER {EXTRACTOR_SETTING} maximum" in output,
+        f"the breached extractor maximum is not named:\n{output}",
+    )
+
+
+def docstring_escapes_the_inline_maximum(results, workdir):
+    """A docstring above the inline maximum passes when its file maximum holds."""
+    root = workdir / "docstring-free"
+    script = build_tree(root, expected_grade(OVER_INLINE) + 1)
+    fixture = root / "fixtures" / "docs.py"
+    write(fixture, f'"""{OVER_INLINE}"""\n')
+
+    code, output = run_script(script, [str(fixture), "--setting", SETTING])
+    results.check(
+        "docstring above the inline maximum — script exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. The docstring measures "
+        f"{expected_grade(OVER_INLINE)}, above the inline maximum "
+        f"{INLINE_MAXIMUM}, and must not be held to it. Output:\n{output}",
+    )
+
+
+def extractor_setting_rejected_as_file_setting(results, workdir):
+    """A caller cannot apply an extractor-selected setting to the file grade."""
+    root = workdir / "extractor-as-file"
+    script = build_tree(root, 12)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, PARAGRAPH + "\n")
+
+    code, output = run_script(
+        script, [str(fixture), "--setting", EXTRACTOR_SETTING])
+    results.check(
+        "extractor-selected setting as --setting — script exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    results.check(
+        "extractor-selected setting as --setting — output names the mechanism",
+        "extractor-selected" in output,
+        f"the selection mechanism is not named:\n{output}",
+    )
+
+
+# --- request and reference validity ---------------------------------------
+
+def missing_path_rejected(results, workdir):
+    """A path the caller supplied that does not exist is a request error."""
+    root = workdir / "missing-path"
+    script = build_tree(root, 12)
+    absent = root / "fixtures" / "absent.md"
+
+    code, output = run_script(script, [str(absent), "--setting", SETTING])
+    results.check(
+        "nonexistent requested path — script exits 2",
+        code == 2,
+        f"expected exit 2, got {code}. Output:\n{output}",
+    )
+    results.check(
+        "nonexistent requested path — output names the path",
+        str(absent) in output,
+        f"the missing path is not named:\n{output}",
+    )
+
+
+def empty_directory_keeps_its_behaviour(results, workdir):
+    """An existing directory holding no supported prose still passes."""
+    root = workdir / "empty-directory"
+    script = build_tree(root, 12)
+    empty = root / "fixtures" / "empty"
+    empty.mkdir(parents=True, exist_ok=True)
+
+    code, output = run_script(script, [str(empty), "--setting", SETTING])
+    results.check(
+        "existing directory with no supported prose — script exits zero",
+        code == 0 and "No files found." in output,
+        f"expected a zero exit and the existing message, got {code}. "
+        f"Output:\n{output}",
+    )
+
+
+# Values float() accepts that cannot bound a grade.
+NON_FINITE = ["nan", "inf", "-inf"]
+
+
+def non_finite_maximum_rejected(results, workdir):
+    """A maximum that is not a finite number is a defect in the reference."""
+    for index, value in enumerate(NON_FINITE):
+        root = workdir / f"non-finite-{index}"
+        script = build_tree(root, value)
+        fixture = root / "fixtures" / "paragraph.md"
+        write(fixture, PARAGRAPH + "\n")
+
+        code, output = run_script(script, [str(fixture), "--setting", SETTING])
+        results.check(
+            f"maximum of {value!r} — script exits 2",
+            code == 2,
+            f"expected exit 2, got {code}. A non-finite maximum passes every "
+            f"comparison and must be rejected. Output:\n{output}",
+        )
 
 
 # --- Markdown boundaries --------------------------------------------------
@@ -307,7 +469,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="readability-regression-") as tmp:
         workdir = pathlib.Path(tmp)
         repeated_runs_agree(results, workdir)
+        fixture_grade_is_pinned(results, workdir)
         grade_comes_from_textstat(results, workdir)
+        inline_maximum_binds_inline_prose(results, workdir)
+        docstring_escapes_the_inline_maximum(results, workdir)
+        extractor_setting_rejected_as_file_setting(results, workdir)
+        missing_path_rejected(results, workdir)
+        empty_directory_keeps_its_behaviour(results, workdir)
+        non_finite_maximum_rejected(results, workdir)
         target_does_not_move_the_grade(results, workdir)
         target_below_grade_fails(results, workdir)
         target_above_grade_passes(results, workdir)

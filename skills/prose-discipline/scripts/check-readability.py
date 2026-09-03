@@ -5,29 +5,37 @@ comments and docstrings.
 
 Usage:
     python3 skills/prose-discipline/scripts/check-readability.py [path ...]
-    --setting NAME    # apply the maximum grade that named setting defines
-    --list-settings   # print the named settings and their maximum grades
+    --setting NAME    # apply a deliverable-selected setting's maximum
+    --list-settings   # print each setting, its mechanism, and its maximum
     --top N           # detail lines per file when no maximum applies
 
 Ownership:
-    named settings and their maximum grades — references/complexity-settings.md
+    named settings, their maximum grades, and the mechanism selecting each
+        one — references/complexity-settings.md
     the grade calculation — textstat.flesch_kincaid_grade()
     the prose boundaries — check-prose.py, read here and never changed
-    the applied maximum — named by the caller through --setting, never
-        inferred from a path, a filename, or file content
+
+Selection follows the reference's `Selected by` column, and this script adds
+no third mechanism:
+    deliverable-selected — named by the caller through --setting, bounding
+        the file-level grade
+    extractor-selected — bounding every prose unit the extractor labels with
+        that setting's own name, so `inline` bounds inline commentary and
+        leaves a docstring alone
+    neither is inferred from a path, a filename, or file content
 
 This script adds no readability formula, no syllable counter, no readability
 dictionary, and no tokenizer, and the boundaries it inherits keep Markdown
 frontmatter, headings, and fenced code outside the measurement.
 
 Exit status:
-    0   every measured file sits within the applied maximum, or no maximum
-        applies
-    1   a measured file sits above the applied maximum
+    0   every applied maximum holds, or no maximum applies
+    1   a file grade or a prose unit sits above the maximum that binds it
     2   the request or the settings reference could not be read
 """
 import argparse
 import importlib.util
+import math
 import re
 import sys
 from pathlib import Path
@@ -38,11 +46,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
 PROSE_CHECKER = SCRIPT_DIR / "check-prose.py"
 
-# The reference column that carries the maximum grade for each setting.
-# The header cell must match exactly, so the setting-contract table above
-# it, which describes the same metric in a sentence, is not mistaken for
-# the settings table.
+# The reference columns this script reads. Each header cell must match
+# exactly, so the setting-contract table above the settings table, which
+# describes the same metric in a sentence, is not mistaken for it.
 GRADE_COLUMN = "Flesch-Kincaid Grade Level"
+MECHANISM_COLUMN = "Selected by"
+
+# The two selection mechanisms the reference names.
+BY_DELIVERABLE = "deliverable"
+BY_EXTRACTOR = "extractor"
 
 SENTENCE_END = (".", "!", "?")
 SNIPPET_WIDTH = 60
@@ -100,10 +112,10 @@ def is_delimiter(cells):
 
 
 def read_settings(path=SETTINGS_REFERENCE):
-    """Read setting names and maximum grades from the complexity reference.
+    """Read each setting's selection mechanism and maximum grade.
 
-    The reference owns both. Neither the names nor the numbers are held in
-    this script.
+    The reference owns the names, the mechanisms, and the numbers. This
+    script holds none of them.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -111,40 +123,74 @@ def read_settings(path=SETTINGS_REFERENCE):
         raise ReadabilityError(f"cannot read {path}: {exc}") from exc
 
     settings = {}
-    column = None
+    grade_column = mechanism_column = None
     for line in text.splitlines():
         cells = table_cells(line)
         if cells is None:
-            column = None
+            grade_column = mechanism_column = None
             continue
-        if column is None:
-            if GRADE_COLUMN in cells:
-                column = cells.index(GRADE_COLUMN)
+        if grade_column is None:
+            if GRADE_COLUMN in cells and MECHANISM_COLUMN in cells:
+                grade_column = cells.index(GRADE_COLUMN)
+                mechanism_column = cells.index(MECHANISM_COLUMN)
             continue
-        if is_delimiter(cells):
-            continue
-        if len(cells) <= column:
+        if is_delimiter(cells) or len(cells) <= max(grade_column,
+                                                    mechanism_column):
             continue
         name = cells[0].strip("`")
         try:
-            settings[name] = float(cells[column])
+            maximum = float(cells[grade_column])
         except ValueError:
             continue
+        if not math.isfinite(maximum):
+            raise ReadabilityError(
+                f"{path}: setting {name!r} carries a non-finite maximum "
+                f"{cells[grade_column]!r} — a maximum grade must be a "
+                f"finite number")
+        mechanism = cells[mechanism_column].strip("`")
+        if mechanism not in (BY_DELIVERABLE, BY_EXTRACTOR):
+            raise ReadabilityError(
+                f"{path}: setting {name!r} names selection mechanism "
+                f"{mechanism!r}, not {BY_DELIVERABLE!r} or {BY_EXTRACTOR!r}")
+        settings[name] = (mechanism, maximum)
 
     if not settings:
         raise ReadabilityError(
-            f"{path}: no named settings found under a "
-            f"{GRADE_COLUMN!r} column")
+            f"{path}: no named settings found under {MECHANISM_COLUMN!r} "
+            f"and {GRADE_COLUMN!r} columns")
     return settings
 
 
-def resolve_maximum(settings, name):
-    """Return the maximum grade a named setting defines."""
+def resolve_file_maximum(settings, name):
+    """Return the maximum a caller-named deliverable-selected setting defines.
+
+    An extractor-selected setting is chosen by the extractor, so a caller
+    cannot apply one to the file-level grade.
+    """
     if name not in settings:
         known = ", ".join(sorted(settings))
         raise ReadabilityError(
             f"unknown prose setting {name!r} — the reference defines: {known}")
-    return settings[name]
+    mechanism, maximum = settings[name]
+    if mechanism != BY_DELIVERABLE:
+        raise ReadabilityError(
+            f"prose setting {name!r} is {mechanism}-selected — --setting "
+            f"takes a {BY_DELIVERABLE}-selected setting, and the extractor "
+            f"applies {name!r} to the prose it identifies")
+    return maximum
+
+
+def extractor_maxima(settings):
+    """Map each extractor-selected setting name to the maximum it bounds.
+
+    The extractor labels a prose unit with its kind. An extractor-selected
+    setting bounds the kind carrying its own name.
+    """
+    return {
+        name: maximum
+        for name, (mechanism, maximum) in settings.items()
+        if mechanism == BY_EXTRACTOR
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +238,31 @@ def measure_file(path, prose):
     return file_grade, measured
 
 
-def detail_lines(measured, maximum, top):
+def unit_maximum(kind, maxima):
+    """The extractor-selected maximum bounding one prose kind, if any."""
+    return maxima.get(kind)
+
+
+def over_units(measured, maxima):
+    """The prose units sitting above the extractor maximum that binds them."""
+    return [
+        unit for unit in measured
+        if unit_maximum(unit[1], maxima) is not None
+        and unit[2] > unit_maximum(unit[1], maxima)
+    ]
+
+
+def detail_lines(measured, maximum, maxima, top):
     """Select the units that locate a file's highest-complexity prose."""
+    selected = over_units(measured, maxima)
     if maximum is None:
-        selected = sorted(measured, key=lambda u: (-u[2], u[0]))[:top]
+        ranked = sorted(measured, key=lambda u: (-u[2], u[0]))[:top]
+        selected = selected + [u for u in ranked if u not in selected]
     else:
-        selected = [u for u in measured if u[2] > maximum]
+        selected = selected + [
+            u for u in measured
+            if u[2] > maximum and u not in selected
+        ]
     return sorted(selected, key=lambda u: (u[0], u[2]))
 
 
@@ -230,21 +295,35 @@ def build_parser():
     return parser
 
 
-def report(results, maximum, top):
-    """Print one block per measured file and return the count over the maximum."""
-    over = 0
+def report(results, maximum, maxima, top):
+    """Print one block per measured file and count the files that fail.
+
+    A file fails when its grade sits above the caller's deliverable maximum,
+    or when any prose unit sits above the extractor maximum that binds it.
+    """
+    failed = 0
     for path, file_grade, measured in results:
         header = f"  grade {file_grade:.2f}"
+        over_file = maximum is not None and file_grade > maximum
         if maximum is not None:
             header += f"  (maximum {maximum:g})"
-            if file_grade > maximum:
+            if over_file:
                 header += "  OVER"
-                over += 1
+        units = detail_lines(measured, maximum, maxima, top)
+        breaches = over_units(measured, maxima) if maximum is not None else []
+        if over_file or breaches:
+            failed += 1
         print(f"\n{path}")
         print(header)
-        for lineno, kind, unit_grade, text in detail_lines(measured, maximum, top):
-            print(f"  {lineno:4d}  [{kind}] {unit_grade:6.2f}  {snippet(text)}")
-    return over
+        for unit in units:
+            lineno, kind, unit_grade, text = unit
+            bound = unit_maximum(kind, maxima)
+            mark = ""
+            if bound is not None and unit_grade > bound:
+                mark = f"  OVER {kind} maximum {bound:g}"
+            print(f"  {lineno:4d}  [{kind}] {unit_grade:6.2f}  "
+                  f"{snippet(text)}{mark}")
+    return failed
 
 
 def main(argv=None):
@@ -254,10 +333,17 @@ def main(argv=None):
         settings = read_settings()
         if args.list_settings:
             for name in sorted(settings):
-                print(f"{name}  {GRADE_COLUMN} {settings[name]:g}")
+                mechanism, maximum = settings[name]
+                print(f"{name}  {mechanism}-selected  "
+                      f"{GRADE_COLUMN} {maximum:g}")
             return 0
         maximum = (None if args.setting is None
-                   else resolve_maximum(settings, args.setting))
+                   else resolve_file_maximum(settings, args.setting))
+        maxima = extractor_maxima(settings)
+        missing = [p for p in args.paths if not Path(p).exists()]
+        if missing:
+            raise ReadabilityError(
+                "requested path not found: " + ", ".join(sorted(missing)))
         prose = load_prose_checker()
     except ReadabilityError as exc:
         print(f"ERROR — {exc}", file=sys.stderr)
@@ -279,17 +365,17 @@ def main(argv=None):
         print(f"No prose found in {len(files)} file(s).")
         return 0
 
-    over = report(results, maximum, args.top)
+    failed = report(results, maximum, maxima, args.top)
 
     if maximum is None:
         print(f"\n{len(results)} file(s) measured — no maximum applied")
         return 0
-    if over:
-        print(f"\nFAIL — {over} of {len(results)} file(s) above "
-              f"{GRADE_COLUMN} {maximum:g}")
+    if failed:
+        print(f"\nFAIL — {failed} of {len(results)} file(s) above "
+              f"an applied {GRADE_COLUMN}")
         return 1
     print(f"\nPASS — {len(results)} file(s) measured, none above "
-          f"{GRADE_COLUMN} {maximum:g}")
+          f"an applied {GRADE_COLUMN}")
     return 0
 
 

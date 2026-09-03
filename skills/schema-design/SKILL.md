@@ -28,7 +28,7 @@ grant design authority.
 
 ## Initialization rules
 
-* Initialization files execute in filename order.
+* Initialization files run in filename order.
 * An earlier file must not depend on an object created by a later file.
 * Each object belongs to one stratum. Do not duplicate objects or use
   conditional SQL to hide incorrect placement.
@@ -93,9 +93,10 @@ grant-scope rules, and privilege verification expectations.
 
 Seed records must be explicitly approved. Do not invent principals or
 identities, service accounts, grants, policies, vocabulary entries, tasks,
-or sample records. Generated identifiers are not stable constants unless
-explicitly designed and approved as such. Baseline and development data
-remain in their separate strata.
+or sample records.
+
+Generated identifiers are not stable constants unless explicitly designed and
+approved; baseline and development data remain in their separate strata.
 
 ## Validation
 

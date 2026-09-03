@@ -5,7 +5,7 @@ requirements: frontmatter, required prose sections, repository paths, branch
 state, allowed-surface overlap, placeholders, and uncommitted changes. It reads
 local and fetched refs without mutation; human review still decides
 authorization, semantic adequacy, instruction interpretation, stale remote
-state, and overall drafting quality.
+state, and drafting quality.
 """
 import argparse
 import re

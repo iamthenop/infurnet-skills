@@ -21,8 +21,7 @@ and require escalation.
 ## Required fields
 
 Every workorder uses the fields in
-[`assets/workorder-template.md`](assets/workorder-template.md). The template
-owns the field list, and the sections below govern drafting.
+`assets/workorder-template.md`. The sections below govern how each field is drafted.
 
 For a field that does not apply, say so; omission does not grant authority.
 
@@ -146,8 +145,7 @@ PR fix workorders additionally:
 The builder replies to each addressed review comment with the fix commit SHA
 and a one-line change summary. A finding without a reply stays open.
 
-The PR review record authorizes the fix. Only findings in that record are in
-scope; new findings require another fix workorder.
+The PR review record authorizes the fix. Only recorded findings are in scope; new findings require another fix workorder.
 
 ### Builder report
 

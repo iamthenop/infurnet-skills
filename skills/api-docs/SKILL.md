@@ -4,6 +4,7 @@ description: "Form conventions for API reference documents. Use when creating, e
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: end-user
   skill-dependency: vocabulary-control,prose-discipline
 ---
 

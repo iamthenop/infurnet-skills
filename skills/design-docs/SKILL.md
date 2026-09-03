@@ -4,6 +4,7 @@ description: "Author and structure design documentation — architecture files, 
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: design
   skill-dependency: vocabulary-control,prose-discipline
 ---
 

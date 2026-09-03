@@ -4,6 +4,7 @@ description: "Draft bounded execution authority for an agent. Use when writing, 
 license: MIT
 metadata:
   skill-type: deliverable
+  prose-setting: instruction
   skill-dependency: prose-discipline
 ---
 

@@ -57,10 +57,9 @@ not expose raw sensitive values in examples; use obviously fake values.
 
 ## Tone
 
-Prose quality follows `prose-discipline`. User documentation adds one
-constraint: write at the level of the task, not the implementation.
-Do not over-explain internal architecture. Do not use technical
-precision where plain language serves the user better.
+Prose quality follows `prose-discipline`. Write at the task level, not the
+implementation level. Prefer plain language and omit internal architecture
+unless the user needs it.
 
 ## Relationship to implementation
 

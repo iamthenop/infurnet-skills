@@ -39,18 +39,17 @@ to the deciding authority if the answer requires a decision.
 The same skill applies in both modes. The response path differs.
 
 **Local VS Code (interactive)**
-Claude Code stops inline. The designer reads the plan or stop prompt
-in the same session and responds directly. Corrections to the plan
-take effect immediately. Mid-execution stops are synchronous — the
-builder waits for the response before continuing.
+Claude Code stops inline; the designer reads the plan or stop prompt
+and responds in the same session. Corrections take effect immediately.
+Mid-execution stops are synchronous, so the builder waits before
+continuing.
 
 **Cloud instance (asynchronous)**
-Claude Code stops and produces a stop report, then halts. The
-designer reads the report out of band and responds by issuing a
-corrective workorder or supplying the missing decision. The builder
-does not resume until a new instruction arrives. A cloud stop requires
-a bounded response document the executor can act on without further
-clarification.
+Claude Code stops, produces a stop report, and halts. The designer
+responds out of band with a corrective workorder or missing decision;
+the builder does not resume before that instruction arrives. The
+response must be bounded enough for the executor to act without
+further clarification.
 
 ## Reading a Claude Code plan
 

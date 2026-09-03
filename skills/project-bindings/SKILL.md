@@ -10,12 +10,10 @@ metadata:
 
 # Repository bindings
 
-Standards are written to be project-neutral: they state rules against
-declared values — "the approved compute module", "the strata in force",
-"the registry naming contract" — rather than hard-coding them. The bindings
-file is where those values are declared, once, for one repository. It is
-the single dereference target that lets every standard stay stable while
-the project changes.
+Standards stay project-neutral by naming declared values instead of
+hard-coding them: `approved compute module`, `strata in force`, `registry
+naming contract`. The repository bindings file declares each project value
+once. Standards dereference that file as project values change.
 
 One bindings file per repository, at the repository root, named in the
 repository's governance entry point. It is mutable by design; that is why
@@ -43,26 +41,23 @@ or agent instruction dereferences by name. Typical binding classes:
 * **Rules** are not bindings. A rule lives in the standard that owns it;
   the bindings file declares values the rule consumes. If an entry says
   "must" or "must not", it is in the wrong file.
-* **Design** is not a binding. Boundaries, contracts, and states live in
-  architecture documents; the bindings file may name where they live, not
-  what they say.
+* **Design** is not a binding. Boundaries, contracts, and states live in architecture documents. Naming their locations is permitted; defining their content in the bindings file is not.
 * **Behaviour** is not a binding. Current behaviour is code; the bindings
   file does not describe it.
 * **Secrets and environment values** are never bindings. Bindings are
   committed text.
 
-One test: if the value could differ between two repositories consuming the
-same standards without either being wrong, it is a binding. If changing it
-changes an obligation, it is a rule and belongs in a standard.
+One test: a value is a binding when two repositories can differ on it while
+both still conform to the same standards. A change that alters an obligation
+changes a rule, which belongs in a standard.
 
 ## Materializing a bindings file
 
-Start from the bundled template,
-[`references/bindings-template.md`](references/bindings-template.md):
-copy it to the consuming repository root, keep the preamble, delete
-sections whose governing skills are not installed, and fill or plainly
-defer each value. The template carries form only; every value is the
-consuming repository owner's decision.
+Start from
+[`references/bindings-template.md`](references/bindings-template.md). Copy it
+to the consuming repository root and keep the preamble. The template carries
+form only; remove sections for uninstalled skills, then fill or defer each
+value as the consuming repository owner decides.
 
 ## Binding format
 

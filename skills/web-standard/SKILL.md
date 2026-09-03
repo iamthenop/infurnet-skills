@@ -81,11 +81,11 @@ sheet; those belong to feature work.
 
 ## The logo
 
-The approved logo is served as a preserved static asset at its declared path.
-Do not rasterize, redraw, recolour, or embed its path into a template; reference
-it as a static asset and size it through `.app-logo`, not image
-`width`/`height` attributes. When the adjacent project name identifies the
-logo, empty `alt` text is permitted.
+The approved logo remains an unchanged static resource. Serve it from its
+declared path and size it through `.app-logo`, not image `width`/`height`
+attributes; do not rasterize, redraw, recolour, or embed the path into a
+template. When the adjacent project name identifies the logo, empty `alt` text
+is permitted.
 
 ## Accessibility baseline
 

@@ -1,7 +1,9 @@
 <!--
 COMPLETION_CHECKLIST — mark each section included or not_applicable before committing:
+
   preconditions: included | not_applicable
   asynchronous_work: included | not_applicable
+
   retry_and_recovery: included | not_applicable
   state_boundary: included | not_applicable
 -->

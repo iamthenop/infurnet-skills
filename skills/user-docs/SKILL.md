@@ -10,66 +10,82 @@ metadata:
 
 # User documentation standard
 
-User documentation must be accurate, task-oriented, and grounded in
-implemented behaviour. Do not document planned behaviour as existing
-behaviour. Do not turn internal standards or architecture text into user
-instructions.
+User docs must match what the system does now. Write them to help a user finish
+a task.
 
-Write for the user performing a task. Prefer concrete steps, expected
-results, warnings, examples, and recovery paths. Avoid internal
-implementation detail unless it changes what the user must do.
+Do not present planned work as current behaviour. Do not turn internal rules or
+design text into user instructions.
+
+Write for the person doing the task. Use clear steps, expected results,
+warnings, examples, and recovery help.
+
+Leave out code detail unless it changes what the user must do.
 
 ## Structure
 
-Each user guide page makes clear:
+Each user guide makes these points clear:
 
 * who the page is for;
-* what task it helps complete;
+* the task it covers;
 * prerequisites;
 * steps;
 * expected result;
-* common failure modes;
-* where uncertainty remains.
+* common failures;
+* any known uncertainty.
 
 ## Accuracy
 
-Before documenting behaviour, verify it from code, tests, CLI help, API
-schema, or an approved authorizing instruction. If behaviour is not
-implemented, mark it clearly as planned — and only when documenting planned
-behaviour is itself authorized.
+Check behaviour before you document it. Use code, tests, CLI help, an API
+schema, or an approved instruction as evidence.
 
-Do not invent commands, flags, config keys, permissions, workflows,
-screenshots, API fields, or file paths.
+If a feature does not exist yet, call it planned only when the work allows
+planned documentation.
+
+Do not invent:
+
+* commands;
+* flags;
+* config keys;
+* permissions;
+* workflows;
+* screenshots;
+* API fields;
+* file paths.
 
 ## Safety and privacy
 
-User documentation preserves the project's safety and privacy boundaries.
-Do not encourage unsafe handling of sensitive data, claims detached from
-evidence, automated authority, or the bypassing of review boundaries. Do
-not expose raw sensitive values in examples; use obviously fake values.
+Keep the project's safety and privacy rules intact.
+
+Do not tell users to handle sensitive data in an unsafe way. Do not present a
+claim without evidence. Do not bypass review or give automated tools authority
+they do not have.
+
+Use clearly fake values in examples. Never expose a real sensitive value.
 
 ## Commands and examples
 
-* Commands must be copyable.
-* Examples must be minimal and honest.
-* If a command depends on environment setup, state the assumption.
-* If a command is destructive, mark it before the command.
+* Commands must be ready to copy.
+* Keep examples small and accurate.
+* State any setup a command needs.
+* Mark a destructive command before showing it.
 
 ## Tone
 
-Prose quality follows `prose-discipline`. User documentation adds one
-constraint: write at the level of the task, not the implementation.
-Do not over-explain internal architecture. Do not use technical
-precision where plain language serves the user better.
+Prose follows `prose-discipline`.
+
+Write at the level of the user's task. Use plain words when they carry the same
+meaning.
+
+Explain internal design only when the user needs it to complete the task.
 
 ## Relationship to implementation
 
-If documentation work reveals confusing implementation behaviour, improve
-the documentation within the authorized scope. A documentation defect does
-not authorize implementation change; implementation change requires its own
-authorization.
+A documentation defect does not grant authority to change code.
+
+If the system is hard to explain, improve the docs within the approved scope.
+A code change needs its own approval.
 
 ## Final rule
 
-User docs describe what the system actually lets the user do. They do not
-launder intent into fact.
+User docs describe what the system lets a user do now. They do not turn intent
+into fact.

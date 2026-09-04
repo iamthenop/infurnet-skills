@@ -400,7 +400,8 @@ URL_RE = re.compile(
 ANGLE_RE = re.compile(r"<[^<>\s]+>")
 
 # Emphasis keeps its text and loses its delimiters. Delimiters surviving
-# every pass above carry no readable prose at all.
+# every pass above carry no readable prose at all, and each gives way to a
+# space: a delimiter that separated two words must not join them.
 EMPHASIS_RE = re.compile(r"(?<!\w)([*_~]{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
 DELIMITER_RE = re.compile(r"[*~\[\]>|]+")
 ESCAPE_RE = re.compile(r"\\(.)")
@@ -416,9 +417,12 @@ SNAKE_RE = re.compile(r"\w[_\\]\w")
 LEADING_MARKS = "([{\"\'‘“"
 TRAILING_MARKS = ".,;:!?)]}\"\'’”"
 
-# A path carries one of these beside its separator. Without one, a slash
-# joins two ordinary words, as in `and/or` or `pass/fail`.
-PATH_MARKS = ".-_<>"
+# A single slash needs a stronger signal than itself before it reads as a
+# path separator: an extension dot, or an angle placeholder. A hyphen is not
+# one, because `client/server-side` and `read/write-only` are compound words
+# a reader reads. An underscore is not one either, because an underscore
+# joining word characters is already code by its own rule.
+PATH_MARKS = ".<>"
 PATH_PREFIXES = "@~./"
 
 SENTENCE_END = (".", "!", "?")
@@ -486,7 +490,7 @@ def normalize_prose(text):
     text = ANGLE_RE.sub(CODE_PLACEHOLDER, text)
     text = EMPHASIS_RE.sub(r"\2", text)
     text = replace_code_tokens(" ".join(text.split()))
-    text = DELIMITER_RE.sub("", ESCAPE_RE.sub(r"\1", text))
+    text = DELIMITER_RE.sub(" ", ESCAPE_RE.sub(r"\1", text))
     text = " ".join(text.split())
     # A list item or a table cell often carries no terminal mark. Without
     # one, the measurement reads two units as a single long sentence.

@@ -152,6 +152,11 @@ MIXED_SENTENCES = ("The check runs `a`. The file passes [here](x). The report "
 # discards them and reports 1; the sentence limit counts all four.
 SHORT_SENTENCES = "Runs now. Passes now. Lands now. Holds now."
 
+# A delimiter separates the words beside it. Removing it must leave that
+# separation behind: 9 words against the 8 the joined form would count, so
+# the caller limit reports the difference.
+DELIMITED_UNIT = "The read|write record holds after the second review."
+
 # A hedge and a vocabulary term written inside code spans. Normalizing them
 # away would silence both findings.
 SPANNED_POLICY = "The check will `utilize` the record and it `may` stop and it could halt."
@@ -911,6 +916,22 @@ def policy_rules_read_the_written_prose(results, workdir):
     )
 
 
+def delimiter_does_not_join_words(results, workdir):
+    """Surviving syntax cannot concatenate the prose tokens it separated."""
+    root = workdir / "delimiter-density"
+    script = build_tree(root)
+    write(root / "delimited.md", DELIMITED_UNIT + "\n")
+
+    _, _, found = check_one(script, root / "delimited.md",
+                            ["--setting", CALLER_SETTING])
+
+    results.check(
+        "surviving delimiter — the words it separated are counted separately",
+        has(found, f"above {CALLER_SENTENCE_WORDS} words", "longest is 9"),
+        f"expected a 9-word sentence, got: {found}",
+    )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -954,6 +975,7 @@ def main():
         sentence_boundaries_survive_normalization(results, workdir)
         short_sentences_still_count(results, workdir)
         policy_rules_read_the_written_prose(results, workdir)
+        delimiter_does_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

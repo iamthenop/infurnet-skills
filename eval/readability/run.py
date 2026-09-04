@@ -87,6 +87,26 @@ SOURCE_PLAIN = ("The validator reads x and x and rejects the accepted "
 SOURCE_LOADED = ("The validator reads tools/validate.py and --setting and "
                  "rejects the accepted workorder today.")
 
+# Compound words a reader reads. A slash joining two ordinary words is not a
+# path separator, and a hyphen beside it does not make one, so each of these
+# must reach the measurement written as it stands.
+COMPOUND_PROSE = (
+    "The client/server-side boundary holds after review.",
+    "The read/write-only boundary holds after review.",
+    "The and/or boundary holds after review.",
+    "The pass/fail boundary holds after review.",
+    "The OS/architecture boundary holds after review.",
+)
+# The same sentence with its compound already reduced to a stand-in. A
+# compound discarded as notation would measure as this.
+COMPOUND_STANDIN = "The x boundary holds after review."
+
+# A delimiter separates the words beside it. Removing it must leave that
+# separation behind rather than join them into one longer word.
+DELIMITED = "The read|write record holds after review."
+DELIMITER_SEPARATED = "The read write record holds after review."
+DELIMITER_JOINED = "The readwrite record holds after review."
+
 # Visible link text is prose. The label alone must reproduce the grade of the
 # same sentence written without a link, and a different label must move it.
 LABEL_LINKED = "Read [the accepted workorder](skills/a/b.md) before review."
@@ -620,6 +640,44 @@ def visible_prose_still_moves_the_grade(results, workdir):
     )
 
 
+def ordinary_compounds_stay_prose(results, workdir):
+    """A slashed compound is vocabulary, not notation, and stays measured."""
+    root = workdir / "compounds"
+    script = build_tree(root, 30)
+    standin = expected_grade(COMPOUND_STANDIN)
+    for index, text in enumerate(COMPOUND_PROSE):
+        fixture = root / "fixtures" / f"compound-{index}.md"
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        measured = measured_grade(output)
+        token = text.split()[1]
+        results.check(
+            f"{token} — measured as written, not discarded as a path",
+            measured == expected_grade(text) and measured != standin,
+            f"measured {measured!r}, expected {expected_grade(text)}, "
+            f"stand-in measures {standin}",
+        )
+
+
+def delimiters_do_not_join_words(results, workdir):
+    """Removing surviving syntax leaves the separation that syntax carried."""
+    root = workdir / "delimiters"
+    script = build_tree(root, 30)
+    fixture = root / "fixtures" / "delimited.md"
+    write(fixture, DELIMITED + "\n")
+    _, output = run_script(script, [str(fixture)])
+    measured = measured_grade(output)
+
+    results.check(
+        "surviving delimiter — separates the words it stood between",
+        measured == expected_grade(DELIMITER_SEPARATED)
+        and measured != expected_grade(DELIMITER_JOINED),
+        f"measured {measured!r}, separated is "
+        f"{expected_grade(DELIMITER_SEPARATED)}, joined is "
+        f"{expected_grade(DELIMITER_JOINED)}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -650,6 +708,8 @@ def main():
         source_notation_does_not_move_the_grade(results, workdir)
         link_text_stays_measured(results, workdir)
         visible_prose_still_moves_the_grade(results, workdir)
+        ordinary_compounds_stay_prose(results, workdir)
+        delimiters_do_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

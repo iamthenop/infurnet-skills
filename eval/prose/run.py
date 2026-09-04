@@ -165,6 +165,27 @@ TAGGED_UNIT = "The read<br>write record holds after the second review."
 SPANNED_POLICY = "The check will `utilize` the record and it `may` stop and it could halt."
 
 
+# --- stdin fixtures ----------------------------------------------------------
+# S13 wrapped across two physical lines. Neither half reaches the sentence
+# limit, so a finding proves the checker joined them into one prose unit.
+WRAP_FIRST = "The validator reads the accepted workorder and rejects"
+WRAP_SECOND = "the change without a signature."
+
+# Two paragraphs framed by leading, repeated, and trailing blank lines. The
+# findings fall on lines 3 and 7 when blank runs create no unit and still
+# carry line attribution.
+STDIN_PARAGRAPHS = f"\n\n{WRAP_FIRST}\n{WRAP_SECOND}\n\n\n{S13}\n\n"
+STDIN_FIRST_LINE = 3
+STDIN_SECOND_LINE = 7
+
+# A Markdown heading. The Markdown extractor drops it, so the same bytes
+# read from stdin must reach the checker as ordinary prose.
+STDIN_HEADING = f"# {S13}\n"
+
+MIXED_INPUT_ERROR = "stdin '-' cannot be combined with file or directory paths"
+STDIN_SOURCE = "<stdin>"
+
+
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
 SUMMARY_LINE = re.compile(
     r"^(\d+) finding\(s\) across (\d+) file\(s\) "
@@ -202,10 +223,15 @@ def build_tree(root, agents_text=AT_LIMIT):
     return scripts / CHECKER.name
 
 
-def run_checker(script, args):
+def run_checker(script, args, stdin_text=None):
+    """Run the checker, passing `stdin_text` on standard input when given.
+
+    Without it the call inherits this process's standard input, which is
+    what every filesystem regression does.
+    """
     proc = subprocess.run(
         [sys.executable, str(script)] + args,
-        capture_output=True, text=True,
+        input=stdin_text, capture_output=True, text=True,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -232,6 +258,17 @@ def counts(output):
 def check_one(script, path, extra=()):
     """Run the checker over one file and return its findings."""
     code, output = run_checker(script, [str(path)] + list(extra))
+    return code, output, messages(output)
+
+
+def units(output):
+    """Every finding the checker printed, as (line, kind) pairs."""
+    return [(int(line), kind) for line, kind, _ in FINDING_LINE.findall(output)]
+
+
+def check_stdin(script, text, extra=()):
+    """Run the checker over one block of standard input."""
+    code, output = run_checker(script, ["-"] + list(extra), stdin_text=text)
     return code, output, messages(output)
 
 
@@ -951,6 +988,137 @@ def inline_html_does_not_join_words(results, workdir):
     )
 
 
+# --- standard input --------------------------------------------------------
+
+def stdin_joins_contiguous_lines(results, workdir):
+    """A run of nonblank stdin lines is one prose unit at its first line."""
+    root = workdir / "stdin-paragraphs"
+    script = build_tree(root)
+
+    _, output, found = check_stdin(script, STDIN_PARAGRAPHS)
+    results.check(
+        "stdin — one unit per contiguous run, attributed to its first line",
+        units(output) == [(STDIN_FIRST_LINE, "prose"),
+                          (STDIN_SECOND_LINE, "prose")],
+        f"expected units at lines {STDIN_FIRST_LINE} and {STDIN_SECOND_LINE}, "
+        f"saw {units(output)!r}. A wrapped line left unjoined falls under the "
+        f"limit, and a blank run counted as a unit moves the line. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "stdin — the joined unit is measured against the sentence limit",
+        has(found, f"above {DEFAULT_SENTENCE_WORDS} words",
+            f"longest is {words(S13)}"),
+        f"expected a sentence-word finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def stdin_is_named_as_the_source(results, workdir):
+    """Findings from standard input name it, and never name the selector."""
+    root = workdir / "stdin-source"
+    script = build_tree(root)
+
+    _, output, _ = check_stdin(script, STDIN_PARAGRAPHS)
+    results.check(
+        f"stdin — findings sit under {STDIN_SOURCE}",
+        f"\n{STDIN_SOURCE}\n" in output,
+        f"expected a {STDIN_SOURCE} source header. Output:\n{output}",
+    )
+    results.check(
+        "stdin — the selector is not the reported source",
+        "\n-\n" not in output,
+        f"the selector is reported as a source name. Output:\n{output}",
+    )
+
+
+def stdin_is_not_parsed_as_a_format(results, workdir):
+    """Standard input receives no Markdown parsing and no file inference."""
+    root = workdir / "stdin-format"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "heading.md"
+    write(fixture, STDIN_HEADING)
+
+    _, file_output, file_found = check_one(script, fixture)
+    _, stdin_output, stdin_found = check_stdin(script, STDIN_HEADING)
+    results.check(
+        "heading in a Markdown file — excluded by the Markdown extractor",
+        not file_found,
+        f"the fixture must be excluded as a heading, saw {file_found!r}. "
+        f"Output:\n{file_output}",
+    )
+    results.check(
+        "the same bytes on stdin — measured as plain prose",
+        units(stdin_output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(stdin_output)!r}. "
+        f"Output:\n{stdin_output}",
+    )
+
+
+def stdin_rejects_filesystem_paths(results, workdir):
+    """The stdin selector cannot be combined with a path, in either order."""
+    root = workdir / "stdin-mixed"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, S13 + "\n")
+
+    for label, args in (("stdin first", ["-", str(fixture)]),
+                        ("path first", [str(fixture), "-"])):
+        code, output = run_checker(script, args)
+        results.check(
+            f"{label} — rejected as a request error naming the rule",
+            code == 2 and MIXED_INPUT_ERROR in output,
+            f"exit {code}, expected 2 carrying {MIXED_INPUT_ERROR!r}. "
+            f"Output:\n{output}",
+        )
+
+
+def empty_stdin_is_clean(results, workdir):
+    """Empty and whitespace-only standard input create no prose unit."""
+    root = workdir / "stdin-empty"
+    script = build_tree(root)
+
+    for label, text in (("empty", ""), ("whitespace only", "  \n\t\n\n")):
+        code, output, found = check_stdin(script, text)
+        results.check(
+            f"{label} stdin — a clean run with no unit",
+            code == 0 and counts(output) == (0, 0, 0, 0) and not found,
+            f"exit {code} with findings {found!r}. Output:\n{output}",
+        )
+
+
+def stdin_keeps_the_existing_options(results, workdir):
+    """--strict, --vocabulary, and --setting hold their meanings on stdin."""
+    root = workdir / "stdin-options"
+    script = build_tree(root)
+
+    code, _ = run_checker(script, ["-", "--strict"],
+                          stdin_text=STDIN_PARAGRAPHS)
+    results.check(
+        "stdin — --strict exits 1 on a finding",
+        code == 1,
+        f"expected exit 1, got {code}",
+    )
+
+    _, output, found = check_stdin(script, VOCAB + "\n", ["--vocabulary"])
+    results.check(
+        "stdin — --vocabulary reports the vocabulary finding alone",
+        counts(output) == (1, 1, 0, 1) and has(found, "consider: use"),
+        f"summary {counts(output)!r} with {found!r}. Output:\n{output}",
+    )
+
+    _, without, _ = check_stdin(script, S12 + "\n")
+    _, with_setting, found = check_stdin(
+        script, S12 + "\n", ["--setting", CALLER_SETTING])
+    results.check(
+        f"stdin — --setting applies the {CALLER_SETTING} sentence limit",
+        counts(without) == (0, 0, 0, 0)
+        and has(found, f"above {CALLER_SENTENCE_WORDS} words",
+                f"under {CALLER_SETTING}"),
+        f"default saw {counts(without)!r}, {CALLER_SETTING} saw {found!r}. "
+        f"Output:\n{with_setting}",
+    )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -996,6 +1164,12 @@ def main():
         policy_rules_read_the_written_prose(results, workdir)
         delimiter_does_not_join_words(results, workdir)
         inline_html_does_not_join_words(results, workdir)
+        stdin_joins_contiguous_lines(results, workdir)
+        stdin_is_named_as_the_source(results, workdir)
+        stdin_is_not_parsed_as_a_format(results, workdir)
+        stdin_rejects_filesystem_paths(results, workdir)
+        empty_stdin_is_clean(results, workdir)
+        stdin_keeps_the_existing_options(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

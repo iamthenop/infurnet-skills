@@ -227,6 +227,9 @@ preserves the required meaning.
   defines. Invoke as:
   `python3 <vendor-path>/skills/prose-discipline/scripts/check-readability.py [--setting <name>] [path ...]`
 
+For either script, pass `-` as the sole path to read already-selected plain
+prose from standard input. Standard input is not parsed as a file format.
+
 ## Final rule
 
 One pass. One meaning. No assembly required.

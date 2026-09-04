@@ -5,6 +5,7 @@ docstrings, and Markdown files.
 
 Usage:
     python3 skills/prose-discipline/scripts/check-prose.py [path ...]
+    python3 skills/prose-discipline/scripts/check-prose.py -
     --setting NAME    # apply a deliverable-selected setting's density limits
     --density         # density checks only
     --vocabulary      # vocabulary checks only
@@ -75,6 +76,8 @@ DESIGN_SETTING = "design"
 
 # The file whose body prose carries the other zero-hedge invariant.
 SKILL_FILE = "SKILL.md"
+STDIN_PATH = "-"
+STDIN_SOURCE = "<stdin>"
 
 # The two selection mechanisms the reference names.
 BY_DELIVERABLE = "deliverable"
@@ -668,6 +671,36 @@ def extract_markdown_prose(source):
     return items
 
 
+def extract_stdin_prose(source):
+    """Return standard input's prose units as (line, kind, text) triples.
+
+    Standard input carries no file format. A run of nonblank physical lines
+    is one unit, a blank line closes it, and the reported line is the first
+    physical line carrying that unit's text.
+    """
+    items = []
+    para_start = None
+    para_lines = []
+
+    def flush():
+        nonlocal para_start, para_lines
+        if para_lines:
+            items.append((para_start, "prose", " ".join(para_lines)))
+        para_lines = []
+        para_start = None
+
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if not line.strip():
+            flush()
+            continue
+        if para_start is None:
+            para_start = lineno
+        para_lines.append(line.strip())
+
+    flush()
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -770,45 +803,75 @@ def extract_units(path, source):
     return []
 
 
-def zero_hedge_file(path, caller_name):
-    """True when a hard invariant bars every hedge in this file's prose.
+def zero_hedge_prose(name, caller_name):
+    """True when a hard invariant bars every hedge in this source's prose.
 
     `SKILL.md` body prose and prose under the caller-selected `design`
     setting carry no hedge. An extractor-selected setting cannot weaken
     either rule.
     """
-    return path.name == SKILL_FILE or caller_name == DESIGN_SETTING
+    return name == SKILL_FILE or caller_name == DESIGN_SETTING
 
 
-def check_file(path, run_density, run_vocabulary, caller, by_extractor):
-    """Return one file's findings as (path, line, kind, message, category)."""
+def check_source(source_id, source, units, run_density, run_vocabulary,
+                 caller, by_extractor, suffix="", zero_hedges=False):
+    """Return one source's findings as (source, line, kind, message, category).
+
+    `source_id` names the source in the report. A file passes its path and
+    standard input passes its own pseudo-source name.
+    """
     findings = []
-    try:
-        source = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return findings
+    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, suffix)
 
-    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, path.suffix)
-    caller_name, _ = caller
-    zero_hedges = zero_hedge_file(path, caller_name)
-
-    for lineno, kind, text in extract_units(path, source):
+    for lineno, kind, text in units:
         if run_density:
             # The extractor selects a setting named after the prose kind;
             # everything else takes the caller's setting.
             selected = (kind, by_extractor[kind]) if kind in by_extractor else caller
             findings.extend(
-                (path, ln, k, msg, DENSITY)
+                (source_id, ln, k, msg, DENSITY)
                 for ln, k, msg in check_density(
                     lineno, kind, text, stop_words, selected, zero_hedges)
             )
         if run_vocabulary:
             findings.extend(
-                (path, ln, k, msg, VOCABULARY_CATEGORY)
+                (source_id, ln, k, msg, VOCABULARY_CATEGORY)
                 for ln, k, msg in check_vocabulary(lineno, kind, text)
             )
 
     return findings
+
+
+def check_file(path, run_density, run_vocabulary, caller, by_extractor):
+    """Return one file's findings as (path, line, kind, message, category)."""
+    try:
+        source = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    caller_name, _ = caller
+    return check_source(
+        path, source, extract_units(path, source), run_density,
+        run_vocabulary, caller, by_extractor, suffix=path.suffix,
+        zero_hedges=zero_hedge_prose(path.name, caller_name))
+
+
+def stdin_requested(paths):
+    """True when the caller selected standard input, which stands alone."""
+    if STDIN_PATH not in paths:
+        return False
+    if len(paths) > 1:
+        raise ProseError(
+            "stdin '-' cannot be combined with file or directory paths")
+    return True
+
+
+def read_stdin():
+    """Read standard input as already-selected plain prose."""
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is None:
+        return sys.stdin.read()
+    return stream.read().decode("utf-8", errors="ignore")
 
 
 def collect_files(targets):
@@ -838,7 +901,8 @@ def build_parser():
     )
     parser.add_argument(
         "paths", nargs="*",
-        help="Files or directories to check (default: repo root)")
+        help="Files or directories to check (default: repo root); "
+             "use '-' alone to read plain prose from stdin")
     parser.add_argument(
         "--setting", metavar="NAME",
         help=f"Apply the density limits the named setting defines "
@@ -863,22 +927,32 @@ def main(argv=None):
         caller_name = args.setting or DEFAULT_SETTING
         caller = (caller_name, resolve_caller_setting(settings, caller_name))
         by_extractor = extractor_limits(settings)
+        reads_stdin = stdin_requested(args.paths)
     except ProseError as exc:
         print(f"ERROR — {exc}", file=sys.stderr)
         return 2
 
-    files = collect_files(args.paths or [str(ROOT)])
-    if not files:
-        print("No files found.")
-        return 0
-
-    all_findings = []
-    for f in files:
-        all_findings.extend(
-            check_file(f, run_density, run_vocabulary, caller, by_extractor))
+    if reads_stdin:
+        # Standard input is one source, read once and checked as it stands.
+        source = read_stdin()
+        checked = 1
+        all_findings = check_source(
+            STDIN_SOURCE, source, extract_stdin_prose(source), run_density,
+            run_vocabulary, caller, by_extractor,
+            zero_hedges=zero_hedge_prose(STDIN_SOURCE, caller_name))
+    else:
+        files = collect_files(args.paths or [str(ROOT)])
+        if not files:
+            print("No files found.")
+            return 0
+        checked = len(files)
+        all_findings = []
+        for f in files:
+            all_findings.extend(
+                check_file(f, run_density, run_vocabulary, caller, by_extractor))
 
     if not all_findings:
-        print(f"PASS — {len(files)} files checked, no findings")
+        print(f"PASS — {checked} files checked, no findings")
         return 0
 
     by_file: dict = {}

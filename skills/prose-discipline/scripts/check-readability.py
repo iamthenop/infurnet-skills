@@ -5,6 +5,7 @@ comments and docstrings.
 
 Usage:
     python3 skills/prose-discipline/scripts/check-readability.py [path ...]
+    python3 skills/prose-discipline/scripts/check-readability.py -
     --setting NAME    # apply a deliverable-selected setting's maximum
     --list-settings   # print each setting, its mechanism, and its maximum
     --top N           # detail lines per file when no maximum applies
@@ -82,6 +83,18 @@ def load_prose_checker():
     finally:
         sys.dont_write_bytecode = written
     return module
+
+
+def stdin_requested(prose, paths):
+    """True when the caller selected standard input.
+
+    The extractor owns the selector and the rule that it stands alone, so
+    this script restates neither.
+    """
+    try:
+        return prose.stdin_requested(paths)
+    except prose.ProseError as exc:
+        raise ReadabilityError(str(exc)) from exc
 
 
 def extract_units(prose, path, source):
@@ -202,15 +215,10 @@ def grade(text):
     return round(textstat.flesch_kincaid_grade(text), 2)
 
 
-def measure_file(path, prose):
-    """Return the file grade and the per-unit grades for one file."""
-    try:
-        source = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return None, []
-
+def measure_units(prose, extracted):
+    """Return the source grade and the per-unit grades for one unit list."""
     units = []
-    for lineno, kind, text in extract_units(prose, path, source):
+    for lineno, kind, text in extracted:
         # The extractor owns the boundary; check-prose.py owns the
         # normalization. Both grades measure that one representation, and
         # the snippet keeps the written prose so a reader can find it.
@@ -227,6 +235,15 @@ def measure_file(path, prose):
         for lineno, kind, text, written in units
     ]
     return file_grade, measured
+
+
+def measure_file(path, prose):
+    """Return the file grade and the per-unit grades for one file."""
+    try:
+        source = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None, []
+    return measure_units(prose, extract_units(prose, path, source))
 
 
 def unit_maximum(kind, maxima):
@@ -273,7 +290,8 @@ def build_parser():
     )
     parser.add_argument(
         "paths", nargs="*",
-        help="Files or directories to measure (default: repo root)")
+        help="Files or directories to measure (default: repo root); "
+             "use '-' alone to read plain prose from stdin")
     parser.add_argument(
         "--setting", metavar="NAME",
         help="Apply the maximum grade the named setting defines")
@@ -322,6 +340,12 @@ def main(argv=None):
 
     try:
         settings = read_settings()
+        # Every request is read against the same selector rule, so the
+        # positional paths are validated before any early return. Reading
+        # the selector also precedes the path check, which would otherwise
+        # reject it as a path that does not exist.
+        prose = load_prose_checker()
+        reads_stdin = stdin_requested(prose, args.paths)
         if args.list_settings:
             for name in sorted(settings):
                 mechanism, maximum = settings[name]
@@ -331,29 +355,37 @@ def main(argv=None):
         maximum = (None if args.setting is None
                    else resolve_file_maximum(settings, args.setting))
         maxima = extractor_maxima(settings)
-        missing = [p for p in args.paths if not Path(p).exists()]
+        missing = ([] if reads_stdin
+                   else [p for p in args.paths if not Path(p).exists()])
         if missing:
             raise ReadabilityError(
                 "requested path not found: " + ", ".join(sorted(missing)))
-        prose = load_prose_checker()
     except ReadabilityError as exc:
         print(f"ERROR — {exc}", file=sys.stderr)
         return 2
 
-    paths = args.paths or [str(prose.ROOT)]
-    files = prose.collect_files(paths)
-    if not files:
-        print("No files found.")
-        return 0
-
-    results = []
-    for path in files:
-        file_grade, measured = measure_file(path, prose)
-        if file_grade is not None:
-            results.append((path, file_grade, measured))
+    if reads_stdin:
+        # Standard input is one virtual source, graded as a whole.
+        source = prose.read_stdin()
+        counted = 1
+        file_grade, measured = measure_units(
+            prose, prose.extract_stdin_prose(source))
+        results = ([] if file_grade is None
+                   else [(prose.STDIN_SOURCE, file_grade, measured)])
+    else:
+        files = prose.collect_files(args.paths or [str(prose.ROOT)])
+        if not files:
+            print("No files found.")
+            return 0
+        counted = len(files)
+        results = []
+        for path in files:
+            file_grade, measured = measure_file(path, prose)
+            if file_grade is not None:
+                results.append((path, file_grade, measured))
 
     if not results:
-        print(f"No prose found in {len(files)} file(s).")
+        print(f"No prose found in {counted} file(s).")
         return 0
 
     failed = report(results, maximum, maxima, args.top)

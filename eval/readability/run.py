@@ -906,6 +906,35 @@ def stdin_applies_the_named_setting(results, workdir):
     )
 
 
+def list_settings_holds_the_stdin_rule(results, workdir):
+    """Listing the settings reads the same selector rule as a measurement."""
+    root = workdir / "stdin-list-settings"
+    script = build_tree(root, 12)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, PARAGRAPH + "\n")
+
+    code, output = run_script(script, ["--list-settings"])
+    named = [name for name in ("default", SETTING, EXTRACTOR_SETTING)
+             if name in output]
+    results.check(
+        "--list-settings alone — names every setting and exits 0",
+        code == 0 and len(named) == 3,
+        f"exit {code} named {named!r}. Output:\n{output}",
+    )
+
+    for label, args in (
+            ("stdin first", ["--list-settings", "-", str(fixture)]),
+            ("path first", ["--list-settings", str(fixture), "-"])):
+        code, output = run_script(script, args)
+        results.check(
+            f"--list-settings with {label} — rejected as a request error",
+            code == 2 and MIXED_INPUT_ERROR in output,
+            f"exit {code}, expected 2 carrying {MIXED_INPUT_ERROR!r}. An early "
+            f"return that skips the selector prints the settings instead. "
+            f"Output:\n{output}",
+        )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -946,6 +975,7 @@ def main():
         stdin_rejects_filesystem_paths(results, workdir)
         empty_stdin_measures_nothing(results, workdir)
         stdin_applies_the_named_setting(results, workdir)
+        list_settings_holds_the_stdin_rule(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

@@ -340,6 +340,12 @@ def main(argv=None):
 
     try:
         settings = read_settings()
+        # Every request is read against the same selector rule, so the
+        # positional paths are validated before any early return. Reading
+        # the selector also precedes the path check, which would otherwise
+        # reject it as a path that does not exist.
+        prose = load_prose_checker()
+        reads_stdin = stdin_requested(prose, args.paths)
         if args.list_settings:
             for name in sorted(settings):
                 mechanism, maximum = settings[name]
@@ -349,10 +355,6 @@ def main(argv=None):
         maximum = (None if args.setting is None
                    else resolve_file_maximum(settings, args.setting))
         maxima = extractor_maxima(settings)
-        # The selector is read before the path check, which would otherwise
-        # reject the stdin selector as a path that does not exist.
-        prose = load_prose_checker()
-        reads_stdin = stdin_requested(prose, args.paths)
         missing = ([] if reads_stdin
                    else [p for p in args.paths if not Path(p).exists()])
         if missing:

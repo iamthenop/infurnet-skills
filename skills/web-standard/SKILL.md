@@ -112,7 +112,7 @@ is permitted.
 `FeedbackLevel` supports `success`, `warning`, `danger`, and `info`. Each
 message includes a text severity label, heading, body text, and a live-region
 role: `alert` for problems or `status` for information. Palette-backed colour
-only reinforces that text.
+reinforces the severity label and never carries severity alone.
 
 ## Error-page conventions
 

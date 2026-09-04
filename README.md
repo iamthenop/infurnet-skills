@@ -92,8 +92,8 @@ select a profile.
 | `infurnet-compat` | Comma-separated compatibility tags for the requirements stated by the top-level `compatibility` field. It does not select or load a skill. |
 | `prose-setting` | For a deliverable, names the prose complexity setting for prose produced under that deliverable. It does not classify the `SKILL.md` instruction text itself. |
 
-Only a `deliverable` can declare this field. Its value must match an entry in
-the canonical table at
+Only a `deliverable` can declare `prose-setting`. Its value must match an entry
+in the canonical table at
 [`skills/prose-discipline/references/complexity-settings.md`](skills/prose-discipline/references/complexity-settings.md).
 Numeric limits and allowed names live in that reference.
 

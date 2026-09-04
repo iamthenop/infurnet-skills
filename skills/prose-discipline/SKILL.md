@@ -63,7 +63,7 @@ clear on first contact.
 * reduce cognitive load — if two readings of a sentence are possible,
   eliminate one
 * do not use ambiguity as a stylistic device
-* prefer explicit nouns over pronouns when the referent is unclear
+* prefer explicit nouns over pronouns unless the referent is unambiguous
 * the reader should feel guided, not tested
 
 ## Sentence structure

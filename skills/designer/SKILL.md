@@ -39,6 +39,11 @@ design deliverables. Designer does not decide or implement.
 | `vocabulary-control` | Preserve established vocabulary and prevent semantic drift |
 | `prose-discipline` | Keep governed prose precise, concise, and structurally clear |
 
+## Chat calibration
+
+Conversation and review behavior follows
+[`references/chat-calibration.md`](references/chat-calibration.md).
+
 ## MCP policy
 
 MCP use follows [`references/mcp-policy.md`](references/mcp-policy.md).

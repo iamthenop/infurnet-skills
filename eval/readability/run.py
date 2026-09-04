@@ -157,7 +157,31 @@ Sentences per unit | Repeat overlap | Flesch-Kincaid Grade Level |
 # regression compares a finding set rather than two empty runs.
 PROSE_FINDING = "The report will utilize the record."
 
+# --- stdin fixtures ----------------------------------------------------------
+# PARAGRAPH wrapped across two physical lines, behind a blank one. A shared
+# boundary joins them into one unit reported at line 2, so the wrapped form
+# reproduces the grade of the paragraph written on one line.
+WRAP_FIRST = "The validator reads the accepted workorder and rejects a change"
+WRAP_SECOND = "the governing instructions do not authorize."
+STDIN_WRAPPED = f"\n{WRAP_FIRST}\n{WRAP_SECOND}\n"
+STDIN_WRAPPED_LINE = 2
+
+# The same wrap applied to the prose carrying a check-prose.py finding, with
+# the reported term on the second physical line. One shared boundary reports
+# both units at lines 2 and 6; a second parser would report the term's own
+# line instead.
+FINDING_FIRST = "The report will"
+FINDING_SECOND = "utilize the record."
+STDIN_FINDINGS = f"\n{FINDING_FIRST}\n{FINDING_SECOND}\n\n\n{PROSE_FINDING}\n"
+STDIN_FINDING_LINES = [2, 6]
+
+MIXED_INPUT_ERROR = "stdin '-' cannot be combined with file or directory paths"
+STDIN_SOURCE = "<stdin>"
+
+
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
+DETAIL_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] +-?\d+\.\d{2}", re.MULTILINE)
+PROSE_FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] ", re.MULTILINE)
 PROSE_SUMMARY = re.compile(
     r"^\d+ finding\(s\) across \d+ file\(s\) "
     r"— density: \d+, vocabulary: \d+$", re.MULTILINE)
@@ -183,10 +207,15 @@ def build_tree(root, maximum, inline_maximum=INLINE_MAXIMUM):
     return scripts / READABILITY.name
 
 
-def run_script(script, args):
+def run_script(script, args, stdin_text=None):
+    """Run one script, passing `stdin_text` on standard input when given.
+
+    Without it the call inherits this process's standard input, which is
+    what every filesystem regression does.
+    """
     proc = subprocess.run(
         [sys.executable, str(script)] + args,
-        capture_output=True, text=True,
+        input=stdin_text, capture_output=True, text=True,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -195,6 +224,11 @@ def measured_grade(output):
     """The file grade the script printed, or None when it printed none."""
     match = GRADE_LINE.search(output)
     return float(match.group(1)) if match else None
+
+
+def detail_units(output, pattern=DETAIL_LINE):
+    """The units one script reported, as (line, kind) pairs."""
+    return [(int(line), kind) for line, kind in pattern.findall(output)]
 
 
 def expected_grade(text):
@@ -720,6 +754,158 @@ def inline_html_does_not_join_words(results, workdir):
     )
 
 
+# --- standard input --------------------------------------------------------
+
+def stdin_is_measured_as_one_source(results, workdir):
+    """Standard input measures as one virtual source under its own name."""
+    root = workdir / "stdin-source"
+    script = build_tree(root, 12)
+
+    code, output = run_script(script, ["-"], stdin_text=PARAGRAPH + "\n")
+    results.check(
+        "stdin — reports the grade pinned for the same prose in a file",
+        code == 0 and measured_grade(output) == PINNED_GRADE,
+        f"exit {code} measured {measured_grade(output)!r}, expected "
+        f"{PINNED_GRADE}. Output:\n{output}",
+    )
+    results.check(
+        f"stdin — measured under {STDIN_SOURCE}",
+        f"\n{STDIN_SOURCE}\n" in output and "\n-\n" not in output,
+        f"expected a {STDIN_SOURCE} source header. Output:\n{output}",
+    )
+
+
+def stdin_boundaries_follow_the_extractor(results, workdir):
+    """A wrapped paragraph is one unit reported at its first physical line."""
+    root = workdir / "stdin-boundaries"
+    script = build_tree(root, 12)
+
+    _, output = run_script(script, ["-", "--top", "5"],
+                           stdin_text=STDIN_WRAPPED)
+    results.check(
+        "wrapped stdin paragraph — measured as the joined prose",
+        measured_grade(output) == expected_grade(PARAGRAPH),
+        f"measured {measured_grade(output)!r}, expected "
+        f"{expected_grade(PARAGRAPH)}. Two units would grade differently. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "wrapped stdin paragraph — one unit at its first physical line",
+        detail_units(output) == [(STDIN_WRAPPED_LINE, "prose")],
+        f"expected one prose unit at line {STDIN_WRAPPED_LINE}, saw "
+        f"{detail_units(output)!r}. Output:\n{output}",
+    )
+
+
+def stdin_boundaries_match_the_prose_checker(results, workdir):
+    """Both scripts report the same stdin units, so one boundary serves both.
+
+    A wrapped unit carries its reported term on the second physical line.
+    The shared boundary attributes that finding to where the unit began.
+    """
+    root = workdir / "stdin-shared-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+
+    _, prose_output = run_script(checker, ["-"], stdin_text=STDIN_FINDINGS)
+    _, grade_output = run_script(script, ["-", "--top", "5"],
+                                 stdin_text=STDIN_FINDINGS)
+    prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+    grade_units = detail_units(grade_output)
+    expected = [(line, "prose") for line in STDIN_FINDING_LINES]
+    results.check(
+        "check-prose.py — reports each stdin unit at its first line",
+        prose_units == expected,
+        f"expected {expected!r}, saw {prose_units!r}. Output:\n{prose_output}",
+    )
+    results.check(
+        "check-readability.py — reports the same stdin units",
+        grade_units == prose_units,
+        f"the readability units {grade_units!r} differ from the extractor's "
+        f"{prose_units!r}, so a second boundary is in use. "
+        f"Output:\n{grade_output}",
+    )
+
+
+def stdin_is_not_parsed_as_markdown(results, workdir):
+    """Standard input receives no Markdown parsing and no file inference."""
+    root = workdir / "stdin-format"
+    script = build_tree(root, 12)
+    heading = f"# {PARAGRAPH}\n"
+    fixture = root / "fixtures" / "heading.md"
+    write(fixture, heading)
+
+    _, file_output = run_script(script, [str(fixture)])
+    _, stdin_output = run_script(script, ["-"], stdin_text=heading)
+    results.check(
+        "heading in a Markdown file — excluded from the measurement",
+        measured_grade(file_output) is None,
+        f"the heading must stay outside the measurement. Output:\n{file_output}",
+    )
+    results.check(
+        "the same bytes on stdin — measured as plain prose",
+        measured_grade(stdin_output) == expected_grade(heading),
+        f"measured {measured_grade(stdin_output)!r}, expected "
+        f"{expected_grade(heading)}. Output:\n{stdin_output}",
+    )
+
+
+def stdin_rejects_filesystem_paths(results, workdir):
+    """The stdin selector cannot be combined with a path, in either order."""
+    root = workdir / "stdin-mixed"
+    script = build_tree(root, 12)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, PARAGRAPH + "\n")
+
+    for label, args in (("stdin first", ["-", str(fixture)]),
+                        ("path first", [str(fixture), "-"])):
+        code, output = run_script(script, args)
+        results.check(
+            f"{label} — rejected as a request error naming the rule",
+            code == 2 and MIXED_INPUT_ERROR in output,
+            f"exit {code}, expected 2 carrying {MIXED_INPUT_ERROR!r}. "
+            f"Output:\n{output}",
+        )
+
+
+def empty_stdin_measures_nothing(results, workdir):
+    """Empty and whitespace-only standard input create no prose unit."""
+    root = workdir / "stdin-empty"
+    script = build_tree(root, 12)
+
+    for label, text in (("empty", ""), ("whitespace only", "  \n\t\n\n")):
+        code, output = run_script(script, ["-", "--setting", SETTING],
+                                  stdin_text=text)
+        results.check(
+            f"{label} stdin — measured nothing and reported no prose",
+            code == 0 and measured_grade(output) is None
+            and "No prose found" in output,
+            f"exit {code} measured {measured_grade(output)!r}. "
+            f"Output:\n{output}",
+        )
+
+
+def stdin_applies_the_named_setting(results, workdir):
+    """A named setting bounds the stdin grade as it bounds a file grade."""
+    below = build_tree(workdir / "stdin-setting-below", PINNED_GRADE - 1)
+    code, output = run_script(below, ["-", "--setting", SETTING],
+                              stdin_text=PARAGRAPH + "\n")
+    results.check(
+        "stdin above the named maximum — fails and marks the breach",
+        code == 1 and "OVER" in output,
+        f"exit {code}, expected 1 marking the breach. Output:\n{output}",
+    )
+
+    above = build_tree(workdir / "stdin-setting-above", PINNED_GRADE + 1)
+    code, output = run_script(above, ["-", "--setting", SETTING],
+                              stdin_text=PARAGRAPH + "\n")
+    results.check(
+        "stdin below the named maximum — passes",
+        code == 0 and "PASS" in output,
+        f"exit {code}, expected 0. Output:\n{output}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -753,6 +939,13 @@ def main():
         ordinary_compounds_stay_prose(results, workdir)
         delimiters_do_not_join_words(results, workdir)
         inline_html_does_not_join_words(results, workdir)
+        stdin_is_measured_as_one_source(results, workdir)
+        stdin_boundaries_follow_the_extractor(results, workdir)
+        stdin_boundaries_match_the_prose_checker(results, workdir)
+        stdin_is_not_parsed_as_markdown(results, workdir)
+        stdin_rejects_filesystem_paths(results, workdir)
+        empty_stdin_measures_nothing(results, workdir)
+        stdin_applies_the_named_setting(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

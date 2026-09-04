@@ -20,8 +20,11 @@ and require escalation.
 
 ## Required fields
 
-Every workorder uses the fields in
-`assets/workorder-template.md`. The sections below govern how each field is drafted.
+Every workorder names the fields defined in
+[`assets/workorder-template.md`](assets/workorder-template.md). The template is
+the authoritative field list.
+
+The sections below govern how each field is drafted.
 
 For a field that does not apply, say so; omission does not grant authority.
 

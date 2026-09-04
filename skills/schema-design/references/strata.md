@@ -115,9 +115,9 @@ DATABASE` and `GRANT USAGE ON SCHEMA` establish reachability. `GRANT
 SELECT ON TABLE` grants object access. Reachability belongs here;
 object access belongs in `0100`.
 
-**Authority constraint:** explicit approval is required to introduce role names,
-privilege boundaries, or service accounts. Existing service accounts must not
-be renamed, merged, split, or removed without that approval.
+**Authority constraint:** never invent role names, privilege boundaries, or
+service accounts. Existing service accounts must not be renamed, merged, split,
+or removed without explicit approval.
 
 Elevated capabilities such as `SUPERUSER`, `CREATEDB`, `CREATEROLE`,
 `REPLICATION`, and `BYPASSRLS`, as well as role membership, require explicit

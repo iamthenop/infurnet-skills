@@ -71,9 +71,10 @@ artifact contract the repository maintains. Canonical targets:
 `<service>_fixture_image`, `<service>_fixture_load`,
 `<service>_fixture_test_tar`.
 
-A fixture is repository-owned when the repository controls required packages,
-deterministic configuration, architecture support, extension availability,
-runtime files, test behaviour, security defaults, or compatibility behaviour.
+A fixture is repository-owned when the repository controls material
+characteristics. These include required packages, deterministic configuration,
+architecture support, extension availability, runtime files, test behaviour,
+security defaults, or compatibility behaviour relied upon by the repository.
 
 Repository-owned fixtures follow the same build discipline as application images.
 

@@ -222,7 +222,22 @@ SQL_EXCLUSIONS = (
     ("a COMMENT ON statement",
      f"COMMENT ON TABLE example IS '{S13}';\n"),
     ("a MySQL comment marker", f"SELECT 1; # {S13}\n"),
+    ("a line marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' -- {S13}';\n"),
+    ("a block marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' /* {S13} */';\n"),
+    ("a standalone tagged dollar-quoted body", f"SELECT $tag$ {S13} $tag$;\n"),
 )
+
+# A backslash-escaped quote keeps a PostgreSQL escape string open, so the
+# string ends at its real closing quote and the comment after it is real.
+SQL_ESCAPE_THEN_COMMENT = f"SELECT E'abc\\' still string';\n-- {S13}\n"
+
+# PostgreSQL allows `$` after an identifier's first character, so `foo$tag$`
+# is one identifier and opens no dollar quote.
+# The comment carries a matching `$tag$`, so a dollar quote opening inside
+# the identifier would run through it and swallow the comment whole.
+SQL_IDENTIFIER_DOLLAR = f"SELECT foo$tag$;\n-- {S13} $tag$\n"
 
 
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
@@ -1296,6 +1311,40 @@ def sql_excluded_regions_are_not_prose(results, workdir):
         )
 
 
+def sql_escape_string_keeps_its_boundary(results, workdir):
+    """A completed escape string still yields the comment that follows it."""
+    root = workdir / "sql-escape-string"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "escape.sql"
+    write(fixture, SQL_ESCAPE_THEN_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after a completed escape string is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A string "
+        f"closed at its escaped quote swallows the comment that follows. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_identifier_dollar_opens_no_quote(results, workdir):
+    """A dollar sign continuing an identifier opens no dollar-quoted span."""
+    root = workdir / "sql-identifier-dollar"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "identifier.sql"
+    write(fixture, SQL_IDENTIFIER_DOLLAR)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after an identifier carrying a dollar sign is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A dollar "
+        f"quote opening inside the identifier swallows the comment. "
+        f"Output:\n{output}",
+    )
+
+
 def sql_without_comments_is_clean(results, workdir):
     """SQL carrying no source comment produces no prose unit."""
     root = workdir / "sql-clean"
@@ -1459,6 +1508,8 @@ def main():
         sql_block_comment_reports_its_opening_line(results, workdir)
         sql_nested_block_stays_one_unit(results, workdir)
         sql_excluded_regions_are_not_prose(results, workdir)
+        sql_escape_string_keeps_its_boundary(results, workdir)
+        sql_identifier_dollar_opens_no_quote(results, workdir)
         sql_without_comments_is_clean(results, workdir)
         sql_comments_take_the_existing_checks(results, workdir)
         sql_kinds_are_the_existing_ones(results, workdir)

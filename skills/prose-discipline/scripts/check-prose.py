@@ -50,7 +50,7 @@ import tokenize
 from pathlib import Path
 
 import textstat
-from pygments.lexer import RegexLexer
+from pygments.lexer import RegexLexer, bygroups
 from pygments.lexers.sql import PostgresLexer, language_callback
 from pygments.token import Comment, String
 
@@ -826,28 +826,78 @@ def opaque_dollar_quote(lexer, match):
     yield match.start(7), String, match.group(7)
 
 
-def opaque_dollar_quote_grammar():
-    """Copy the PostgreSQL grammar, replacing only its dollar-quote rule."""
-    states = {state: rules[:] for state, rules in PostgresLexer.tokens.items()}
-    root = states["root"]
-    found = [i for i, rule in enumerate(root) if rule[1] is language_callback]
+# PostgreSQL allows a dollar sign after an unquoted identifier's first
+# character, so a `$` following one continues the identifier and opens no
+# dollar quote.
+DOLLAR_QUOTE_BOUNDARY = r"(?<![\w$])"
+
+# A PostgreSQL escape string ends at its first unescaped quote, so a
+# backslash-escaped quote keeps the string open.
+ESCAPE_STRING_STATE = [
+    (r"\\.", String.Escape),
+    (r"[^'\\]+", String.Single),
+    (r"''", String.Single),
+    (r"'", String.Single, "#pop"),
+]
+
+
+def guard_dollar_quote(pattern):
+    """Insert the identifier boundary after the pattern's leading flags.
+
+    A global flag group is only valid at the start of a regular expression,
+    so the boundary follows it rather than displacing it.
+    """
+    flags = re.match(r"\(\?[aiLmsux]+\)", pattern)
+    cut = flags.end() if flags else 0
+    return pattern[:cut] + DOLLAR_QUOTE_BOUNDARY + pattern[cut:]
+
+
+def find_rule(root, matches, description):
+    """Return the index of the one root rule the caller describes."""
+    found = [i for i, rule in enumerate(root) if matches(rule)]
     if len(found) != 1:
         raise ProseError(
-            f"the PostgreSQL grammar carries {len(found)} dollar-quote rules")
-    root[found[0]] = (root[found[0]][0], opaque_dollar_quote)
+            f"the PostgreSQL grammar carries {len(found)} {description}")
+    return found[0]
+
+
+def postgres_comment_grammar():
+    """Copy the PostgreSQL grammar, adapting only what comment extraction needs.
+
+    A dollar-quoted body stays opaque, a dollar quote cannot open inside an
+    unquoted identifier, and an escape string keeps its backslash escapes.
+    """
+    states = {state: rules[:] for state, rules in PostgresLexer.tokens.items()}
+    root = states["root"]
+
+    quoted = find_rule(root, lambda rule: rule[1] is language_callback,
+                       "dollar-quote rules")
+    root[quoted] = (guard_dollar_quote(root[quoted][0]),
+                    opaque_dollar_quote)
+
+    string = find_rule(root, lambda rule: len(rule) == 3 and rule[2] == "string",
+                       "string rules")
+    root.insert(string, (r"(E)(')", bygroups(String.Affix, String.Single),
+                         "escape-string"))
+    states["escape-string"] = ESCAPE_STRING_STATE
     return states
 
 
 class PostgresCommentLexer(RegexLexer):
-    """The PostgreSQL grammar, reading dollar-quoted bodies as one string."""
+    """The PostgreSQL grammar, adapted where comment boundaries require it."""
 
     name = "PostgreSQL SQL dialect with opaque dollar-quoted bodies"
     aliases = []
     flags = re.IGNORECASE
-    tokens = opaque_dollar_quote_grammar()
+    tokens = postgres_comment_grammar()
 
 
 POSTGRES_LEXER = PostgresCommentLexer()
+
+
+# A star opening a block-comment line, followed by a space or the line end,
+# is decoration. A star anywhere else is prose, as in `A* search`.
+DECORATIVE_STAR_RE = re.compile(r"(?m)^[ \t]*\*(?:[ \t]|$)")
 
 
 def extract_postgres_comments(source):
@@ -884,8 +934,8 @@ def extract_postgres_comments(source):
 
 
 def block_text(parts):
-    """Join a block comment's content, dropping its decorative stars."""
-    return re.sub(r"\s*\*\s*", " ", "".join(parts)).strip()
+    """Join a block comment's content, dropping its line-leading decoration."""
+    return DECORATIVE_STAR_RE.sub("", "".join(parts)).strip()
 
 
 SQL_DIALECT_EXTRACTORS = {POSTGRESQL_DIALECT: extract_postgres_comments}

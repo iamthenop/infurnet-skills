@@ -1,6 +1,9 @@
 # <bindings-file> — repository bindings
 
-<!-- Template from the project-bindings skill. Copy it to the consuming repository root under the filename declared by governance, and give the title that name. Keep the preamble, remove sections for uninstalled skills, and replace or retain each *not yet defined* value -->
+<!-- Copy this project-bindings template to the consuming repository root under
+the governance-declared filename, and give the title that name. Keep the
+preamble, remove uninstalled-skill sections, and replace or retain each
+*not yet defined* value. -->
 
 This file is the single home for repository-specific facts referenced
 by the installed skills. Skills state form and conduct; this file binds

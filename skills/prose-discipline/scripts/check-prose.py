@@ -18,6 +18,8 @@ Ownership:
     the vocabulary list, the prose boundaries, and the normalization both
         checkers measure — this script
     the word count and the other lexical primitives — textstat
+    the PostgreSQL lexical grammar — Pygments, whose dollar-quoted bodies
+        this script leaves opaque
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -48,6 +50,9 @@ import tokenize
 from pathlib import Path
 
 import textstat
+from pygments.lexer import RegexLexer, bygroups
+from pygments.lexers.sql import PostgresLexer, language_callback
+from pygments.token import Comment, String
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
@@ -65,7 +70,7 @@ ROOT = _find_root(Path(__file__).parent)
 
 # Suffixes this checker understands. Anything else is not a checkable
 # target and is excluded from the file count rather than reported as clean.
-SUPPORTED_SUFFIXES = (".py", ".java", ".md")
+SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql")
 
 # The setting applied to prose the extractor does not select, when the
 # caller names none.
@@ -793,6 +798,155 @@ def check_vocabulary(lineno, kind, text):
 # File dispatch
 # ---------------------------------------------------------------------------
 
+# The SQL dialect every `.sql` file is read as.
+POSTGRESQL_DIALECT = "postgresql"
+
+
+def select_sql_dialect():
+    """Return the SQL dialect a `.sql` file is read as.
+
+    The suffix is the whole input. File content, repository metadata,
+    configuration, and the environment take no part in the result.
+    """
+    return POSTGRESQL_DIALECT
+
+
+def opaque_dollar_quote(lexer, match):
+    """Yield a dollar-quoted span whole, leaving its body unlexed.
+
+    Pygments otherwise hands a procedural body to a second lexer, which
+    reports the markers inside that body as PostgreSQL source comments.
+    """
+    yield match.start(1), String, match.group(1)
+    yield match.start(2), String.Delimiter, match.group(2)
+    yield match.start(3), String, match.group(3)
+    yield match.start(4), String, match.group(4)
+    yield match.start(5), String, match.group(5)
+    yield match.start(6), String.Delimiter, match.group(6)
+    yield match.start(7), String, match.group(7)
+
+
+# PostgreSQL allows a dollar sign after an unquoted identifier's first
+# character, so a `$` following one continues the identifier and opens no
+# dollar quote.
+DOLLAR_QUOTE_BOUNDARY = r"(?<![\w$])"
+
+# A PostgreSQL escape string ends at its first unescaped quote, so a
+# backslash-escaped quote keeps the string open.
+ESCAPE_STRING_STATE = [
+    (r"\\.", String.Escape),
+    (r"[^'\\]+", String.Single),
+    (r"''", String.Single),
+    (r"'", String.Single, "#pop"),
+]
+
+
+def guard_dollar_quote(pattern):
+    """Insert the identifier boundary after the pattern's leading flags.
+
+    A global flag group is only valid at the start of a regular expression,
+    so the boundary follows it rather than displacing it.
+    """
+    flags = re.match(r"\(\?[aiLmsux]+\)", pattern)
+    cut = flags.end() if flags else 0
+    return pattern[:cut] + DOLLAR_QUOTE_BOUNDARY + pattern[cut:]
+
+
+def find_rule(root, matches, description):
+    """Return the index of the one root rule the caller describes."""
+    found = [i for i, rule in enumerate(root) if matches(rule)]
+    if len(found) != 1:
+        raise ProseError(
+            f"the PostgreSQL grammar carries {len(found)} {description}")
+    return found[0]
+
+
+def postgres_comment_grammar():
+    """Copy the PostgreSQL grammar, adapting only what comment extraction needs.
+
+    A dollar-quoted body stays opaque, a dollar quote cannot open inside an
+    unquoted identifier, and an escape string keeps its backslash escapes.
+    """
+    states = {state: rules[:] for state, rules in PostgresLexer.tokens.items()}
+    root = states["root"]
+
+    quoted = find_rule(root, lambda rule: rule[1] is language_callback,
+                       "dollar-quote rules")
+    root[quoted] = (guard_dollar_quote(root[quoted][0]),
+                    opaque_dollar_quote)
+
+    string = find_rule(root, lambda rule: len(rule) == 3 and rule[2] == "string",
+                       "string rules")
+    root.insert(string, (r"(E)(')", bygroups(String.Affix, String.Single),
+                         "escape-string"))
+    states["escape-string"] = ESCAPE_STRING_STATE
+    return states
+
+
+class PostgresCommentLexer(RegexLexer):
+    """The PostgreSQL grammar, adapted where comment boundaries require it."""
+
+    name = "PostgreSQL SQL dialect with opaque dollar-quoted bodies"
+    aliases = []
+    flags = re.IGNORECASE
+    tokens = postgres_comment_grammar()
+
+
+POSTGRES_LEXER = PostgresCommentLexer()
+
+
+# A star opening a block-comment line, followed by a space or the line end,
+# is decoration. A star anywhere else is prose, as in `A* search`.
+DECORATIVE_STAR_RE = re.compile(r"(?m)^[ \t]*\*(?:[ \t]|$)")
+
+
+def extract_postgres_comments(source):
+    """Return PostgreSQL source comments as (line, kind, text) triples.
+
+    A nested block comment stays one unit opening at its outer delimiter,
+    and the delimiters themselves stay outside the extracted text.
+    """
+    items = []
+    opening, parts, depth = 0, [], 0
+
+    for index, token, value in POSTGRES_LEXER.get_tokens_unprocessed(source):
+        if token is Comment.Single:
+            text = value.lstrip("-").strip()
+            if text:
+                items.append((source.count("\n", 0, index) + 1, "inline", text))
+        elif token is Comment.Multiline:
+            if value == "/*":
+                if depth == 0:
+                    opening, parts = source.count("\n", 0, index) + 1, []
+                depth += 1
+            elif value == "*/":
+                depth -= 1
+                if depth == 0:
+                    items.append((opening, "block", block_text(parts)))
+            else:
+                parts.append(value)
+
+    if depth > 0:
+        # PostgreSQL runs an unclosed block comment to the end of the file.
+        items.append((opening, "block", block_text(parts)))
+
+    return [(line, kind, text) for line, kind, text in items if text]
+
+
+def block_text(parts):
+    """Join a block comment's content, dropping its line-leading decoration."""
+    return DECORATIVE_STAR_RE.sub("", "".join(parts)).strip()
+
+
+SQL_DIALECT_EXTRACTORS = {POSTGRESQL_DIALECT: extract_postgres_comments}
+
+
+def extract_sql_comments(source):
+    """Extract SQL comments through the dialect the boundary resolves to."""
+    extract = SQL_DIALECT_EXTRACTORS[select_sql_dialect()]
+    return extract(source)
+
+
 def extract_units(path, source):
     if path.suffix == ".py":
         return extract_python_comments(source)
@@ -800,6 +954,8 @@ def extract_units(path, source):
         return extract_java_comments(source)
     if path.suffix == ".md":
         return extract_markdown_prose(source)
+    if path.suffix == ".sql":
+        return extract_sql_comments(source)
     return []
 
 
@@ -898,11 +1054,14 @@ def collect_files(targets):
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Check prose density and vocabulary sprawl.",
+        epilog="SQL files use PostgreSQL semantics. Other SQL dialects are "
+               "not detected or supported.",
     )
     parser.add_argument(
         "paths", nargs="*",
         help="Files or directories to check (default: repo root); "
-             "use '-' alone to read plain prose from stdin")
+             "'-' alone reads plain prose from stdin; "
+             ".sql uses PostgreSQL only")
     parser.add_argument(
         "--setting", metavar="NAME",
         help=f"Apply the density limits the named setting defines "

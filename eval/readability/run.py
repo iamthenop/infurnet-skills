@@ -178,6 +178,41 @@ STDIN_FINDING_LINES = [2, 6]
 MIXED_INPUT_ERROR = "stdin '-' cannot be combined with file or directory paths"
 STDIN_SOURCE = "<stdin>"
 
+# --- PostgreSQL fixtures -----------------------------------------------------
+# The paragraph written as each PostgreSQL comment kind. Both reproduce the
+# grade of the paragraph on its own, so the delimiters stay unmeasured.
+SQL_LINE_COMMENT = f"SELECT 1;\n-- {PARAGRAPH}\nSELECT 2;\n"
+SQL_BLOCK_COMMENT = f"SELECT 1;\n/* {PARAGRAPH} */\nSELECT 2;\n"
+
+# EXCLUDED grades far above the paragraph and sits where PostgreSQL syntax
+# keeps it out, so any leak moves the measured grade off the paragraph's.
+SQL_EXCLUDED = (f"DO $$\nBEGIN\n    -- {EXCLUDED}\n    NULL;\nEND\n$$;\n"
+                f"SELECT '/* {EXCLUDED} */';\n-- {PARAGRAPH}\n")
+
+# The finding prose written as both comment kinds. One shared boundary
+# reports the units at lines 1 and 2.
+SQL_FINDINGS = f"-- {PROSE_FINDING}\n/* {PROSE_FINDING} */\n"
+SQL_FINDING_UNITS = [(1, "inline"), (2, "block")]
+
+# A star carrying meaning survives extraction; only a line-leading decorative
+# star is removed. The reported unit text shows which happened, and each stays
+# inside the snippet width so it is reported whole.
+STAR_MEANINGFUL = (
+    ("A* search", "/* A* search explores the frontier. */\n",
+     "A* search explores the frontier."),
+    ("rows * columns", "/* The total is rows * columns here. */\n",
+     "The total is rows * columns here."),
+)
+STAR_DECORATIVE = ("/*\n * Human explanation of it.\n"
+                   " * Second sentence here.\n */\n")
+STAR_DECORATIVE_TEXT = "Human explanation of it. Second sentence here."
+
+# The finding prose behind a corrected escape string and a corrected
+# identifier, so both scripts are compared across the changed boundaries.
+SQL_EDGE_FINDINGS = (f"SELECT E'abc\\' still string';\n-- {PROSE_FINDING}\n"
+                     f"SELECT foo$tag$;\n-- {PROSE_FINDING} $tag$\n")
+SQL_EDGE_UNITS = [(2, "inline"), (4, "inline")]
+
 
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
 DETAIL_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] +-?\d+\.\d{2}", re.MULTILINE)
@@ -935,6 +970,130 @@ def list_settings_holds_the_stdin_rule(results, workdir):
         )
 
 
+# --- PostgreSQL ------------------------------------------------------------
+
+def sql_prose_is_measured(results, workdir):
+    """Each PostgreSQL comment kind reaches the measurement without markers."""
+    root = workdir / "sql-measured"
+    script = build_tree(root, 12)
+    cases = [("line.sql", SQL_LINE_COMMENT), ("block.sql", SQL_BLOCK_COMMENT)]
+    for name, body in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, body)
+        _, output = run_script(script, [str(fixture)])
+        results.check(
+            f"PostgreSQL prose in {name} — measured",
+            measured_grade(output) == expected_grade(PARAGRAPH),
+            f"expected {expected_grade(PARAGRAPH)}, "
+            f"measured {measured_grade(output)!r}. A measured delimiter or "
+            f"a measured statement moves the grade. Output:\n{output}",
+        )
+
+
+def sql_excluded_regions_do_not_score(results, workdir):
+    """Prose hidden by PostgreSQL syntax stays outside the measurement."""
+    root = workdir / "sql-excluded"
+    script = build_tree(root, 12)
+    fixture = root / "fixtures" / "excluded.sql"
+    write(fixture, SQL_EXCLUDED)
+
+    _, output = run_script(script, [str(fixture)])
+    results.check(
+        "sql — a dollar-quoted body and a string stay out of the grade",
+        measured_grade(output) == expected_grade(PARAGRAPH),
+        f"expected {expected_grade(PARAGRAPH)}, "
+        f"measured {measured_grade(output)!r}. The excluded prose grades "
+        f"{expected_grade(EXCLUDED)}, so a leak is visible here. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_units_match_the_prose_checker(results, workdir):
+    """Both scripts report the same PostgreSQL units, so one boundary serves."""
+    root = workdir / "sql-shared-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+    fixture = root / "fixtures" / "units.sql"
+    write(fixture, SQL_FINDINGS)
+
+    _, prose_output = run_script(checker, [str(fixture)])
+    _, grade_output = run_script(script, [str(fixture), "--top", "5"])
+    prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+    grade_units = detail_units(grade_output)
+    results.check(
+        "check-prose.py — reports each PostgreSQL unit at its own line",
+        prose_units == SQL_FINDING_UNITS,
+        f"expected {SQL_FINDING_UNITS!r}, saw {prose_units!r}. "
+        f"Output:\n{prose_output}",
+    )
+    results.check(
+        "check-readability.py — reports the same PostgreSQL units",
+        grade_units == prose_units,
+        f"the readability units {grade_units!r} differ from the extractor's "
+        f"{prose_units!r}, so a second boundary is in use. "
+        f"Output:\n{grade_output}",
+    )
+
+
+def sql_meaningful_stars_survive_extraction(results, workdir):
+    """A star carrying meaning reaches the measurement as it was written."""
+    root = workdir / "sql-stars"
+    script = build_tree(root, 30)
+    for index, (label, body, expected) in enumerate(STAR_MEANINGFUL):
+        fixture = root / "fixtures" / f"star-{index}.sql"
+        write(fixture, body)
+        _, output = run_script(script, [str(fixture), "--top", "5"])
+        results.check(
+            f"sql — `{label}` keeps its star through extraction",
+            expected in output,
+            f"expected the reported unit to read {expected!r}. A global star "
+            f"substitution reports it without the star. Output:\n{output}",
+        )
+
+
+def sql_decorative_stars_are_dropped(results, workdir):
+    """A line-leading decorative star does not reach the measurement."""
+    root = workdir / "sql-decorative-stars"
+    script = build_tree(root, 30)
+    fixture = root / "fixtures" / "decorative.sql"
+    write(fixture, STAR_DECORATIVE)
+
+    _, output = run_script(script, [str(fixture), "--top", "5"])
+    results.check(
+        "sql — line-leading decorative stars do not become prose",
+        STAR_DECORATIVE_TEXT in output,
+        f"expected the reported unit to read {STAR_DECORATIVE_TEXT!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_edge_units_match_the_prose_checker(results, workdir):
+    """Both scripts agree on the units the corrected boundaries produce."""
+    root = workdir / "sql-edge-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+    fixture = root / "fixtures" / "edges.sql"
+    write(fixture, SQL_EDGE_FINDINGS)
+
+    _, prose_output = run_script(checker, [str(fixture)])
+    _, grade_output = run_script(script, [str(fixture), "--top", "5"])
+    prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+    grade_units = detail_units(grade_output)
+    results.check(
+        "check-prose.py — reports the corrected escape and identifier units",
+        prose_units == SQL_EDGE_UNITS,
+        f"expected {SQL_EDGE_UNITS!r}, saw {prose_units!r}. "
+        f"Output:\n{prose_output}",
+    )
+    results.check(
+        "check-readability.py — reports the same corrected units",
+        grade_units == prose_units,
+        f"the readability units {grade_units!r} differ from the extractor's "
+        f"{prose_units!r}, so a second boundary is in use. "
+        f"Output:\n{grade_output}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -976,6 +1135,13 @@ def main():
         empty_stdin_measures_nothing(results, workdir)
         stdin_applies_the_named_setting(results, workdir)
         list_settings_holds_the_stdin_rule(results, workdir)
+
+        sql_prose_is_measured(results, workdir)
+        sql_excluded_regions_do_not_score(results, workdir)
+        sql_units_match_the_prose_checker(results, workdir)
+        sql_meaningful_stars_survive_extraction(results, workdir)
+        sql_decorative_stars_are_dropped(results, workdir)
+        sql_edge_units_match_the_prose_checker(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

@@ -3,10 +3,11 @@
 
 Each regression builds a throwaway skill tree in a temporary directory, copies
 the real checker into it beside a fixture settings reference, then runs the
-checker as a subprocess. Every assertion rests on the checker's own exit
-status and printed output, and every density limit comes from the fixture
-reference rather than from the harness or the canonical table.
+checker as a subprocess. Every density limit comes from the fixture
+reference, and every assertion reads the checker's exit status and printed
+output except where a regression names the extraction it reads directly.
 """
+import importlib.util
 import pathlib
 import re
 import shutil
@@ -184,6 +185,60 @@ STDIN_HEADING = f"# {S13}\n"
 
 MIXED_INPUT_ERROR = "stdin '-' cannot be combined with file or directory paths"
 STDIN_SOURCE = "<stdin>"
+
+
+# --- PostgreSQL fixtures ---------------------------------------------------
+# Every fixture carries S13, one word above the fixture sentence limit. A
+# finding proves the checker extracted the comment holding it, and silence
+# proves PostgreSQL syntax kept it out.
+SQL_LINE_COMMENT = f"SELECT 1;\n-- {S13}\nSELECT 2;\n"
+SQL_BLOCK_COMMENT = f"SELECT 1;\n/* {S13} */\nSELECT 2;\n"
+SQL_COMMENT_LINE = 2
+
+# Two comments on consecutive physical lines.
+SQL_CONSECUTIVE = f"-- {S13}\n-- {S13}\n"
+
+# The opening delimiter sits on line 2 and the prose runs past it.
+SQL_MULTILINE_BLOCK = f"SELECT 1;\n/* {S13}\n   The boundary holds. */\n"
+
+# PostgreSQL nests block comments. A dialect that does not would close the
+# outer comment at the inner delimiter and leave a second unit behind.
+SQL_NESTED_BLOCK = f"/*\n{S13}\n    /* The nested note. */\nThe outer note.\n*/\n"
+
+# One line comment and one block comment, each above the sentence limit.
+SQL_BOTH_KINDS = f"-- {S13}\n/* {S13} */\n"
+
+SQL_NO_COMMENTS = "SELECT id, name FROM example WHERE id > 10 ORDER BY name;\n"
+SQL_VOCABULARY = f"-- {VOCAB}\n"
+
+# Each hides S13 where PostgreSQL syntax, not a prose rule, must exclude it.
+SQL_EXCLUSIONS = (
+    ("a line marker inside an ordinary string", f"SELECT '-- {S13}';\n"),
+    ("a block marker inside an ordinary string", f"SELECT '/* {S13} */';\n"),
+    ("an untagged dollar-quoted DO body",
+     f"DO $$\nBEGIN\n    -- {S13}\n    NULL;\nEND\n$$;\n"),
+    ("a tagged dollar-quoted body",
+     "CREATE FUNCTION example() RETURNS void AS $body$\nBEGIN\n"
+     f"    /* {S13} */\n    NULL;\nEND\n$body$ LANGUAGE plpgsql;\n"),
+    ("a COMMENT ON statement",
+     f"COMMENT ON TABLE example IS '{S13}';\n"),
+    ("a MySQL comment marker", f"SELECT 1; # {S13}\n"),
+    ("a line marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' -- {S13}';\n"),
+    ("a block marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' /* {S13} */';\n"),
+    ("a standalone tagged dollar-quoted body", f"SELECT $tag$ {S13} $tag$;\n"),
+)
+
+# A backslash-escaped quote keeps a PostgreSQL escape string open, so the
+# string ends at its real closing quote and the comment after it is real.
+SQL_ESCAPE_THEN_COMMENT = f"SELECT E'abc\\' still string';\n-- {S13}\n"
+
+# PostgreSQL allows `$` after an identifier's first character, so `foo$tag$`
+# is one identifier and opens no dollar quote.
+# The comment carries a matching `$tag$`, so a dollar quote opening inside
+# the identifier would run through it and swallow the comment whole.
+SQL_IDENTIFIER_DOLLAR = f"SELECT foo$tag$;\n-- {S13} $tag$\n"
 
 
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
@@ -1119,6 +1174,321 @@ def stdin_keeps_the_existing_options(results, workdir):
     )
 
 
+# --- PostgreSQL ------------------------------------------------------------
+
+def sql_is_a_supported_file(results, workdir):
+    """A .sql file is discovered by a directory walk and checked."""
+    root = workdir / "sql-discovery"
+    script = build_tree(root)
+    write(root / "fixtures" / "schema.sql", SQL_LINE_COMMENT)
+
+    _, output = run_checker(script, [str(root / "fixtures")])
+    results.check(
+        "sql — a .sql file is discovered and counted as a checked file",
+        counts(output) is not None and counts(output)[1] == 1,
+        f"expected one checked file, saw {counts(output)!r}. A suffix the "
+        f"walk does not know is dropped before the count. Output:\n{output}",
+    )
+
+
+def sql_line_comment_is_one_inline_unit(results, workdir):
+    """A `--` comment becomes one inline unit without its delimiter."""
+    root = workdir / "sql-line-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "line.sql"
+    write(fixture, SQL_LINE_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — a line comment is one inline unit at its own line",
+        units(output) == [(SQL_COMMENT_LINE, "inline")],
+        f"expected one inline unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+    results.check(
+        "sql — the line-comment delimiter is not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. A counted `--` reports "
+        f"one word more. Output:\n{output}",
+    )
+
+
+def sql_block_comment_is_one_block_unit(results, workdir):
+    """A `/* */` comment becomes one block unit without its delimiters."""
+    root = workdir / "sql-block-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "block.sql"
+    write(fixture, SQL_BLOCK_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — a block comment is one block unit at its own line",
+        units(output) == [(SQL_COMMENT_LINE, "block")],
+        f"expected one block unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+    results.check(
+        "sql — the block delimiters are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Counted delimiters "
+        f"report more. Output:\n{output}",
+    )
+
+
+def sql_consecutive_line_comments_stay_separate(results, workdir):
+    """Two `--` comments on consecutive lines stay two units."""
+    root = workdir / "sql-consecutive"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "consecutive.sql"
+    write(fixture, SQL_CONSECUTIVE)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — consecutive line comments keep separate source lines",
+        units(output) == [(1, "inline"), (2, "inline")],
+        f"expected an inline unit on lines 1 and 2, saw {units(output)!r}. "
+        f"A line comment carries its own newline, so joining the tokens "
+        f"merges the pair into one unit. Output:\n{output}",
+    )
+
+
+def sql_block_comment_reports_its_opening_line(results, workdir):
+    """A multiline block comment is attributed to its opening delimiter."""
+    root = workdir / "sql-multiline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "multiline.sql"
+    write(fixture, SQL_MULTILINE_BLOCK)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a multiline block comment reports its opening physical line",
+        units(output) == [(SQL_COMMENT_LINE, "block")],
+        f"expected one block unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+
+
+def sql_nested_block_stays_one_unit(results, workdir):
+    """A nested block comment stays one unit opening at the outer delimiter."""
+    root = workdir / "sql-nested"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "nested.sql"
+    write(fixture, SQL_NESTED_BLOCK)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a nested block comment is one unit at the outer opening line",
+        units(output) == [(1, "block")],
+        f"expected one block unit at line 1, saw {units(output)!r}. Closing "
+        f"the outer comment at the inner delimiter leaves a second unit. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_excluded_regions_are_not_prose(results, workdir):
+    """SQL syntax hides the same prose the checker flags in a comment."""
+    root = workdir / "sql-exclusions"
+    script = build_tree(root)
+
+    exposed = root / "fixtures" / "exposed.sql"
+    write(exposed, SQL_LINE_COMMENT)
+    _, oracle_output, oracle = check_one(script, exposed)
+    results.check(
+        "sql — the hidden prose is flagged when it is a real comment",
+        has(oracle, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"the exclusion fixtures hide prose the checker flags nowhere, so "
+        f"excluding it proves nothing. Saw {oracle!r}. "
+        f"Output:\n{oracle_output}",
+    )
+
+    for index, (label, source) in enumerate(SQL_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.sql"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"sql — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
+# `normalize_prose` turns a star into a space before any rule reads it, so a
+# preserved star never reaches the checker's printed output. These cases read
+# the extractor, which is where the star has to survive.
+STAR_CASES = (
+    ("`A* search` keeps its star",
+     "/* A* search explores the frontier. */\n",
+     "A* search explores the frontier."),
+    ("`rows * columns` keeps its star",
+     "/* The total is rows * columns here. */\n",
+     "The total is rows * columns here."),
+    ("a line-leading decorative star is dropped",
+     "/*\n * Human explanation of it.\n * Second sentence here.\n */\n",
+     "Human explanation of it.\nSecond sentence here."),
+)
+
+
+def load_checker():
+    """Import the checker so a regression can read its extraction directly."""
+    spec = importlib.util.spec_from_file_location("check_prose", CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(module)
+    return module
+
+
+def sql_block_stars_are_extracted_as_written(results, workdir):
+    """Only a line-leading decorative star leaves a PostgreSQL block comment."""
+    prose = load_checker()
+    for label, source, expected in STAR_CASES:
+        extracted = prose.extract_sql_comments(source)
+        results.check(
+            f"sql — {label}",
+            extracted == [(1, "block", expected)],
+            f"expected [(1, 'block', {expected!r})], saw {extracted!r}. A "
+            f"global star substitution drops every star, not the decoration "
+            f"alone.",
+        )
+
+
+def sql_escape_string_keeps_its_boundary(results, workdir):
+    """A completed escape string still yields the comment that follows it."""
+    root = workdir / "sql-escape-string"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "escape.sql"
+    write(fixture, SQL_ESCAPE_THEN_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after a completed escape string is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A string "
+        f"closed at its escaped quote swallows the comment that follows. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_identifier_dollar_opens_no_quote(results, workdir):
+    """A dollar sign continuing an identifier opens no dollar-quoted span."""
+    root = workdir / "sql-identifier-dollar"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "identifier.sql"
+    write(fixture, SQL_IDENTIFIER_DOLLAR)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after an identifier carrying a dollar sign is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A dollar "
+        f"quote opening inside the identifier swallows the comment. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_without_comments_is_clean(results, workdir):
+    """SQL carrying no source comment produces no prose unit."""
+    root = workdir / "sql-clean"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "clean.sql"
+    write(fixture, SQL_NO_COMMENTS)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — statements alone carry no prose unit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def sql_comments_take_the_existing_checks(results, workdir):
+    """Density and vocabulary apply to an extracted PostgreSQL comment."""
+    root = workdir / "sql-existing-checks"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    write(fixtures / "density.sql", SQL_LINE_COMMENT)
+    write(fixtures / "vocabulary.sql", SQL_VOCABULARY)
+
+    _, density_output, density_found = check_one(script, fixtures / "density.sql")
+    results.check(
+        "sql — density applies to an extracted comment",
+        has(density_found, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"expected a sentence-word finding, saw {density_found!r}. "
+        f"Output:\n{density_output}",
+    )
+
+    _, vocab_output, vocab_found = check_one(script, fixtures / "vocabulary.sql")
+    results.check(
+        "sql — vocabulary applies to an extracted comment",
+        counts(vocab_output) is not None and counts(vocab_output)[3] == 1,
+        f"expected one vocabulary finding, saw {vocab_found!r}. "
+        f"Output:\n{vocab_output}",
+    )
+
+
+def sql_kinds_are_the_existing_ones(results, workdir):
+    """Extraction reports the existing prose kinds and no lexer category."""
+    root = workdir / "sql-kinds"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "kinds.sql"
+    write(fixture, SQL_BOTH_KINDS)
+
+    _, output, _ = check_one(script, fixture)
+    kinds = [kind for _, kind in units(output)]
+    results.check(
+        "sql — the reported kinds are the existing inline and block kinds",
+        kinds == ["inline", "block"],
+        f"expected ['inline', 'block'], saw {kinds!r}. A lexer token "
+        f"category reaching the report names itself here. Output:\n{output}",
+    )
+
+
+def sql_dialect_is_not_inferred_from_content(results, workdir):
+    """The dialect boundary reads the same comment the same way either side."""
+    root = workdir / "sql-no-detection"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    write(fixtures / "postgres.sql", f"-- {S13}\nSELECT $tag$ body $tag$;\n")
+    write(fixtures / "mysql.sql", f"-- {S13}\nSELECT `col` FROM t; # note\n")
+
+    _, first, _ = check_one(script, fixtures / "postgres.sql")
+    _, second, _ = check_one(script, fixtures / "mysql.sql")
+    results.check(
+        "sql — surrounding dialect flavour does not change the units",
+        units(first) == units(second) == [(1, "inline")],
+        f"the two flavours gave {units(first)!r} and {units(second)!r}, so "
+        f"the boundary read the file content. Output:\n{first}\n{second}",
+    )
+
+
+def existing_extraction_is_unchanged(results, workdir):
+    """Adding .sql leaves Python, Java, Markdown, and stdin extraction alone."""
+    root = workdir / "sql-existing-extractors"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    cases = [
+        ("module.py", f"# {S13}\n", [(1, "inline")]),
+        ("Type.java", f"class A {{\n// {S13}\n}}\n", [(2, "inline")]),
+        ("doc.md", f"{S13}\n", [(1, "prose")]),
+    ]
+    for name, body, expected in cases:
+        fixture = fixtures / name
+        write(fixture, body)
+        _, output, _ = check_one(script, fixture)
+        results.check(
+            f"sql — {name} extraction is unchanged",
+            units(output) == expected,
+            f"expected {expected!r}, saw {units(output)!r}. Output:\n{output}",
+        )
+
+    _, output, _ = check_stdin(script, f"{S13}\n")
+    results.check(
+        "sql — stdin extraction is unchanged",
+        units(output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -1170,6 +1540,22 @@ def main():
         stdin_rejects_filesystem_paths(results, workdir)
         empty_stdin_is_clean(results, workdir)
         stdin_keeps_the_existing_options(results, workdir)
+
+        sql_is_a_supported_file(results, workdir)
+        sql_line_comment_is_one_inline_unit(results, workdir)
+        sql_block_comment_is_one_block_unit(results, workdir)
+        sql_consecutive_line_comments_stay_separate(results, workdir)
+        sql_block_comment_reports_its_opening_line(results, workdir)
+        sql_nested_block_stays_one_unit(results, workdir)
+        sql_excluded_regions_are_not_prose(results, workdir)
+        sql_block_stars_are_extracted_as_written(results, workdir)
+        sql_escape_string_keeps_its_boundary(results, workdir)
+        sql_identifier_dollar_opens_no_quote(results, workdir)
+        sql_without_comments_is_clean(results, workdir)
+        sql_comments_take_the_existing_checks(results, workdir)
+        sql_kinds_are_the_existing_ones(results, workdir)
+        sql_dialect_is_not_inferred_from_content(results, workdir)
+        existing_extraction_is_unchanged(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

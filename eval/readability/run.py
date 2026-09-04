@@ -52,6 +52,82 @@ OVER_INLINE = ("The docstring records the calling contract a reader "
 SIMPLE_DOC = ("The check runs. The file passes. The list is short. It is "
               "done. The run ends. The next one starts. The log is clear.")
 
+# --- notation fixtures -----------------------------------------------------
+# Each pair carries one sentence of visible prose written twice. The two
+# forms differ only in notation, so a measurement that reads notation as
+# prose separates them and one that normalizes first does not.
+NOTATION_PAIRS = (
+    ("inline code",
+     "The validator reads `x` and rejects the accepted workorder today.",
+     "The validator reads `skills/prose-discipline/scripts/check-readability.py"
+     " --setting instruction` and rejects the accepted workorder today."),
+    ("link destination",
+     "The validator reads [the standard](x) and rejects the workorder today.",
+     "The validator reads [the standard]"
+     "(skills/prose-discipline/references/complexity-settings.md) and rejects "
+     "the workorder today."),
+    ("raw URL",
+     "The validator reads x and rejects the accepted workorder today.",
+     "The validator reads https://example.invalid/a/very/long/path/to/a/"
+     "reference and rejects the accepted workorder today."),
+    ("code-shaped tokens",
+     "The validator reads x and x and x and x and x today.",
+     "The validator reads eval/prose/run.py and metadata.skill-type and "
+     "--setting and resolve_file_maximum and grade() today."),
+    ("image destination",
+     "The validator reads ![the accepted workorder](x) today.",
+     "The validator reads ![the accepted workorder](images/a/long/name.png) "
+     "today."),
+)
+
+# The same pair written into a comment and into a docstring, so the source
+# extractors demonstrate the normalization the Markdown extractor does.
+SOURCE_PLAIN = ("The validator reads x and x and rejects the accepted "
+                "workorder today.")
+SOURCE_LOADED = ("The validator reads tools/validate.py and --setting and "
+                 "rejects the accepted workorder today.")
+
+# Compound words a reader reads. A slash joining two ordinary words is not a
+# path separator, and a hyphen beside it does not make one, so each of these
+# must reach the measurement written as it stands.
+COMPOUND_PROSE = (
+    "The client/server-side boundary holds after review.",
+    "The read/write-only boundary holds after review.",
+    "The and/or boundary holds after review.",
+    "The pass/fail boundary holds after review.",
+    "The OS/architecture boundary holds after review.",
+)
+# The same sentence with its compound already reduced to a stand-in. A
+# compound discarded as notation would measure as this.
+COMPOUND_STANDIN = "The x boundary holds after review."
+
+# Inline HTML separates the visible text around it. Each tagged form must
+# measure as its tag-free twin rather than joining two words into one.
+HTML_PAIRS = (
+    ("<br>", "Read first<br>second now.", "Read first second now."),
+    ("<br/>", "Read first<br/>second now.", "Read first second now."),
+    ("<span>", 'A tag<span id="a">wraps</span>text here.',
+     "A tag wraps text here."),
+)
+# The reading a joined form would produce, and the stand-in an angle
+# placeholder keeps, so the two treatments stay apart.
+HTML_JOINED = "Read firstxsecond now."
+PLACEHOLDER_TAGGED = "Read <name> now."
+PLACEHOLDER_STANDIN = "Read x now."
+
+# A delimiter separates the words beside it. Removing it must leave that
+# separation behind rather than join them into one longer word.
+DELIMITED = "The read|write record holds after review."
+DELIMITER_SEPARATED = "The read write record holds after review."
+DELIMITER_JOINED = "The readwrite record holds after review."
+
+# Visible link text is prose. The label alone must reproduce the grade of the
+# same sentence written without a link, and a different label must move it.
+LABEL_LINKED = "Read [the accepted workorder](skills/a/b.md) before review."
+LABEL_PLAIN = "Read the accepted workorder before review."
+LABEL_OTHER = "Read [the governing instructions](skills/a/b.md) before review."
+
+
 # The fixture reference serves both scripts, so it carries every column each
 # one requires: the grade column the readability script reads, and the four
 # density columns check-prose.py reads. It also names `default`, the setting
@@ -486,6 +562,164 @@ def prose_results_are_untouched(results, workdir):
     )
 
 
+# --- normalization ---------------------------------------------------------
+
+def notation_does_not_move_the_grade(results, workdir):
+    """Notation length and spelling stay outside the measurement."""
+    for index, (label, plain, loaded) in enumerate(NOTATION_PAIRS):
+        root = workdir / f"notation-{index}"
+        script = build_tree(root, 30)
+        grades = []
+        for name, text in (("plain.md", plain), ("loaded.md", loaded)):
+            fixture = root / "fixtures" / name
+            write(fixture, text + "\n")
+            _, output = run_script(script, [str(fixture)])
+            grades.append(measured_grade(output))
+        results.check(
+            f"{label} — changing it alone does not move the grade",
+            grades[0] is not None and grades[0] == grades[1],
+            f"plain measured {grades[0]!r}, loaded measured {grades[1]!r}",
+        )
+
+
+def source_notation_does_not_move_the_grade(results, workdir):
+    """A comment and a docstring normalize the way Markdown prose does."""
+    root = workdir / "source-notation"
+    script = build_tree(root, 30)
+    cases = (
+        ("comment", "comment-{}.py", "# {}\n"),
+        ("docstring", "docstring-{}.py", '"""{}"""\n'),
+    )
+    for label, name, body in cases:
+        grades = []
+        for form, text in (("plain", SOURCE_PLAIN), ("loaded", SOURCE_LOADED)):
+            fixture = root / "fixtures" / name.format(form)
+            write(fixture, body.format(text))
+            _, output = run_script(script, [str(fixture)])
+            grades.append(measured_grade(output))
+        results.check(
+            f"{label} — notation inside it does not move the grade",
+            grades[0] is not None and grades[0] == grades[1],
+            f"plain measured {grades[0]!r}, loaded measured {grades[1]!r}",
+        )
+
+
+def link_text_stays_measured(results, workdir):
+    """A link's visible label is prose, and changing it moves the grade."""
+    root = workdir / "link-text"
+    script = build_tree(root, 30)
+    grades = {}
+    cases = (("linked.md", LABEL_LINKED), ("plain.md", LABEL_PLAIN),
+             ("other.md", LABEL_OTHER))
+    for name, text in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        grades[name] = measured_grade(output)
+
+    results.check(
+        "link text — the label measures as the same sentence without a link",
+        grades["linked.md"] is not None
+        and grades["linked.md"] == grades["plain.md"]
+        and grades["linked.md"] == expected_grade(LABEL_PLAIN),
+        f"linked {grades['linked.md']!r}, plain {grades['plain.md']!r}, "
+        f"expected {expected_grade(LABEL_PLAIN)}",
+    )
+    results.check(
+        "link text — changing the label moves the grade",
+        grades["linked.md"] != grades["other.md"],
+        f"both labels measured {grades['linked.md']!r}",
+    )
+
+
+def visible_prose_still_moves_the_grade(results, workdir):
+    """Normalization neutralizes notation without flattening the prose."""
+    root = workdir / "visible-prose"
+    script = build_tree(root, 30)
+    grades = []
+    cases = (
+        ("simple.md", "Read the file `x` before the run at skills/a/b.md."),
+        ("dense.md", "Reconcile the instrumentation configuration `x` "
+                     "throughout the environment at skills/a/b.md."),
+    )
+    for name, text in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        grades.append(measured_grade(output))
+    results.check(
+        "visible prose — changing it still changes the grade",
+        None not in grades and grades[0] != grades[1],
+        f"both measured {grades[0]!r}",
+    )
+
+
+def ordinary_compounds_stay_prose(results, workdir):
+    """A slashed compound is vocabulary, not notation, and stays measured."""
+    root = workdir / "compounds"
+    script = build_tree(root, 30)
+    standin = expected_grade(COMPOUND_STANDIN)
+    for index, text in enumerate(COMPOUND_PROSE):
+        fixture = root / "fixtures" / f"compound-{index}.md"
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        measured = measured_grade(output)
+        token = text.split()[1]
+        results.check(
+            f"{token} — measured as written, not discarded as a path",
+            measured == expected_grade(text) and measured != standin,
+            f"measured {measured!r}, expected {expected_grade(text)}, "
+            f"stand-in measures {standin}",
+        )
+
+
+def delimiters_do_not_join_words(results, workdir):
+    """Removing surviving syntax leaves the separation that syntax carried."""
+    root = workdir / "delimiters"
+    script = build_tree(root, 30)
+    fixture = root / "fixtures" / "delimited.md"
+    write(fixture, DELIMITED + "\n")
+    _, output = run_script(script, [str(fixture)])
+    measured = measured_grade(output)
+
+    results.check(
+        "surviving delimiter — separates the words it stood between",
+        measured == expected_grade(DELIMITER_SEPARATED)
+        and measured != expected_grade(DELIMITER_JOINED),
+        f"measured {measured!r}, separated is "
+        f"{expected_grade(DELIMITER_SEPARATED)}, joined is "
+        f"{expected_grade(DELIMITER_JOINED)}",
+    )
+
+
+def inline_html_does_not_join_words(results, workdir):
+    """A tag gives way to a boundary; a placeholder keeps its stand-in."""
+    root = workdir / "inline-html"
+    script = build_tree(root, 30)
+    for index, (label, tagged, plain) in enumerate(HTML_PAIRS):
+        fixture = root / "fixtures" / f"html-{index}.md"
+        write(fixture, tagged + "\n")
+        _, output = run_script(script, [str(fixture)])
+        measured = measured_grade(output)
+        results.check(
+            f"{label} — separates the words it stood between",
+            measured == expected_grade(plain)
+            and measured != expected_grade(HTML_JOINED),
+            f"measured {measured!r}, separated is {expected_grade(plain)}, "
+            f"joined is {expected_grade(HTML_JOINED)}",
+        )
+
+    fixture = root / "fixtures" / "placeholder.md"
+    write(fixture, PLACEHOLDER_TAGGED + "\n")
+    _, output = run_script(script, [str(fixture)])
+    results.check(
+        "angle placeholder — keeps a stand-in rather than a boundary",
+        measured_grade(output) == expected_grade(PLACEHOLDER_STANDIN),
+        f"measured {measured_grade(output)!r}, expected "
+        f"{expected_grade(PLACEHOLDER_STANDIN)}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -512,6 +746,13 @@ def main():
         markdown_prose_is_measured(results, workdir)
         source_prose_is_measured(results, workdir)
         prose_results_are_untouched(results, workdir)
+        notation_does_not_move_the_grade(results, workdir)
+        source_notation_does_not_move_the_grade(results, workdir)
+        link_text_stays_measured(results, workdir)
+        visible_prose_still_moves_the_grade(results, workdir)
+        ordinary_compounds_stay_prose(results, workdir)
+        delimiters_do_not_join_words(results, workdir)
+        inline_html_does_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

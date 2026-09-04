@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 
+import textstat
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CHECKER = (REPO_ROOT / "skills" / "prose-discipline" / "scripts"
            / "check-prose.py")
@@ -107,16 +109,76 @@ VOCAB = "The check will utilize the record."
 # and a vocabulary term, so any leak is visible.
 EXCLUDED = "Note that the check may possibly utilize the record and it could stop"
 
+# --- normalization fixtures ------------------------------------------------
+# Two release numbers make the checker's word rule visible. Textstat reads
+# `3.5` as one word; the removed repository-local rule read it as two, so a
+# unit carrying two of them counts two words lower under Textstat.
+VERSION_A = "The validator reads release 3.5 and rejects the accepted workorder."
+VERSION_B = "The record holds release 4.5 and the reviewer reads it."
+# 25 Textstat words — exactly the default unit limit. The removed rule
+# counted 27 and would have reported a finding here.
+VERSION_AT = f"{VERSION_A} {VERSION_B} The boundary holds after review."
+# 26 Textstat words, one above the limit. The removed rule counted 28, so
+# the reported number names which rule produced it.
+VERSION_OVER = f"{VERSION_A} {VERSION_B} The boundary holds after the review."
+
+# One sentence of visible prose, written twice. The loaded form carries a
+# code span, a link destination, and a raw URL; the removed rule counted 31
+# words in it, above the default unit limit, against 12 in its twin.
+NOTATION_PLAIN = "Run `x` before review, read [the standard](x), and open x once."
+NOTATION_LOADED = (
+    "Run `skills/prose-discipline/scripts/check-readability.py --setting "
+    "instruction` before review, read [the standard]"
+    "(skills/prose-discipline/references/complexity-settings.md), and open "
+    "https://example.invalid/a/very/long/path/to/a/reference once.")
+
+# The same visible prose either side of one code span. The removed rule
+# counted 17 words in the long form, above the default sentence limit, and 8
+# in its twin.
+SPAN_SHORT = "The validator reads `a` and rejects the change."
+SPAN_LONG = ("The validator reads `skills/prose-discipline/scripts/"
+             "check-readability.py --setting instruction --top 5 "
+             "--list-settings` and rejects the change.")
+
+# A link label is prose a reader reads. 13 words, above the caller limit.
+LABEL_LONG = ("[The validator reads the accepted workorder and rejects the "
+              "change without a signature](skills/a/b.md).")
+
+# Four sentences carrying notation at each boundary.
+MIXED_SENTENCES = ("The check runs `a`. The file passes [here](x). The report "
+                   "lands at skills/a/b.md. The boundary holds.")
+
+# Four sentences of two words each. Textstat's aggregate sentence_count()
+# discards them and reports 1; the sentence limit counts all four.
+SHORT_SENTENCES = "Runs now. Passes now. Lands now. Holds now."
+
+# A delimiter separates the words beside it. Removing it must leave that
+# separation behind: 9 words against the 8 the joined form would count, so
+# the caller limit reports the difference.
+DELIMITED_UNIT = "The read|write record holds after the second review."
+# Inline HTML separates the words around it too: 9 words against the 8 a
+# joined form would count.
+TAGGED_UNIT = "The read<br>write record holds after the second review."
+
+# A hedge and a vocabulary term written inside code spans. Normalizing them
+# away would silence both findings.
+SPANNED_POLICY = "The check will `utilize` the record and it `may` stop and it could halt."
+
+
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
 SUMMARY_LINE = re.compile(
     r"^(\d+) finding\(s\) across (\d+) file\(s\) "
     r"— density: (\d+), vocabulary: (\d+)$", re.MULTILINE)
 CLEAN_LINE = re.compile(r"^PASS — \d+ files checked, no findings$", re.MULTILINE)
-WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 
 
 def words(text):
-    return len(WORD_RE.findall(text))
+    """The word count the checker reads, asked of Textstat directly.
+
+    The harness holds no word rule of its own. A checker that reverted to a
+    repository-local counter would disagree with this oracle.
+    """
+    return textstat.lexicon_count(text)
 
 
 def write(path, text):
@@ -721,6 +783,174 @@ def strict_mode_still_fails(results, workdir):
     )
 
 
+def density_word_counts_come_from_textstat(results, workdir):
+    """The unit word count is Textstat's, not the removed repository rule."""
+    root = workdir / "textstat-words"
+    script = build_tree(root)
+    write(root / "at.md", VERSION_AT + "\n")
+    write(root / "over.md", VERSION_OVER + "\n")
+
+    _, _, at_found = check_one(script, root / "at.md")
+    _, _, over_found = check_one(script, root / "over.md")
+
+    results.check(
+        "word count — 25 Textstat words pass where the removed rule counted 27",
+        not any("prose unit of" in message for message in at_found),
+        f"expected no unit finding, got: {at_found}",
+    )
+    results.check(
+        "word count — the reported number is Textstat's, not the removed rule's",
+        has(over_found, f"prose unit of {words(VERSION_OVER)} words",
+            f"limit is {DEFAULT_UNIT_WORDS}")
+        and not has(over_found, "prose unit of 28 words"),
+        f"expected 'prose unit of {words(VERSION_OVER)} words', got: {over_found}",
+    )
+
+
+def notation_carries_no_density_weight(results, workdir):
+    """A path, a link destination, and a URL measure as their neutral twin."""
+    root = workdir / "notation-density"
+    script = build_tree(root)
+    write(root / "plain.md", NOTATION_PLAIN + "\n")
+    write(root / "loaded.md", NOTATION_LOADED + "\n")
+
+    plain_code, plain_output, plain_found = check_one(script, root / "plain.md")
+    loaded_code, loaded_output, loaded_found = check_one(script, root / "loaded.md")
+
+    results.check(
+        "notation — the loaded unit reports what its neutral twin reports",
+        plain_found == loaded_found,
+        f"plain {plain_found} against loaded {loaded_found}",
+    )
+    results.check(
+        "notation — neither unit breaches a density limit",
+        (plain_code, loaded_code) == (0, 0)
+        and counts(plain_output) == (0, 0, 0, 0)
+        and counts(loaded_output) == (0, 0, 0, 0),
+        f"plain {plain_output!r} loaded {loaded_output!r}",
+    )
+
+
+def code_span_contents_do_not_change_density(results, workdir):
+    """Changing only what a code span holds changes no density finding."""
+    root = workdir / "span-density"
+    script = build_tree(root)
+    write(root / "short.md", SPAN_SHORT + "\n")
+    write(root / "long.md", SPAN_LONG + "\n")
+
+    _, _, short_found = check_one(script, root / "short.md")
+    _, _, long_found = check_one(script, root / "long.md")
+
+    results.check(
+        "code span — its contents carry no density weight",
+        short_found == long_found,
+        f"short {short_found} against long {long_found}",
+    )
+
+
+def link_label_keeps_its_density_weight(results, workdir):
+    """Visible link text stays prose and is still measured as prose."""
+    root = workdir / "label-density"
+    script = build_tree(root)
+    write(root / "label.md", LABEL_LONG + "\n")
+
+    _, _, found = check_one(script, root / "label.md",
+                            ["--setting", CALLER_SETTING])
+
+    results.check(
+        "link label — visible text is measured, its destination is not",
+        has(found, f"above {CALLER_SENTENCE_WORDS} words", "longest is 13"),
+        f"expected a 13-word sentence finding, got: {found}",
+    )
+
+
+def sentence_boundaries_survive_normalization(results, workdir):
+    """Notation at a sentence boundary leaves the boundary in place."""
+    root = workdir / "boundaries"
+    script = build_tree(root)
+    write(root / "mixed.md", MIXED_SENTENCES + "\n")
+
+    _, _, found = check_one(script, root / "mixed.md")
+
+    results.check(
+        "sentence boundaries — notation does not merge or split a sentence",
+        has(found, "4 sentences", f"limit is {DEFAULT_SENTENCES}"),
+        f"expected a 4-sentence finding, got: {found}",
+    )
+
+
+def short_sentences_still_count(results, workdir):
+    """The sentence limit counts every sentence, as the policy requires.
+
+    Textstat exposes sentence measurement only as `sentence_count()`, which
+    discards sentences of two words or fewer and reports 1 for this unit.
+    The retained boundary helper is what keeps the limit honest.
+    """
+    root = workdir / "short-sentences"
+    script = build_tree(root)
+    write(root / "short.md", SHORT_SENTENCES + "\n")
+
+    _, _, found = check_one(script, root / "short.md")
+
+    results.check(
+        "sentence count — four two-word sentences breach a limit of three",
+        has(found, "4 sentences", f"limit is {DEFAULT_SENTENCES}"),
+        f"expected a 4-sentence finding, got: {found}",
+    )
+
+
+def policy_rules_read_the_written_prose(results, workdir):
+    """Hedge, filler, and vocabulary findings read the extracted wording."""
+    root = workdir / "written-prose"
+    script = build_tree(root)
+    write(root / "spanned.md", SPANNED_POLICY + "\n")
+
+    _, _, found = check_one(script, root / "spanned.md")
+
+    results.check(
+        "hedges — a hedge inside a code span is still counted",
+        has(found, "2 hedge words"),
+        f"expected two hedges, got: {found}",
+    )
+    results.check(
+        "vocabulary — a listed term inside a code span is still reported",
+        has(found, "'utilize'"),
+        f"expected a vocabulary finding, got: {found}",
+    )
+
+
+def delimiter_does_not_join_words(results, workdir):
+    """Surviving syntax cannot concatenate the prose tokens it separated."""
+    root = workdir / "delimiter-density"
+    script = build_tree(root)
+    write(root / "delimited.md", DELIMITED_UNIT + "\n")
+
+    _, _, found = check_one(script, root / "delimited.md",
+                            ["--setting", CALLER_SETTING])
+
+    results.check(
+        "surviving delimiter — the words it separated are counted separately",
+        has(found, f"above {CALLER_SENTENCE_WORDS} words", "longest is 9"),
+        f"expected a 9-word sentence, got: {found}",
+    )
+
+
+def inline_html_does_not_join_words(results, workdir):
+    """An HTML tag cannot concatenate the prose tokens it separated."""
+    root = workdir / "html-density"
+    script = build_tree(root)
+    write(root / "tagged.md", TAGGED_UNIT + "\n")
+
+    _, _, found = check_one(script, root / "tagged.md",
+                            ["--setting", CALLER_SETTING])
+
+    results.check(
+        "inline HTML — the words it separated are counted separately",
+        has(found, f"above {CALLER_SENTENCE_WORDS} words", "longest is 9"),
+        f"expected a 9-word sentence, got: {found}",
+    )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -757,6 +987,15 @@ def main():
         modes_stay_separate(results, workdir)
         word_findings_count_as_density(results, workdir)
         strict_mode_still_fails(results, workdir)
+        density_word_counts_come_from_textstat(results, workdir)
+        notation_carries_no_density_weight(results, workdir)
+        code_span_contents_do_not_change_density(results, workdir)
+        link_label_keeps_its_density_weight(results, workdir)
+        sentence_boundaries_survive_normalization(results, workdir)
+        short_sentences_still_count(results, workdir)
+        policy_rules_read_the_written_prose(results, workdir)
+        delimiter_does_not_join_words(results, workdir)
+        inline_html_does_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

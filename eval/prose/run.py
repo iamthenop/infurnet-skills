@@ -156,6 +156,9 @@ SHORT_SENTENCES = "Runs now. Passes now. Lands now. Holds now."
 # separation behind: 9 words against the 8 the joined form would count, so
 # the caller limit reports the difference.
 DELIMITED_UNIT = "The read|write record holds after the second review."
+# Inline HTML separates the words around it too: 9 words against the 8 a
+# joined form would count.
+TAGGED_UNIT = "The read<br>write record holds after the second review."
 
 # A hedge and a vocabulary term written inside code spans. Normalizing them
 # away would silence both findings.
@@ -932,6 +935,22 @@ def delimiter_does_not_join_words(results, workdir):
     )
 
 
+def inline_html_does_not_join_words(results, workdir):
+    """An HTML tag cannot concatenate the prose tokens it separated."""
+    root = workdir / "html-density"
+    script = build_tree(root)
+    write(root / "tagged.md", TAGGED_UNIT + "\n")
+
+    _, _, found = check_one(script, root / "tagged.md",
+                            ["--setting", CALLER_SETTING])
+
+    results.check(
+        "inline HTML — the words it separated are counted separately",
+        has(found, f"above {CALLER_SENTENCE_WORDS} words", "longest is 9"),
+        f"expected a 9-word sentence, got: {found}",
+    )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -976,6 +995,7 @@ def main():
         short_sentences_still_count(results, workdir)
         policy_rules_read_the_written_prose(results, workdir)
         delimiter_does_not_join_words(results, workdir)
+        inline_html_does_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

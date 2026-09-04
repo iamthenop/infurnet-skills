@@ -101,6 +101,20 @@ COMPOUND_PROSE = (
 # compound discarded as notation would measure as this.
 COMPOUND_STANDIN = "The x boundary holds after review."
 
+# Inline HTML separates the visible text around it. Each tagged form must
+# measure as its tag-free twin rather than joining two words into one.
+HTML_PAIRS = (
+    ("<br>", "Read first<br>second now.", "Read first second now."),
+    ("<br/>", "Read first<br/>second now.", "Read first second now."),
+    ("<span>", 'A tag<span id="a">wraps</span>text here.',
+     "A tag wraps text here."),
+)
+# The reading a joined form would produce, and the stand-in an angle
+# placeholder keeps, so the two treatments stay apart.
+HTML_JOINED = "Read firstxsecond now."
+PLACEHOLDER_TAGGED = "Read <name> now."
+PLACEHOLDER_STANDIN = "Read x now."
+
 # A delimiter separates the words beside it. Removing it must leave that
 # separation behind rather than join them into one longer word.
 DELIMITED = "The read|write record holds after review."
@@ -678,6 +692,34 @@ def delimiters_do_not_join_words(results, workdir):
     )
 
 
+def inline_html_does_not_join_words(results, workdir):
+    """A tag gives way to a boundary; a placeholder keeps its stand-in."""
+    root = workdir / "inline-html"
+    script = build_tree(root, 30)
+    for index, (label, tagged, plain) in enumerate(HTML_PAIRS):
+        fixture = root / "fixtures" / f"html-{index}.md"
+        write(fixture, tagged + "\n")
+        _, output = run_script(script, [str(fixture)])
+        measured = measured_grade(output)
+        results.check(
+            f"{label} — separates the words it stood between",
+            measured == expected_grade(plain)
+            and measured != expected_grade(HTML_JOINED),
+            f"measured {measured!r}, separated is {expected_grade(plain)}, "
+            f"joined is {expected_grade(HTML_JOINED)}",
+        )
+
+    fixture = root / "fixtures" / "placeholder.md"
+    write(fixture, PLACEHOLDER_TAGGED + "\n")
+    _, output = run_script(script, [str(fixture)])
+    results.check(
+        "angle placeholder — keeps a stand-in rather than a boundary",
+        measured_grade(output) == expected_grade(PLACEHOLDER_STANDIN),
+        f"measured {measured_grade(output)!r}, expected "
+        f"{expected_grade(PLACEHOLDER_STANDIN)}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -710,6 +752,7 @@ def main():
         visible_prose_still_moves_the_grade(results, workdir)
         ordinary_compounds_stay_prose(results, workdir)
         delimiters_do_not_join_words(results, workdir)
+        inline_html_does_not_join_words(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

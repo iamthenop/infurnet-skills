@@ -396,6 +396,25 @@ URL_RE = re.compile(
     r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>"
     r"|(?:[A-Za-z][A-Za-z0-9+.-]*://|www\.|mailto:)[^\s>]*[^\s>.,;:!?)\]]")
 
+# Inline HTML and an angle placeholder both sit between angle brackets and
+# read differently. A tag decorates or separates the visible text around it
+# and is no part of what a reader reads, so it gives way to a space. A
+# placeholder stands where a reader reads a value, so it keeps a stand-in.
+#
+# A closing tag, a self-closing tag, and a tag carrying an attribute are
+# unmistakable. A bare tag is ambiguous with a placeholder, so it is one
+# only when it names an HTML element.
+HTML_TAG_RE = re.compile(
+    r"</[A-Za-z][\w:-]*\s*>"
+    r"|<[A-Za-z][\w:-]*(?:\s[^<>]*?)?/>"
+    r"|<[A-Za-z][\w:-]*\s+[^<>]*=[^<>]*>")
+HTML_ELEMENTS = frozenset("""
+    a abbr b br cite code del div em h1 h2 h3 h4 h5 h6 hr i img ins kbd li
+    mark ol p pre q s samp small span strong sub sup table tbody td th thead
+    tr u ul var wbr
+""".split())
+BARE_TAG_RE = re.compile(r"<([A-Za-z][\w-]*)>")
+
 # An angle-bracketed placeholder such as <name>.
 ANGLE_RE = re.compile(r"<[^<>\s]+>")
 
@@ -487,6 +506,13 @@ def normalize_prose(text):
     text = INLINE_LINK_RE.sub(lambda m: m.group(1) or CODE_PLACEHOLDER, text)
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1) or CODE_PLACEHOLDER, text)
     text = URL_RE.sub(CODE_PLACEHOLDER, text)
+    # A tag separated the text around it, so removing it leaves that
+    # separation behind. A placeholder replaces a value written in one
+    # piece, so its stand-in stays in one piece with the token holding it.
+    text = HTML_TAG_RE.sub(" ", text)
+    text = BARE_TAG_RE.sub(
+        lambda m: " " if m.group(1).lower() in HTML_ELEMENTS
+        else CODE_PLACEHOLDER, text)
     text = ANGLE_RE.sub(CODE_PLACEHOLDER, text)
     text = EMPHASIS_RE.sub(r"\2", text)
     text = replace_code_tokens(" ".join(text.split()))

@@ -13,7 +13,8 @@ Ownership:
     named settings, their maximum grades, and the mechanism selecting each
         one — references/complexity-settings.md
     the grade calculation — textstat.flesch_kincaid_grade()
-    the prose boundaries — check-prose.py, read here and never changed
+    the prose boundaries and the normalization the grade measures —
+        check-prose.py, read here and never changed
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -56,7 +57,6 @@ MECHANISM_COLUMN = "Selected by"
 BY_DELIVERABLE = "deliverable"
 BY_EXTRACTOR = "extractor"
 
-SENTENCE_END = (".", "!", "?")
 SNIPPET_WIDTH = 60
 
 
@@ -197,18 +197,6 @@ def extractor_maxima(settings):
 # Measurement
 # ---------------------------------------------------------------------------
 
-def as_sentence(text):
-    """Close a prose unit so the grade calculation sees its own boundary.
-
-    A Markdown list item or a table cell often carries no terminal mark.
-    Without one, the calculation reads two units as a single long sentence.
-    """
-    text = " ".join(text.split())
-    if text and not text.endswith(SENTENCE_END):
-        text += "."
-    return text
-
-
 def grade(text):
     """The Flesch-Kincaid Grade Level of one block of prose."""
     return round(textstat.flesch_kincaid_grade(text), 2)
@@ -223,17 +211,20 @@ def measure_file(path, prose):
 
     units = []
     for lineno, kind, text in extract_units(prose, path, source):
-        sentence = as_sentence(text)
-        if sentence:
-            units.append((lineno, kind, sentence))
+        # The extractor owns the boundary; check-prose.py owns the
+        # normalization. Both grades measure that one representation, and
+        # the snippet keeps the written prose so a reader can find it.
+        measured = prose.normalize_prose(text)
+        if measured:
+            units.append((lineno, kind, measured, text))
 
     if not units:
         return None, []
 
-    file_grade = grade("\n".join(text for _, _, text in units))
+    file_grade = grade("\n".join(unit[2] for unit in units))
     measured = [
-        (lineno, kind, grade(text), text)
-        for lineno, kind, text in units
+        (lineno, kind, grade(text), " ".join(written.split()))
+        for lineno, kind, text, written in units
     ]
     return file_grade, measured
 

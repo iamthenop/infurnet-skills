@@ -14,7 +14,9 @@ Ownership:
     named settings, their density limits, and the mechanism selecting each
         one — references/complexity-settings.md
     the categorical prose rules — SKILL.md
-    the vocabulary list and the prose boundaries — this script
+    the vocabulary list, the prose boundaries, and the normalization both
+        checkers measure — this script
+    the word count and the other lexical primitives — textstat
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -43,6 +45,8 @@ import re
 import sys
 import tokenize
 from pathlib import Path
+
+import textstat
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
@@ -344,21 +348,151 @@ def overlap_ratio(tokens_a, tokens_b):
     return len(set_a & set_b) / min(len(set_a), len(set_b))
 
 
-# A word is a run of letters or digits, joined by an apostrophe or a hyphen.
-# The count uses this rule alone: no tokenizer and no word list.
-WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
-
-
-def count_words(text):
-    return len(WORD_RE.findall(text))
-
-
 def plural(count, word):
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
 def split_sentences(text):
+    """Return the sentences of one prose unit, in the order they were written.
+
+    Textstat counts sentences and does not expose their boundaries, so this
+    is the smallest local rule that locates the sentences per-sentence
+    policy reads: the sentence word limit and the adjacent-sentence
+    comparison. Its aggregate `sentence_count()` cannot stand in, because it
+    discards sentences of two words or fewer and never reports fewer than
+    one, while the sentence limit counts every sentence a reader meets.
+    """
     return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Normalization
+# ---------------------------------------------------------------------------
+# Measurement reads prose. Markdown syntax and code-shaped tokens carry no
+# readable prose, so one deterministic pass replaces each with a stand-in
+# before any lexical or readability measurement. A longer path, identifier,
+# option name, or link destination then cannot make otherwise identical
+# prose measure as harder to read.
+#
+# The pass identifies notation by syntax. It never decides whether an
+# ordinary word is technical enough to exclude.
+
+# One word of one syllable, shorter than the meaningful-token gate below, so
+# a stand-in fills the slot its notation held without contributing a
+# repetition token of its own.
+CODE_PLACEHOLDER = "x"
+
+# Markdown notation, in the order the pass applies it. A code span resolves
+# first, so a link written inside one is not read as a link, and an image
+# resolves before a link, because image syntax carries link syntax.
+CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1", re.DOTALL)
+IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
+
+# A destination, written bare or as an autolink. The trailing class leaves a
+# sentence's own closing mark outside the match.
+URL_RE = re.compile(
+    r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>"
+    r"|(?:[A-Za-z][A-Za-z0-9+.-]*://|www\.|mailto:)[^\s>]*[^\s>.,;:!?)\]]")
+
+# An angle-bracketed placeholder such as <name>.
+ANGLE_RE = re.compile(r"<[^<>\s]+>")
+
+# Emphasis keeps its text and loses its delimiters. Delimiters surviving
+# every pass above carry no readable prose at all.
+EMPHASIS_RE = re.compile(r"(?<!\w)([*_~]{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
+DELIMITER_RE = re.compile(r"[*~\[\]>|]+")
+ESCAPE_RE = re.compile(r"\\(.)")
+
+# Code shapes: call syntax, a command-line flag, a dotted or qualified
+# identifier, and an underscore or backslash joining word characters.
+CALL_RE = re.compile(r"[A-Za-z_][\w.]*\([^()]*\)")
+FLAG_RE = re.compile(r"--?[A-Za-z][\w-]*")
+DOTTED_RE = re.compile(r"[A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)+")
+SNAKE_RE = re.compile(r"\w[_\\]\w")
+
+# Punctuation that sits outside a token without belonging to it.
+LEADING_MARKS = "([{\"\'‘“"
+TRAILING_MARKS = ".,;:!?)]}\"\'’”"
+
+# A path carries one of these beside its separator. Without one, a slash
+# joins two ordinary words, as in `and/or` or `pass/fail`.
+PATH_MARKS = ".-_<>"
+PATH_PREFIXES = "@~./"
+
+SENTENCE_END = (".", "!", "?")
+
+
+def is_path(core):
+    """True when a token's slashes separate path segments rather than words."""
+    if "/" not in core:
+        return False
+    return (core.count("/") > 1
+            or core[0] in PATH_PREFIXES
+            or core.endswith("/")
+            or any(mark in core for mark in PATH_MARKS))
+
+
+def is_code_shaped(core):
+    """True when syntax alone identifies a token as code rather than prose."""
+    if SNAKE_RE.search(core) or is_path(core):
+        return True
+    if CALL_RE.fullmatch(core) or FLAG_RE.fullmatch(core):
+        return True
+    # A dotted identifier needs one segment of real length. Without that
+    # test, `e.g.` and `i.e.` read as qualified names.
+    return bool(DOTTED_RE.fullmatch(core)
+                and max(len(part) for part in core.split(".")) > 1)
+
+
+def split_marks(token):
+    """Split a token into its leading marks, its core, and its trailing marks."""
+    start, end = 0, len(token)
+    while start < end and token[start] in LEADING_MARKS:
+        start += 1
+    while end > start and token[end - 1] in TRAILING_MARKS:
+        # A closing parenthesis belongs to call syntax, not to the sentence.
+        if token[end - 1] == ")" and "(" in token[start:end - 1]:
+            break
+        end -= 1
+    return token[:start], token[start:end], token[end:]
+
+
+def replace_code_tokens(text):
+    """Replace every code-shaped token, keeping the punctuation around it."""
+    replaced = []
+    for token in text.split(" "):
+        leading, core, trailing = split_marks(token)
+        if core and is_code_shaped(core):
+            replaced.append(leading + CODE_PLACEHOLDER + trailing)
+        else:
+            replaced.append(token)
+    return " ".join(replaced)
+
+
+def normalize_prose(text):
+    """Return one prose unit with its notation replaced by a stand-in.
+
+    Both checkers measure this representation, so density and readability
+    read one prose. Visible link text and image alt text survive the pass,
+    because a reader reads them.
+    """
+    text = CODE_SPAN_RE.sub(CODE_PLACEHOLDER, text)
+    text = IMAGE_RE.sub(lambda m: m.group(1) or CODE_PLACEHOLDER, text)
+    text = INLINE_LINK_RE.sub(lambda m: m.group(1) or CODE_PLACEHOLDER, text)
+    text = REFERENCE_LINK_RE.sub(lambda m: m.group(1) or CODE_PLACEHOLDER, text)
+    text = URL_RE.sub(CODE_PLACEHOLDER, text)
+    text = ANGLE_RE.sub(CODE_PLACEHOLDER, text)
+    text = EMPHASIS_RE.sub(r"\2", text)
+    text = replace_code_tokens(" ".join(text.split()))
+    text = DELIMITER_RE.sub("", ESCAPE_RE.sub(r"\1", text))
+    text = " ".join(text.split())
+    # A list item or a table cell often carries no terminal mark. Without
+    # one, the measurement reads two units as a single long sentence.
+    if text and not text.endswith(SENTENCE_END):
+        text += "."
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +647,15 @@ def check_density(lineno, kind, text, stop_words, setting, zero_hedges=False):
 
     `setting` is the (name, limits) pair selected for this unit. Every
     numeric limit is inclusive: a value above it is a finding.
+
+    Every lexical limit measures the normalized prose, so notation length
+    carries no density weight. The hedge, filler, and vocabulary rules read
+    the extracted wording instead, because each matches a written term.
     """
     name, limits = setting
     findings = []
-    sentences = split_sentences(text)
+    measured = normalize_prose(text)
+    sentences = split_sentences(measured)
 
     sentence_limit = limits["sentences_per_unit_max"]
     if len(sentences) > sentence_limit:
@@ -527,7 +666,8 @@ def check_density(lineno, kind, text, stop_words, setting, zero_hedges=False):
         ))
 
     word_limit = limits["sentence_words_max"]
-    over = [count_words(s) for s in sentences if count_words(s) > word_limit]
+    counted = [textstat.lexicon_count(s) for s in sentences]
+    over = [words for words in counted if words > word_limit]
     if over:
         findings.append((
             lineno, kind,
@@ -536,7 +676,7 @@ def check_density(lineno, kind, text, stop_words, setting, zero_hedges=False):
         ))
 
     unit_limit = limits["prose_unit_words_max"]
-    unit_words = count_words(text)
+    unit_words = textstat.lexicon_count(measured)
     if unit_words > unit_limit:
         findings.append((
             lineno, kind,

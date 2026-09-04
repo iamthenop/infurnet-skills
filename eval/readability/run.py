@@ -52,6 +52,48 @@ OVER_INLINE = ("The docstring records the calling contract a reader "
 SIMPLE_DOC = ("The check runs. The file passes. The list is short. It is "
               "done. The run ends. The next one starts. The log is clear.")
 
+# --- notation fixtures -----------------------------------------------------
+# Each pair carries one sentence of visible prose written twice. The two
+# forms differ only in notation, so a measurement that reads notation as
+# prose separates them and one that normalizes first does not.
+NOTATION_PAIRS = (
+    ("inline code",
+     "The validator reads `x` and rejects the accepted workorder today.",
+     "The validator reads `skills/prose-discipline/scripts/check-readability.py"
+     " --setting instruction` and rejects the accepted workorder today."),
+    ("link destination",
+     "The validator reads [the standard](x) and rejects the workorder today.",
+     "The validator reads [the standard]"
+     "(skills/prose-discipline/references/complexity-settings.md) and rejects "
+     "the workorder today."),
+    ("raw URL",
+     "The validator reads x and rejects the accepted workorder today.",
+     "The validator reads https://example.invalid/a/very/long/path/to/a/"
+     "reference and rejects the accepted workorder today."),
+    ("code-shaped tokens",
+     "The validator reads x and x and x and x and x today.",
+     "The validator reads eval/prose/run.py and metadata.skill-type and "
+     "--setting and resolve_file_maximum and grade() today."),
+    ("image destination",
+     "The validator reads ![the accepted workorder](x) today.",
+     "The validator reads ![the accepted workorder](images/a/long/name.png) "
+     "today."),
+)
+
+# The same pair written into a comment and into a docstring, so the source
+# extractors demonstrate the normalization the Markdown extractor does.
+SOURCE_PLAIN = ("The validator reads x and x and rejects the accepted "
+                "workorder today.")
+SOURCE_LOADED = ("The validator reads tools/validate.py and --setting and "
+                 "rejects the accepted workorder today.")
+
+# Visible link text is prose. The label alone must reproduce the grade of the
+# same sentence written without a link, and a different label must move it.
+LABEL_LINKED = "Read [the accepted workorder](skills/a/b.md) before review."
+LABEL_PLAIN = "Read the accepted workorder before review."
+LABEL_OTHER = "Read [the governing instructions](skills/a/b.md) before review."
+
+
 # The fixture reference serves both scripts, so it carries every column each
 # one requires: the grade column the readability script reads, and the four
 # density columns check-prose.py reads. It also names `default`, the setting
@@ -486,6 +528,98 @@ def prose_results_are_untouched(results, workdir):
     )
 
 
+# --- normalization ---------------------------------------------------------
+
+def notation_does_not_move_the_grade(results, workdir):
+    """Notation length and spelling stay outside the measurement."""
+    for index, (label, plain, loaded) in enumerate(NOTATION_PAIRS):
+        root = workdir / f"notation-{index}"
+        script = build_tree(root, 30)
+        grades = []
+        for name, text in (("plain.md", plain), ("loaded.md", loaded)):
+            fixture = root / "fixtures" / name
+            write(fixture, text + "\n")
+            _, output = run_script(script, [str(fixture)])
+            grades.append(measured_grade(output))
+        results.check(
+            f"{label} — changing it alone does not move the grade",
+            grades[0] is not None and grades[0] == grades[1],
+            f"plain measured {grades[0]!r}, loaded measured {grades[1]!r}",
+        )
+
+
+def source_notation_does_not_move_the_grade(results, workdir):
+    """A comment and a docstring normalize the way Markdown prose does."""
+    root = workdir / "source-notation"
+    script = build_tree(root, 30)
+    cases = (
+        ("comment", "comment-{}.py", "# {}\n"),
+        ("docstring", "docstring-{}.py", '"""{}"""\n'),
+    )
+    for label, name, body in cases:
+        grades = []
+        for form, text in (("plain", SOURCE_PLAIN), ("loaded", SOURCE_LOADED)):
+            fixture = root / "fixtures" / name.format(form)
+            write(fixture, body.format(text))
+            _, output = run_script(script, [str(fixture)])
+            grades.append(measured_grade(output))
+        results.check(
+            f"{label} — notation inside it does not move the grade",
+            grades[0] is not None and grades[0] == grades[1],
+            f"plain measured {grades[0]!r}, loaded measured {grades[1]!r}",
+        )
+
+
+def link_text_stays_measured(results, workdir):
+    """A link's visible label is prose, and changing it moves the grade."""
+    root = workdir / "link-text"
+    script = build_tree(root, 30)
+    grades = {}
+    cases = (("linked.md", LABEL_LINKED), ("plain.md", LABEL_PLAIN),
+             ("other.md", LABEL_OTHER))
+    for name, text in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        grades[name] = measured_grade(output)
+
+    results.check(
+        "link text — the label measures as the same sentence without a link",
+        grades["linked.md"] is not None
+        and grades["linked.md"] == grades["plain.md"]
+        and grades["linked.md"] == expected_grade(LABEL_PLAIN),
+        f"linked {grades['linked.md']!r}, plain {grades['plain.md']!r}, "
+        f"expected {expected_grade(LABEL_PLAIN)}",
+    )
+    results.check(
+        "link text — changing the label moves the grade",
+        grades["linked.md"] != grades["other.md"],
+        f"both labels measured {grades['linked.md']!r}",
+    )
+
+
+def visible_prose_still_moves_the_grade(results, workdir):
+    """Normalization neutralizes notation without flattening the prose."""
+    root = workdir / "visible-prose"
+    script = build_tree(root, 30)
+    grades = []
+    cases = (
+        ("simple.md", "Read the file `x` before the run at skills/a/b.md."),
+        ("dense.md", "Reconcile the instrumentation configuration `x` "
+                     "throughout the environment at skills/a/b.md."),
+    )
+    for name, text in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, text + "\n")
+        _, output = run_script(script, [str(fixture)])
+        grades.append(measured_grade(output))
+    results.check(
+        "visible prose — changing it still changes the grade",
+        None not in grades and grades[0] != grades[1],
+        f"both measured {grades[0]!r}",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -512,6 +646,10 @@ def main():
         markdown_prose_is_measured(results, workdir)
         source_prose_is_measured(results, workdir)
         prose_results_are_untouched(results, workdir)
+        notation_does_not_move_the_grade(results, workdir)
+        source_notation_does_not_move_the_grade(results, workdir)
+        link_text_stays_measured(results, workdir)
+        visible_prose_still_moves_the_grade(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

@@ -138,8 +138,7 @@ What successful state progression, authority, obligations, or guarantees
 become true once a contract instance has passed validation?
 
 This section describes successful meaning only.
-Do not restate validation rules here.
-Do not describe failure outcomes here.
+Do not restate validation rules or describe failure outcomes here.
 -->
 
 <State what accepting a valid instance means.>

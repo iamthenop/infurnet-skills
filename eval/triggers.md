@@ -8,11 +8,11 @@ corpus. Trigger evaluation begins after profile assignment and evaluates
 discovery of deliverables and standards only. The consuming repository's
 governance entry point defines the profile loading contract.
 
-Client-neutral queries for evaluating skill-description triggering after profile
-assignment. Each row: the query, the skill that SHOULD be discovered, and the
-near-miss skill that should NOT. A harness presents the query with the
-frontmatter descriptions of discoverable deliverables and standards and records
-which skills are discovered. Profiles are not trigger candidates.
+Client-neutral queries evaluate skill-description triggering after profile
+assignment. Each row names the query, the skill that SHOULD be discovered, and
+the near-miss skill that should NOT. A harness presents discoverable
+deliverable and standard descriptions with the query, then records the
+discovered skills; profiles are not trigger candidates.
 
 | # | Query | Should discover | Should not discover |
 | --- | --- | --- | --- |

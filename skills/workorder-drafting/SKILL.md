@@ -10,51 +10,46 @@ metadata:
 
 # Workorder drafting
 
-A workorder is the job-specific grant an agent executes under,
-subordinate to repository governance and profile boundaries. If the workorder is
-ambiguous, the failure belongs to the workorder, not the agent. A stop caused by
-an unbounded workorder is a drafting defect.
+A workorder is a job-specific grant under repository governance and profile
+boundaries. Ambiguity or an unbounded grant is a drafting defect, not an agent
+failure.
 
 A workorder grants narrow authority for one job. It does not amend standards,
-resolve conflicts between authority documents, or decide design. Where a
-decision is missing, drafting stops and the decision is escalated; the workorder
-does not paper over it.
+resolve authority conflicts, or decide design; missing decisions stop drafting
+and require escalation.
 
 ## Required fields
 
 Every workorder names the fields defined in
-[`assets/workorder-template.md`](assets/workorder-template.md).
-The template is the authoritative field list; the sections below
-govern how each field is drafted.
+[`assets/workorder-template.md`](assets/workorder-template.md). The template is
+the authoritative field list.
 
-If a field does not apply, the workorder says so. A missing field is not an
-implied grant.
+The sections below govern how each field is drafted.
+
+For a field that does not apply, say so; omission does not grant authority.
 
 ## Frontmatter
 
-Every workorder carries a YAML frontmatter block. Frontmatter is
-authoritative for machine-checkable commissioning metadata. Prose
-sections explain, constrain, and provide rationale — they do not
-restate frontmatter values as independent authority.
+Every workorder has YAML frontmatter for machine-checkable commissioning data.
+Prose sections explain or constrain those values; they do not create duplicate
+authority.
 
-The exception is `workorder_key`, which is intentionally mirrored in
-`## Workorder key` as a human-readable identifier; the validator
-checks exact match.
+`workorder_key` is the sole intentional mirror. Frontmatter and
+`## Workorder key` carry the same human-readable identifier, and the validator
+checks an exact match.
 
 Required frontmatter fields:
 
 * `workorder_key` — unique identifier; must match `## Workorder key`
-* `work_type` — one of: `implementation`, `validation`, `design`,
-  `pr-fix`, `delivery`
+* `work_type` — allowed values are `implementation`, `validation`, `design`, `pr-fix`, and `delivery`
 * `profile` — repo-relative path to the assigned profile
 * `base_branch` — starting-state ref; used for stale-base check
 * `work_branch` — branch the work executes on
 * `work_branch_state` — `existing` or `to_create`
-* `target_branch` — intended integration destination
-* `governance` — non-empty list of repo-relative paths to governing
-  documents
-* `authorized_mutations` — non-empty list from the established
-  vocabulary: `create-branch`, `commit`, `push`, `create-pr`,
+* `target_branch` — branch intended to receive the work
+* `governance` — one or more repo-relative paths to governing documents
+* `authorized_mutations` — one or more values from this closed list:
+  `create-branch`, `commit`, `push`, `create-pr`,
   `merge`, `publish`, `create-issue`, `close-issue`,
   `comment-on-issue`, `comment-on-pr`
 * `allowed_surface` — non-empty list of repo-relative paths; files
@@ -64,11 +59,10 @@ Required frontmatter fields:
 
 ## Drafting rules
 
-* **Do not delegate unresolved decisions.** "Improve", "clean up", "as
-  appropriate", and "use judgment" are not instructions for policy,
-  authority, vocabulary, or design decisions. Where bounded
-  implementation judgment is permitted, state the criterion it serves
-  and the boundary it must preserve.
+* **Do not delegate unresolved decisions.** Terms such as "improve", "clean up",
+  "as appropriate", and "use judgment" do not grant policy, authority,
+  vocabulary, or design decisions. If bounded implementation judgment is
+  allowed, state its criterion and boundary.
 * **Supply exact text where text is the deliverable.** Governing text, required
   comments, error copy: the workorder carries the approved wording verbatim.
   The executor inserts; the executor does not compose authority-bearing text.
@@ -87,9 +81,9 @@ minimums.
 
 ### Implementation
 
-Implementation workorders additionally name every file-creation, move, and
-dependency authorization. Creating files, moving files, and adding dependencies
-are explicit grants, not inferences from scope.
+Implementation workorders name each allowed file creation, move, and dependency
+change. These actions require explicit grants; scope alone does not authorize
+them.
 
 Every implementation workorder explicitly states one of:
 
@@ -121,9 +115,8 @@ Validation workorders additionally satisfy
 
 ### Design and drafting
 
-Design and drafting workorders additionally name the decision or approved
-request the drafting flows from, and state that outputs are proposals until
-approved.
+Design and drafting workorders name the approved request or decision. Their
+outputs remain proposals until approved.
 
 ### PR fix
 
@@ -152,14 +145,10 @@ PR fix workorders additionally:
 * state whether the fix lands as a new commit on the original branch or
   as a new branch and PR.
 
-The builder replies to each review comment it addresses — automated or
-human — with the commit SHA where the fix landed and a one-line
-description of the change made. A finding with no reply is not closed.
+The builder replies to each addressed review comment with the fix commit SHA
+and a one-line change summary. A finding without a reply stays open.
 
-The PR review record is the authorizing source. A finding not present
-in any review source is not a finding in the fix workorder. A fix
-workorder that introduces new findings of its own requires a further
-fix workorder, not inline expansion.
+The PR review record authorizes the fix. Only recorded findings are in scope; new findings require another fix workorder.
 
 ### Builder report
 
@@ -185,7 +174,7 @@ Walkthrough checklist:
 4. Is any deliverable text supplied verbatim where composition is not granted?
 5. Does any instruction delegate interpretation?
 6. Is out-of-scope stated, not implied?
-7. Does validation define done without the executor deciding correctness?
+7. Does validation define done without asking the executor what counts as correct?
 
 A draft that fails the walkthrough is not submitted.
 
@@ -193,27 +182,22 @@ A draft that fails the walkthrough is not submitted.
 
 Stop and escalate when:
 
-* the requested work has no authorizing request or decision;
-* bounding the workorder requires a decision that has not been made;
-* the workorder must resolve a conflict between authority documents;
-* a required rule exists nowhere and must be invented rather than drafted from
-  a decision.
+* the requested work lacks an authorizing request or decision;
+* the workorder would need a new decision to stay bounded;
+* the workorder must resolve conflicting authority documents;
+* a required rule is missing and would need invention.
 
 A good stop is not failure. A confident guess is.
 
 ## Assets
 
-* [`assets/workorder-template.md`](assets/workorder-template.md) — blank
-  workorder scaffold with all required fields pre-labelled. Copy when
-  drafting a new workorder; fill every placeholder before submitting for
-  approval.
+* [`assets/workorder-template.md`](assets/workorder-template.md) — blank scaffold containing every required field.
+  Copy it and fill every placeholder before approval.
 
 ## Scripts
 
-* [`scripts/walkthrough.py`](scripts/walkthrough.py) — commissioning
-  validator. Checks frontmatter completeness and type correctness,
-  prose section presence and non-emptiness, repository-path existence,
-  and local git/ref conditions. Requires `pyyaml`.
+* [`scripts/walkthrough.py`](scripts/walkthrough.py) — commissioning validator for machine-checkable workorder structure.
+  It checks required fields, prose sections, repository paths, and local git/ref conditions. Requires `pyyaml`.
 
 ```
 python3 <vendor-path>/skills/workorder-drafting/scripts/walkthrough.py <workorder.md>

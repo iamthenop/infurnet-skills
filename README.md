@@ -79,6 +79,28 @@ Every skill uses one Agent Skills format, whatever its skill type:
 | `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
 | `skills/<name>/references` | optional bundled templates and reference material |
 
+## Skill metadata
+
+Repository-specific skill metadata lives under the frontmatter `metadata`
+mapping. These fields describe the skill; they do not grant authority or
+select a profile.
+
+| Field | Meaning |
+| --- | --- |
+| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, or `deliverable`. |
+| `skill-dependency` | Comma-separated sibling skills that must be installed with this skill. Dependencies do not grant authority and must not introduce a profile. |
+| `infurnet-compat` | Comma-separated compatibility tags for the requirements stated by the top-level `compatibility` field. It does not select or load a skill. |
+| `prose-setting` | For a deliverable, names the prose complexity setting for prose produced under that deliverable. It does not classify the `SKILL.md` instruction text itself. |
+
+Only a `deliverable` can declare `prose-setting`. Its value must match an entry
+in the canonical table at
+[`skills/prose-discipline/references/complexity-settings.md`](skills/prose-discipline/references/complexity-settings.md).
+Numeric limits and allowed names live in that reference.
+
+`skill-dependency` describes installation closure, not standard applicability.
+Applicable standards still come from the assigned profile, selected
+deliverable, accepted work, or consuming repository governance.
+
 ## Consuming
 
 A consuming repository assigns one profile in its governance entry point. The
@@ -120,17 +142,23 @@ checkout or floating `main`.
 During R3, the adoption manifest records installed skills of any skill type in
 its installed-skills field.
 
-Updating the pin follows six steps: compare the pinned commit with head;
-enumerate changed obligations; identify affected consumer bindings and
-governance; obtain approval from the consuming repository's deciding authority;
-update the pin and installed content together; validate the consumer.
+Updating the pin follows six steps:
+
+1. compare the pinned commit with head;
+2. enumerate changed obligations;
+3. identify affected consumer bindings and governance;
+4. obtain approval from the consuming repository's deciding authority;
+5. update the pin and installed content together;
+6. validate the consumer.
 
 The updater matches governed files by path and resolves the consuming
-repository from its own file location, and head's updater is installed only
-after approval. When head moves governed files between paths, the reviewer runs
-head's updater from inside the consuming repository before approving, as the
-update procedure in [`ADOPTION.md`](ADOPTION.md) sets out; without that run the
-obligation report omits every moved file.
+repository from its own file location. Install head's updater only after
+approval.
+
+When head moves governed files between paths, run head's updater from inside
+the consuming repository before approval. This follows the update procedure in
+[`ADOPTION.md`](ADOPTION.md); without that run, the obligation report omits
+every moved file.
 
 ## License
 

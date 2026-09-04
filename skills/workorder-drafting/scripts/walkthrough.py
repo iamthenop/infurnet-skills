@@ -1,68 +1,11 @@
 #!/usr/bin/env python3
 """
-Commissioning validator for workorders.
-
-Reads a drafted workorder and checks the parts of the stop-condition
-walkthrough a machine can decide: frontmatter completeness and type
-correctness, prose section presence and non-emptiness, existence of the
-repository paths the frontmatter names, the branch conditions the
-frontmatter declares, and whether any other branch already carries
-changes inside the allowed surface.
-
-Usage:
-    python3 skills/workorder-drafting/scripts/walkthrough.py <workorder.md> ...
-    --strict   # exit 1 on notes and unavailable checks as well
-
-Exit status: 0 clean, 1 findings, 2 nothing to check.
-
-Findings carry one of three levels. A violation is a breach the document
-and the repository prove on their own, and blocks commissioning. A note
-marks a risk the script can see but cannot adjudicate -- most often
-another branch working inside the same surface. An unavailable marks a
-check the script could not run, so silence about it means nothing.
-
-Refs resolve against local heads first and then the fetched origin/
-remote. The script never fetches, checks out, creates, or deletes
-anything; every git call is read-only plumbing anchored to the
-repository containing the workorder rather than to the shell's working
-directory.
-
-What it proves:
-  * every required frontmatter field is present and carries the declared
-    type
-  * work_type, work_branch_state, and every authorized mutation come
-    from the closed vocabulary
-  * every path is repository-relative, free of parent traversal and
-    glob characters, and carries the trailing separator that matches
-    what it names
-  * the frontmatter workorder_key and the Workorder key section agree
-    exactly
-  * every required prose section is present and carries text once HTML
-    comments are removed
-  * profile and every governance path exist in the repository, and the
-    profile declares metadata.skill-type: profile
-  * base_branch and target_branch resolve; the declared
-    work_branch_state matches what the refs show
-  * no unfilled placeholder token and no durable issue reference remain
-  * no uncommitted change sits inside the allowed surface
-
-What it does not prove -- these need the authorizing decision, the
-remote, or a human reading:
-  * whether the allowed surface is the right surface, or whether the
-    granted mutations are the right grants
-  * whether a prose section says anything useful; only that it says
-    something
-  * whether an overlapping branch is an open pull request, abandoned, or
-    the same work under another name; overlap is a risk, not a verdict
-  * anything about refs that were never fetched; a stale remote-tracking
-    ref reports stale state and the script cannot tell
-  * a renamed path in an uncommitted change, which porcelain reports as
-    an arrow pair rather than as a path
-  * whether an instruction delegates interpretation, which is the part
-    of the walkthrough that stays a human reading
-
-A clean run means no breach is visible in the text and the refs. It does
-not mean the workorder is well drafted.
+Commissioning validator for workorders. It checks machine-decidable walkthrough
+requirements: frontmatter, required prose sections, repository paths, branch
+state, allowed-surface overlap, placeholders, and uncommitted changes. It reads
+local and fetched refs without mutation; human review still decides
+authorization, semantic adequacy, instruction interpretation, stale remote
+state, and drafting quality.
 """
 import argparse
 import re

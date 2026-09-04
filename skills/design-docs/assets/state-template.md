@@ -122,8 +122,8 @@ or merely authorizes work whose later completion causes it.>
 
 <!--
 Repeat once for each state when its semantics require more than the States
-table can carry. Omit per-state sections for trivial states whose complete
-meaning is already captured by the table and transition rules.
+table can carry. Omit per-state sections when the table and transition rules
+already capture the state's complete meaning.
 -->
 
 `<state>` means <precise meaning>.

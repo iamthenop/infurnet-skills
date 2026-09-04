@@ -69,12 +69,14 @@ dependencies. Canonical targets: `<service>_image`, `<service>_load`.
 **Repository-owned fixture image** — an infrastructure runtime whose derived
 artifact contract the repository maintains. Canonical targets:
 `<service>_fixture_image`, `<service>_fixture_load`,
-`<service>_fixture_test_tar`. A fixture is repository-owned when the
-repository controls material characteristics: required packages,
-deterministic configuration, architecture support, extension availability,
-runtime files, test behaviour, security defaults, or compatibility behaviour
-relied upon by the repository. Repository-owned fixtures follow the same
-build discipline as application images.
+`<service>_fixture_test_tar`.
+
+A fixture is repository-owned when the repository controls material
+characteristics. These include required packages, deterministic configuration,
+architecture support, extension availability, runtime files, test behaviour,
+security defaults, or compatibility behaviour relied upon by the repository.
+
+Repository-owned fixtures follow the same build discipline as application images.
 
 **Direct third-party fixture** — consumed directly when the upstream image
 itself is the intended dependency and satisfies the runtime contract without
@@ -101,9 +103,10 @@ assembled through Bazel.
 Repository-owned images should use, where supported: base images pinned by
 digest; declared package manifests; committed package locks;
 architecture-specific package resolution; deterministic filesystem layers;
-explicit OCI metadata. A mutable package repository may be used only through
-a resolution process that records the exact selected artifacts in a
-committed lock.
+explicit OCI metadata.
+
+A mutable package repository is permitted only through a resolution process
+that records the exact selected artifacts in a committed lock.
 
 Replacing one use of a stale image is not sufficient: Compose, tests,
 scripts, and other consumers converge on the approved artifact. Do not
@@ -114,31 +117,40 @@ the problem.
 ## Deployment fixtures in tests
 
 Tests using a repository-owned fixture image consume the canonical Bazel
-artifact. The fixture must be supplied as a declared build input, available
-as a loadable OCI archive, loaded under an isolated test tag before the
-container starts, require no manual developer preload and no direct pull of
-a replacement image, and derive from the same canonical image used by local
-orchestration. A local Docker-compatible daemon may be required for real
-container behaviour; a Docker requirement does not justify undeclared
-dependency resolution over the network.
+artifact. The fixture must be supplied as a declared build input and must be
+available as a loadable OCI archive. Load it under an isolated test tag before
+the container starts.
+
+The fixture must require no manual developer preload or direct pull of a
+replacement image. It must derive from the same canonical image used by local
+orchestration.
+
+Prerequisite status is test-specific. A test that requires a local
+Docker-compatible daemon for real container behaviour must declare that
+prerequisite. That requirement does not justify undeclared dependency
+resolution over the network.
 
 ## Release artifacts
 
-A release artifact must be produced by an approved build target from a known
-source revision, contain only declared build inputs, be
-environment-independent, carry correct OCI OS/architecture metadata, have an
-immutable OCI digest, contain no environment secret and no stage-specific
-endpoint or environment identity, be publishable without rebuilding, be
-traceable from source revision to registry digest, and pass its required
-runtime and integration validation.
+A release artifact must come from an approved build target at a known source
+revision. It must contain only declared build inputs and remain
+environment-independent. It must carry correct OCI OS/architecture metadata and
+an immutable OCI digest.
+
+It must contain no environment secret, stage-specific endpoint, or environment
+identity. It must be publishable without rebuilding and traceable from source
+revision to registry digest. It must pass its required runtime and integration
+validation.
 
 The release architecture set is declared in the repository's bindings.
-Support for another release architecture is added per service when that
-service's runtime targets require it; do not create a multi-architecture
-release index merely because DEV supports more architectures. Where multiple
-release architectures are supported: build each child from the same source
-revision with equivalent declared runtime inputs, validate each child,
-assemble one OCI image index, and promote the image-index digest.
+
+Add another release architecture per service only when that service's runtime
+targets require it. DEV support alone does not justify a multi-architecture
+release index.
+
+Where multiple release architectures are supported, build each child from the
+same source revision with equivalent declared runtime inputs. Validate each
+child, assemble one OCI image index, and promote the image-index digest.
 
 ## Build once, promote everywhere
 
@@ -152,21 +164,26 @@ Release promotion:
 6. PRD
 
 SIT, UAT, and PRD reuse the accepted digest. A higher environment must not
-rebuild source, rebuild an architecture-specific image or index, replace the
-base image, add or remove a layer, inject configuration into the image, or
-create an environment-specific variant. Tags may move to reference an
-accepted digest; tags are not authoritative artifact identity. If artifact
-content changes, produce a new digest and restart promotion at SIT.
+rebuild source or an architecture-specific image or index. It must not replace
+the base image, add or remove a layer, inject configuration into the image, or
+create an environment-specific variant.
+
+Moving tags to reference an accepted digest is permitted. Tags are not
+authoritative artifact identity. If artifact content changes, produce a new
+digest and restart promotion at SIT.
 
 ## Registry distribution
 
 `oci_push` publishes a completed image or index. Publication preserves the
-built digest, uses the registry naming contract declared in the repository's
-bindings, records the source revision and resulting digest, avoids mutation
-or rebuilding during upload, and fails clearly when authentication or
-publication is incomplete. Signing, provenance attestations, retention, and
-automated promotion are separate capabilities; do not represent them as
-implemented until their targets and workflows exist.
+built digest and uses the registry naming contract declared in the repository's
+bindings. It records the source revision and resulting digest.
+
+Publication does not mutate or rebuild the artifact during upload. It fails
+clearly when authentication or publication is incomplete.
+
+Signing, provenance attestations, retention, and automated promotion are
+separate capabilities. Do not represent them as implemented until their targets
+and workflows exist.
 
 ## Runtime configuration
 
@@ -176,20 +193,25 @@ tokens; environment identifiers; environment-specific trust material;
 stage-specific feature settings; local host paths; local env files; ignored
 override files.
 
-The runtime injects required configuration at container start. Missing
-required configuration causes a clear startup failure; a higher environment
-must not silently inherit a development default. A public development CA
-certificate may be included only when the image contract requires it; a
-private CA key must never enter an image.
+The runtime injects required configuration at container start. Missing required
+configuration causes a clear startup failure; a higher environment must not
+silently inherit a development default.
+
+A public development CA certificate is permitted only when the image contract
+requires it. A private CA key must never enter an image.
 
 ## Image contents
 
-An image contains only what its runtime requires. Do not include source
-trees, test classes or utilities, local caches, build toolchains not
-required at runtime, developer home-directory content, undeclared files,
-ignored configuration, credentials or private keys, placeholder executables,
-or debugging utilities without a runtime need. Prefer non-root execution.
-Health checks match the actual runtime; do not add a shell or
+An image contains only what its runtime requires.
+
+Do not include source trees, test classes or utilities, local caches, or build
+toolchains not required at runtime. Do not include developer home-directory
+content, undeclared files, ignored configuration, credentials, private keys,
+placeholder executables, or debugging utilities without a runtime need.
+
+Prefer non-root execution.
+
+Health checks match actual runtime behaviour. Do not add a shell or
 general-purpose network utility solely to support a health check when the
 runtime can provide a narrower probe.
 

@@ -1,8 +1,10 @@
 <!--
 COMPLETION_CHECKLIST — mark each section included or not_applicable before committing:
+
   identity_and_addressing: included | not_applicable
   authority_and_access: included | not_applicable
   lifecycle: included | not_applicable
+
   validation_and_integrity: included | not_applicable
   failure_boundary: included | not_applicable
   observability: included | not_applicable
@@ -60,7 +62,7 @@ Those responsibilities belong to their owning components and contracts.
 <!--
 Litmus test:
 What runtime actions, calculations, decisions, transformations, or resource
-modifications does this component execute or own?
+modifications does this component perform or own?
 -->
 
 `<component>` owns:
@@ -79,9 +81,9 @@ modifications does this component execute or own?
 
 Every interface crossing must identify direction, crossing content, prohibited content, and retained authority.
 
-| Direction | Peer / surface | Crossing artifact or payload | Prohibited crossing                                                           | Authority side                                                   |                                                                            |                                                                                |
-| :-------- | :------------- | :--------------------------- | :---------------------------------------------------------------------------- | :--------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `<inbound | outbound       | bidirectional>`              | `<component, actor, filesystem, socket, queue, API, mount, or other surface>` | <exact data, artifact, reference, file type, message, or stream> | <data, control, identity, authority, path, or payload that must not cross> | <component or peer that retains authoritative control over the affected state> |
+| Direction | Peer / surface | Crossing artifact or payload | Prohibited crossing | Authority side |
+| :-------- | :------------- | :--------------------------- | :------------------ | :------------- |
+| `<inbound/outbound/bidirectional>` | `<component, actor, API, queue, or surface>` | <artifact, payload, reference, message, or stream> | <content or authority that must not cross> | <side retaining authoritative control> |
 
 <Add one row for each distinct interface relationship.>
 
@@ -215,8 +217,8 @@ Do not retain an empty section.
 Nullable and repeatable.
 
 Add only for decided component semantics that do not fit the common
-boundary dimensions. Do not create a section merely to fill the template.
-Do not retain this placeholder in a completed document.
+boundary dimensions. Do not create a section merely to fill the template
+or retain this placeholder in a completed document.
 -->
 
 <State the component-specific rules.>

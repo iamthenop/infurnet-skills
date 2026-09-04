@@ -6,7 +6,7 @@
 
 ## Conventions
 
-<Document-scoped conventions for standalone reading: cross-cutting transport header behaviour, type notation in use, optionality markers, where success codes appear, any document-specific field or shape defined once and referenced by several operations.>
+<Document-scoped conventions: transport header behaviour, type notation, optionality markers, success-code placement, and shared document-specific fields or shapes.>
 
 ## Operations List
 

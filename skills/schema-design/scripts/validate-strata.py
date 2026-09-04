@@ -1,53 +1,11 @@
 #!/usr/bin/env python3
 """
-Structural validator for database initialization strata.
-
-Reads filenames and top-level SQL tokens under one or more
-db/<database>/init directories. It needs no database connection and no
-SQL parser: comments, string literals, quoted identifiers, and
-dollar-quoted function bodies are blanked before any pattern runs, so
-only statement-level SQL is ever matched.
-
-Usage:
-    python3 skills/schema-design/scripts/validate-strata.py <init-dir> ...
-    python3 skills/schema-design/scripts/validate-strata.py --root <repo-root>
-    --strict   # exit 1 on notes as well as violations
-
-Exit status: 0 clean, 1 findings, 2 nothing to check.
-
-Findings carry one of two levels. A violation is a breach the tokens
-prove on their own. A note marks something the reference permits only
-under an approval or a scope the script cannot see.
-
-What it proves:
-  * one file per canonical stratum, named NNNN_<db>_<name>.sql, so that
-    filename order is stratum order
-  * the four-digit prefix is a canonical stratum and carries that
-    stratum's canonical name
-  * one database token shared by every file in the directory; the
-    directory name is not consulted
-  * a statement class the reference prohibits in that stratum — a view
-    in 0000, a table in 0002, any schema object in 0900
-  * 0020 grants nothing beyond CONNECT and USAGE, and 0200 grants
-    nothing beyond EXECUTE
-  * a file declaring SECURITY DEFINER also carries SET search_path and
-    a REVOKE ... FROM PUBLIC
-
-What it does not prove — these need the database, the catalogue, or the
-workorder:
-  * whether a function or trigger observes, decides, notifies, or
-    writes; the token stream cannot separate an audit trigger from an
-    invariant trigger, or a writer from a foundational function
-  * whether an earlier file depends on an object a later file creates
-  * anything inside a function body, blanked before matching
-  * whether a role, grant, seed record, or search_path is the approved
-    one, or that the stratum set in force matches the bindings
-  * that SET search_path and REVOKE attach to the SECURITY DEFINER
-    function itself rather than to another object in the same file
-  * privileges, constraints, and triggers as the database holds them;
-    only catalogue tests prove those
-
-A clean run means no violation is visible in the text. It does not mean
+Structural validator for database initialization strata; reads filenames and
+top-level SQL tokens while ignoring comments, literals, quoted identifiers,
+and dollar-quoted function bodies. It checks canonical stratum naming and
+conservative grant boundaries, including `CONNECT`, `USAGE`, and `EXECUTE`,
+without a database connection or SQL parser. A clean run proves only that no
+supported structural violation is visible in scanned text; it does not prove
 the schema is correct.
 """
 import argparse

@@ -9,9 +9,9 @@ metadata:
 
 # Workflow modeling
 
-This skill prevents workflow stages from being implemented as duplicate
-object, service, enum, and schema families, and prevents doctrine terms from
-being transcribed into bloated identifiers.
+This skill prevents workflow stages from becoming duplicate object, service,
+enum, and schema families. It also prevents doctrine terms from becoming
+bloated identifiers.
 
 Gate keys and the work-type namespace are declared in the repository's
 bindings. Gate names in this document (`G0`, `G1`, `G2`) are placeholders.
@@ -35,13 +35,14 @@ model workflow gates as generic objects.
   package is in the workflow; it is not a generic object type.
 * **Work type** — a specific task to perform at a gate:
   `g0.image.prepare.v0`, `g1.image.contextualize.v0`.
-* **Work result** — the accepted output from a worker. A result exists only
-  once accepted; acceptance is the recording event, carried by
-  `accepted_at`, not by the name. May include `gate_key`, `work_type`,
-  `result_schema`, `input_package_id`, `result_payload`, `accepted_at`.
-* **Derivation** — records that one work package was derived from another.
-  May include `input_package_id`, `output_package_id`, `work_result_id`,
-  `from_gate_key`, `to_gate_key`, `derivation_type`, `byte_treatment`.
+* **Work result** — accepted output from a worker. A result exists only after
+  acceptance; `accepted_at` records that event rather than the name.
+  Illustrative fields: `gate_key`, `work_type`, `result_schema`,
+  `input_package_id`, `result_payload`, `accepted_at`.
+* **Derivation** — records that one work package came from another.
+  Illustrative fields: `input_package_id`, `output_package_id`,
+  `work_result_id`, `from_gate_key`, `to_gate_key`, `derivation_type`,
+  `byte_treatment`.
 
 ## Required model
 
@@ -76,10 +77,10 @@ or schema.
 
 ## Allowed use of gate names
 
-Gate names may appear in workflow documentation, registered work-type
+Gate names are permitted in workflow documentation, registered work-type
 values, result schema names, routing keys, display labels, and narrow
-validators and adapters. A narrow validator may use a gate name because it
-validates one specific contract.
+validators or adapters. A narrow validator's gate name identifies the
+specific contract it validates.
 
 ## Disallowed use of gate names
 
@@ -98,17 +99,17 @@ display projections.
 
 ## Media family rule
 
-Media family is separate from workflow gate. Image, video, audio, and
-document handling may need different preparation logic; that logic belongs
-behind media handlers (`ImagePackager`, `VideoPackager`, `AudioPackager`,
-`DocumentPackager`), never gate-and-media cross products
-(`G0ImagePackagingService`, `G1VideoPackagingService`).
+Workflow gate and media family are separate dimensions. When preparation logic
+differs by media family, it belongs behind handlers such as `ImagePackager`,
+`VideoPackager`, `AudioPackager`, and `DocumentPackager`. Do not create
+gate-and-media cross products such as `G0ImagePackagingService` or
+`G1VideoPackagingService`.
 
 ## Performance rule
 
 Do not add a new object layer only because a work package passed through a
-gate. A gate is usually data on an existing record: `gate_key`,
-`work_type`, `result_schema`, `from_gate_key`, `to_gate_key`,
+gate. Without a separate durable object, keep gate state on the record:
+`gate_key`, `work_type`, `result_schema`, `from_gate_key`, `to_gate_key`,
 `display_state`.
 
 Gate-specific objects, tables, or service families multiply joins, indexes,
@@ -124,8 +125,8 @@ Before adding anything named after a gate key, answer:
 2. Is there a durable object being recorded?
 3. Would this design need to be copied for every gate?
 4. Would this design need to be copied for every media family?
-5. Could this be represented by `work_type`, `gate_key`, `work_result`,
-   `derivation`, a media handler, or a display projection?
+5. Is `work_type`, `gate_key`, `work_result`, `derivation`, a media handler,
+   or a display projection sufficient?
 
 If the proposed design creates a generic architecture object named after a
 workflow gate, stop and report the conflict.
@@ -137,6 +138,6 @@ workflow gate, stop and report the conflict.
 
 ## Final rule
 
-Gates are state data. Work types describe tasks. Work results record
-output. Derivations record movement. Media handlers own media differences.
-Gate keys never become architecture families.
+Gates are state data; work types describe tasks. Work results record output;
+derivations record movement. Media handlers own media differences; gate keys
+never become architecture families.

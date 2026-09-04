@@ -10,13 +10,11 @@ metadata:
 
 # API documentation conventions
 
-When adopted, this skill governs the **form** of API documents. Every
-`<service>-api.md` conforms to it; where an API document deviates in form,
-the API document is wrong and is corrected, not cited. Routes, fields,
-headers, vocabulary, and semantics are content; content authority lives in
-the repository's bindings, architecture documents, and the API documents
-themselves. Values appearing below are placeholders, not norms. Prose
-quality in API documents follows `prose-discipline`.
+When adopted, this skill governs API **form**; every `<service>-api.md`
+conforms, and form deviations are corrected rather than cited. Routes,
+fields, headers, vocabulary, and semantics are content; authority remains
+in repository bindings, architecture documents, and API documents. Values
+below are placeholders, not norms; API prose follows `prose-discipline`.
 
 ## Document shape
 
@@ -26,12 +24,10 @@ committing.
 
 ## Conventions section
 
-Each API document is standalone; it must not depend on the reader having
-this skill open. The `## Conventions` section restates, briefly, the
-conventions that affect reading that document: cross-cutting transport
-header behaviour as it applies to that API; the type notation in use; the
-optionality markers; where success codes appear; and any document-specific
-field or shape defined once and referenced by several operations.
+Each API document is standalone and does not require this skill beside it.
+Its `## Conventions` section briefly restates the conventions needed to read
+that API. Include transport-header behaviour, type notation, optionality
+markers, success-code placement, and shared document-specific shapes.
 
 The section restates; it does not redefine. A conflict between a Conventions
 section and this skill is a defect in the API document.
@@ -49,11 +45,11 @@ Every operation uses exactly five headings:
 Operations nest under the `## Operations` container; an operation heading
 at the container's own level is a hierarchy defect.
 
-Do not invent additional headings — no Purpose, Idempotency, or Caller and
-Authority headings inside an operation. All prose belongs under the
-human-friendly name heading: purpose, caller and authority, asynchronous
-behaviour, idempotency rules, integrity gates, and the workflow link. Prose
-outside that heading is a defect.
+Do not add `Purpose`, `Idempotency`, or `Caller and Authority` headings
+inside an operation. Put all prose under the human-friendly name heading;
+prose elsewhere is a defect. Cover purpose, caller and authority,
+asynchronous behaviour, idempotency rules, integrity gates, and the
+workflow link.
 
 `Request`, `Response`, and `Errors` contain only their tables and the
 mutators of those tables. A mutator is a shape selector such as:
@@ -64,24 +60,22 @@ mutators of those tables. A mutator is a shape selector such as:
 
 An operation with no fields states `*None*`.
 
-The route title is wrapped in backticks. The anchor is a `<span id="...">`
-immediately under the name heading, matching the Operations List link.
-Anchor ids are stable and semantic — the lowercase HTTP method plus the
-operation name slug (`get-list-certificates`) — and never renumber:
-inserting an operation must not invalidate links to any other operation.
+Wrap the route title in backticks. Put a matching `<span id="...">`
+immediately under the name heading for the Operations List link. Anchor ids
+use the lowercase HTTP method plus operation slug, stay stable, and never
+renumber when operations are inserted.
 
-The description ends with the workflow reference where one exists, linking
-to the workflow document (a Markdown document with embedded diagrams) and,
-where useful, an anchor within it:
+End the description with its workflow reference when one exists. Link to the
+workflow Markdown file and, when useful, an anchor within it:
 
 ```text
 This operation is illustrated in [<workflow name>](<path-to-workflow>.md#<anchor>).
 ```
 
-Workflow diagrams are embedded in their workflow documents; a standalone
-diagram file is legacy form: do not create or newly reference one.
-Existing files are grandfathered debt; migration into the workflow
-document occurs only when a workorder explicitly authorizes it.
+Embed workflow diagrams in their workflow documents; do not create or newly
+reference standalone diagram files. Existing legacy files remain
+grandfathered debt. Migrate one only when a workorder explicitly authorizes
+it.
 
 ## Tables
 
@@ -97,9 +91,9 @@ Error tables use two columns:
 | Code | Message |
 ```
 
-Each error row is the HTTP code in backticks and a `Message` cell of the
-form `` `Reason Phrase`<br/>One bounded sentence. `` Success codes live in
-the Errors table alongside failures; this is the standing convention.
+Each error row puts the HTTP code in backticks. Its `Message` cell uses
+`` `Reason Phrase`<br/>One bounded sentence. `` Success codes stay in the
+Errors table with failures.
 
 Error messages are bounded. They identify the failure class and never
 disclose state, material, or detail beyond the operation's contract. What
@@ -120,12 +114,10 @@ governing rules:
 
 ## Cross-cutting fields
 
-A field or header that spans operations — request correlation, transport
-metadata, and the like — is defined once at document level, never per
-operation, and never appears in Request or Response field tables. Transport
-metadata is not payload. Its behaviour — optionality, echo, propagation,
-authority, durability — is content; the document's Conventions section
-states it.
+Define cross-cutting fields and headers once at document level; never repeat
+them in Request or Response tables. Transport metadata is not payload. Its
+optionality, echo, forwarding, authority, and durability are content stated
+in the document's Conventions section.
 
 A name retired by ruling is dead vocabulary: it is not reintroduced as a
 field or header. Retirements are recorded by the vocabulary authority, not
@@ -165,29 +157,23 @@ same <reference> + same <parameters>
 * Vocabulary is canonical per the vocabulary authority. Drift terms are
   defects. A new term clears the term-introduction protocol before it
   appears in an API document (see `vocabulary-control`).
-* An undecided value is stated plainly as not yet defined. The decision
-  itself is tracked in the issue tracker, never as a marker in a durable
-  document, and the document carries no issue reference — issue numbers are
-  mutable external state. Do not resolve the value, work around it, or
-  silently remove the statement.
+* State an undecided value plainly as not yet defined. Track the decision in the issue tracker; keep markers and issue references out of the durable document. Issue numbers are mutable external state; do not resolve, work around, or silently remove the value.
 
 ## Change discipline
 
-Documents conforming to superseded conventions of this skill (container-
-level operation headings, sequential numbered anchors, the unslashed
-resource-reference pattern) are migrated only when a workorder
-explicitly authorizes the migration; a convention migration is its own
-named scope, never a silent companion to a semantic change.
+Superseded conventions include container-level operation headings,
+sequential numbered anchors, and the unslashed resource-reference pattern.
+Migrate them only when a workorder explicitly authorizes the migration.
+Treat convention migration as its own named scope, never a silent companion
+to semantic change.
 
-Edits are surgical. Restructuring an existing API document to these
-conventions preserves every field, code, and rule unless a change is
-separately authorized; a convention pass that silently alters semantics is
-two changes wearing one commit.
+Edits are surgical. A convention restructure preserves every field, code,
+and rule unless a separate authorization changes it. A convention pass that
+silently alters semantics is two changes in one commit.
 
-When an operation is added, update in the same change: the Operations List,
-the new operation's semantic anchor, the workflow reference, the
-document's Conventions section where affected, and any counterpart
-operation in a paired API document.
+When adding an operation, update its Operations List entry, semantic anchor,
+and workflow reference in the same change. Also update affected Conventions
+text and any counterpart operation in a paired API document.
 
 ## References
 

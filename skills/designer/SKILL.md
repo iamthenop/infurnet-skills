@@ -58,5 +58,5 @@ Stop and report when:
 
 ## Final rule
 
-Organize the work. Record the decisions. Draft the design.
+Organize the work and record the decisions. Draft the design.
 Do not decide or implement.

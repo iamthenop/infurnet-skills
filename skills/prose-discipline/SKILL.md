@@ -230,6 +230,11 @@ preserves the required meaning.
 For either script, pass `-` as the sole path to read already-selected plain
 prose from standard input. Standard input is not parsed as a file format.
 
+Native file support is Python (`.py`), Java (`.java`), Markdown (`.md`), and
+PostgreSQL (`.sql`). SQL files pass through a dialect-selection boundary that
+currently resolves to PostgreSQL unconditionally. The tooling performs no SQL
+dialect detection and supports no other SQL dialect.
+
 ## Final rule
 
 One pass. One meaning. No assembly required.

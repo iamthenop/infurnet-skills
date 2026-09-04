@@ -105,6 +105,8 @@ def extract_units(prose, path, source):
         return prose.extract_java_comments(source)
     if path.suffix == ".md":
         return prose.extract_markdown_prose(source)
+    if path.suffix == ".sql":
+        return prose.extract_sql_comments(source)
     return []
 
 
@@ -287,11 +289,14 @@ def snippet(text):
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Measure Flesch-Kincaid Grade Level for governed prose.",
+        epilog="SQL files use PostgreSQL semantics. Other SQL dialects are "
+               "not detected or supported.",
     )
     parser.add_argument(
         "paths", nargs="*",
         help="Files or directories to measure (default: repo root); "
-             "use '-' alone to read plain prose from stdin")
+             "'-' alone reads plain prose from stdin; "
+             ".sql uses PostgreSQL only")
     parser.add_argument(
         "--setting", metavar="NAME",
         help="Apply the maximum grade the named setting defines")

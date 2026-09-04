@@ -3,10 +3,11 @@
 
 Each regression builds a throwaway skill tree in a temporary directory, copies
 the real checker into it beside a fixture settings reference, then runs the
-checker as a subprocess. Every assertion rests on the checker's own exit
-status and printed output, and every density limit comes from the fixture
-reference rather than from the harness or the canonical table.
+checker as a subprocess. Every density limit comes from the fixture
+reference, and every assertion reads the checker's exit status and printed
+output except where a regression names the extraction it reads directly.
 """
+import importlib.util
 import pathlib
 import re
 import shutil
@@ -1311,6 +1312,45 @@ def sql_excluded_regions_are_not_prose(results, workdir):
         )
 
 
+# `normalize_prose` turns a star into a space before any rule reads it, so a
+# preserved star never reaches the checker's printed output. These cases read
+# the extractor, which is where the star has to survive.
+STAR_CASES = (
+    ("`A* search` keeps its star",
+     "/* A* search explores the frontier. */\n",
+     "A* search explores the frontier."),
+    ("`rows * columns` keeps its star",
+     "/* The total is rows * columns here. */\n",
+     "The total is rows * columns here."),
+    ("a line-leading decorative star is dropped",
+     "/*\n * Human explanation of it.\n * Second sentence here.\n */\n",
+     "Human explanation of it.\nSecond sentence here."),
+)
+
+
+def load_checker():
+    """Import the checker so a regression can read its extraction directly."""
+    spec = importlib.util.spec_from_file_location("check_prose", CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(module)
+    return module
+
+
+def sql_block_stars_are_extracted_as_written(results, workdir):
+    """Only a line-leading decorative star leaves a PostgreSQL block comment."""
+    prose = load_checker()
+    for label, source, expected in STAR_CASES:
+        extracted = prose.extract_sql_comments(source)
+        results.check(
+            f"sql — {label}",
+            extracted == [(1, "block", expected)],
+            f"expected [(1, 'block', {expected!r})], saw {extracted!r}. A "
+            f"global star substitution drops every star, not the decoration "
+            f"alone.",
+        )
+
+
 def sql_escape_string_keeps_its_boundary(results, workdir):
     """A completed escape string still yields the comment that follows it."""
     root = workdir / "sql-escape-string"
@@ -1508,6 +1548,7 @@ def main():
         sql_block_comment_reports_its_opening_line(results, workdir)
         sql_nested_block_stays_one_unit(results, workdir)
         sql_excluded_regions_are_not_prose(results, workdir)
+        sql_block_stars_are_extracted_as_written(results, workdir)
         sql_escape_string_keeps_its_boundary(results, workdir)
         sql_identifier_dollar_opens_no_quote(results, workdir)
         sql_without_comments_is_clean(results, workdir)

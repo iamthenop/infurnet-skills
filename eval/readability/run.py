@@ -238,6 +238,11 @@ HTML_BREAK_SOURCE = ("<p>The validator reads the accepted workorder and<br>"
                      "rejects a change the governing instructions do not "
                      "authorize.</p>\n")
 
+# The finding prose behind a leading newline, so both scripts are compared
+# on the corrected source line rather than the data chunk's own.
+HTML_ATTRIBUTION_SOURCE = f"<p>\n{PROSE_FINDING}</p>\n"
+HTML_ATTRIBUTION_UNITS = [(2, "prose")]
+
 # Inline markup must reach the measurement as one unit of visible text.
 HTML_INLINE = ("<p>The validator reads the accepted workorder and rejects "
                "a change the <em>governing instructions</em> do not "
@@ -1215,6 +1220,33 @@ def html_line_break_keeps_the_measured_words(results, workdir):
     )
 
 
+def html_attribution_matches_the_prose_checker(results, workdir):
+    """Both scripts report the corrected line through the shared extraction."""
+    root = workdir / "html-attribution-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+    fixture = root / "fixtures" / "attribution.html"
+    write(fixture, HTML_ATTRIBUTION_SOURCE)
+
+    _, prose_output = run_script(checker, [str(fixture)])
+    _, grade_output = run_script(script, [str(fixture), "--top", "5"])
+    prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+    grade_units = detail_units(grade_output)
+    results.check(
+        "check-prose.py — reports the prose line, not the chunk line",
+        prose_units == HTML_ATTRIBUTION_UNITS,
+        f"expected {HTML_ATTRIBUTION_UNITS!r}, saw {prose_units!r}. "
+        f"Output:\n{prose_output}",
+    )
+    results.check(
+        "check-readability.py — reports the same corrected line",
+        grade_units == prose_units,
+        f"the readability units {grade_units!r} differ from the extractor's "
+        f"{prose_units!r}, so a second boundary is in use. "
+        f"Output:\n{grade_output}",
+    )
+
+
 def readability_holds_no_native_suffix_ladder(results, workdir):
     """The readability script selects no native extraction of its own."""
     source = READABILITY.read_text(encoding="utf-8")
@@ -1279,6 +1311,7 @@ def main():
         html_inline_markup_is_measured_as_one_unit(results, workdir)
         html_structural_units_match_the_prose_checker(results, workdir)
         html_line_break_keeps_the_measured_words(results, workdir)
+        html_attribution_matches_the_prose_checker(results, workdir)
         readability_holds_no_native_suffix_ladder(results, workdir)
 
     if results.failures:

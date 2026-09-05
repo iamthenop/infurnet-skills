@@ -781,7 +781,10 @@ class HtmlProseParser(HTMLParser):
         if not self.parts and not data.strip():
             return
         if not self.parts:
-            self.opening = self.getpos()[0]
+            # The chunk can open with newlines the strip discards, so the run
+            # starts on the line carrying its first visible character.
+            leading = len(data) - len(data.lstrip())
+            self.opening = self.getpos()[0] + data.count("\n", 0, leading)
         self.parts.append(data)
 
     def handle_comment(self, data):

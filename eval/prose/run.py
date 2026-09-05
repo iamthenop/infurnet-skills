@@ -298,6 +298,15 @@ HTML_NESTED = (
 # above it. A merged run fails on unit words alone.
 HTML_SEPARATE_BLOCKS = f"<p>{A10}</p>\n<p>{B10}</p>\n<p>{C10}</p>\n"
 
+# A line break separates the words either side of it without ending the run.
+# Split at an S13 word boundary: joined the sentence counts 12 words, exactly
+# the fixture limit, and separated it counts 13, one above it.
+HTML_BREAK_OPEN = f"<p>{WRAP_FIRST}<br>{WRAP_SECOND}</p>\n"
+HTML_BREAK_CLOSED = f"<p>{WRAP_FIRST}<br/>{WRAP_SECOND}</p>\n"
+HTML_BREAK_LEADING = f"<p><br>{S13}</p>\n"
+HTML_BREAK_PLAIN = f"<p>{S13}</p>\n"
+HTML_BREAK_EXCLUDED = f"<code>{WRAP_FIRST}<br>{WRAP_SECOND}</code>\n"
+
 # Tag and attribute names alone carry no prose.
 HTML_MARKUP_ONLY = '<section class="wrapper"><div id="main"><br></div></section>\n'
 
@@ -1627,6 +1636,54 @@ def html_structural_blocks_end_a_prose_run(results, workdir):
         )
 
 
+def html_line_breaks_keep_word_boundaries(results, workdir):
+    """A line break separates words without ending the prose run."""
+    root = workdir / "html-break"
+    script = build_tree(root)
+    for name, source in (("open.html", HTML_BREAK_OPEN),
+                         ("closed.html", HTML_BREAK_CLOSED)):
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"html — the break in {name} leaves one prose unit",
+            units(output) == [(1, "prose")],
+            f"expected one prose unit at line 1, saw {units(output)!r}. A "
+            f"break that ends the run reports two. Output:\n{output}",
+        )
+        results.check(
+            f"html — the break in {name} keeps the words apart",
+            has(found, f"above {DEFAULT_SENTENCE_WORDS} words",
+                f"longest is {words(S13)}"),
+            f"expected {words(S13)} words, saw {found!r}. Words joined "
+            f"across the break count one fewer and clear the limit. "
+            f"Output:\n{output}",
+        )
+
+    leading = root / "fixtures" / "leading.html"
+    plain = root / "fixtures" / "plain.html"
+    write(leading, HTML_BREAK_LEADING)
+    write(plain, HTML_BREAK_PLAIN)
+    _, leading_output, _ = check_one(script, leading)
+    _, plain_output, _ = check_one(script, plain)
+    results.check(
+        "html — a leading break adds no unit and moves no starting line",
+        units(leading_output) == units(plain_output) == [(1, "prose")],
+        f"expected the same single unit either way, saw "
+        f"{units(leading_output)!r} against {units(plain_output)!r}. "
+        f"Output:\n{leading_output}",
+    )
+
+    excluded = root / "fixtures" / "excluded.html"
+    write(excluded, HTML_BREAK_EXCLUDED)
+    _, output, found = check_one(script, excluded)
+    results.check(
+        "html — a break inside an excluded subtree contributes nothing",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
 def html_nested_structure_does_not_duplicate(results, workdir):
     """Nested blocks yield one unit each, and inline markup splits none."""
     root = workdir / "html-nested"
@@ -1980,6 +2037,7 @@ def main():
 
         markup_suffixes_are_supported(results, workdir)
         html_structural_blocks_end_a_prose_run(results, workdir)
+        html_line_breaks_keep_word_boundaries(results, workdir)
         html_nested_structure_does_not_duplicate(results, workdir)
         html_blocks_are_measured_separately(results, workdir)
         html_inline_markup_keeps_one_unit(results, workdir)

@@ -232,6 +232,12 @@ HTML_STRUCTURAL = (f"<p>{PROSE_FINDING}</p>\n<p>{PROSE_FINDING}</p>\n"
                    f"<ul>\n  <li>{PROSE_FINDING}</li>\n</ul>\n")
 HTML_STRUCTURAL_UNITS = [(1, "prose"), (2, "prose"), (4, "prose")]
 
+# The paragraph written with a line break at a word boundary. Joining the
+# words across the break moves the grade off the paragraph's own.
+HTML_BREAK_SOURCE = ("<p>The validator reads the accepted workorder and<br>"
+                     "rejects a change the governing instructions do not "
+                     "authorize.</p>\n")
+
 # Inline markup must reach the measurement as one unit of visible text.
 HTML_INLINE = ("<p>The validator reads the accepted workorder and rejects "
                "a change the <em>governing instructions</em> do not "
@@ -1191,6 +1197,24 @@ def html_structural_units_match_the_prose_checker(results, workdir):
     )
 
 
+def html_line_break_keeps_the_measured_words(results, workdir):
+    """A line break reaches the measurement as a word boundary."""
+    root = workdir / "html-break-measured"
+    script = build_tree(root, 30)
+    fixture = root / "fixtures" / "break.html"
+    write(fixture, HTML_BREAK_SOURCE)
+
+    _, output = run_script(script, [str(fixture), "--top", "5"])
+    results.check(
+        "html — a line break is measured as one unit of separated words",
+        measured_grade(output) == expected_grade(PARAGRAPH)
+        and len(detail_units(output)) == 1,
+        f"expected {expected_grade(PARAGRAPH)} across one unit, measured "
+        f"{measured_grade(output)!r} across {len(detail_units(output))}. "
+        f"Words joined across the break move the grade. Output:\n{output}",
+    )
+
+
 def readability_holds_no_native_suffix_ladder(results, workdir):
     """The readability script selects no native extraction of its own."""
     source = READABILITY.read_text(encoding="utf-8")
@@ -1254,6 +1278,7 @@ def main():
         markup_units_match_the_prose_checker(results, workdir)
         html_inline_markup_is_measured_as_one_unit(results, workdir)
         html_structural_units_match_the_prose_checker(results, workdir)
+        html_line_break_keeps_the_measured_words(results, workdir)
         readability_holds_no_native_suffix_ladder(results, workdir)
 
     if results.failures:

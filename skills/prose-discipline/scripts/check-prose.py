@@ -725,6 +725,9 @@ HTML_BLOCKS = frozenset({
     "title", "tr", "ul",
 })
 
+# The one HTML element that separates words without ending the prose run.
+HTML_BREAK = "br"
+
 # SVG elements whose character data is visible text.
 SVG_TEXT_ELEMENTS = frozenset({"text", "tspan", "textPath"})
 
@@ -760,6 +763,10 @@ class HtmlProseParser(HTMLParser):
             self.excluded += 1
         elif tag in HTML_BLOCKS and not self.excluded:
             self.flush()
+        elif tag == HTML_BREAK and not self.excluded and self.parts:
+            # A break separates the words either side of it. Before any
+            # visible text it opens nothing, so the run keeps its own line.
+            self.parts.append("\n")
 
     def handle_endtag(self, tag):
         if tag in HTML_EXCLUDED and self.excluded:

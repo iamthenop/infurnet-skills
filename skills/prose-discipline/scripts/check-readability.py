@@ -97,19 +97,6 @@ def stdin_requested(prose, paths):
         raise ReadabilityError(str(exc)) from exc
 
 
-def extract_units(prose, path, source):
-    """Return the prose units of one file as (line, kind, text) triples."""
-    if path.suffix == ".py":
-        return prose.extract_python_comments(source)
-    if path.suffix == ".java":
-        return prose.extract_java_comments(source)
-    if path.suffix == ".md":
-        return prose.extract_markdown_prose(source)
-    if path.suffix == ".sql":
-        return prose.extract_sql_comments(source)
-    return []
-
-
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -245,7 +232,7 @@ def measure_file(path, prose):
         source = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None, []
-    return measure_units(prose, extract_units(prose, path, source))
+    return measure_units(prose, prose.extract_units(path, source))
 
 
 def unit_maximum(kind, maxima):

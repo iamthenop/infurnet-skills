@@ -20,6 +20,7 @@ Ownership:
     the word count and the other lexical primitives — textstat
     the PostgreSQL lexical grammar — Pygments, whose dollar-quoted bodies
         this script leaves opaque
+    the markup structure — html.parser for HTML, expat for XML and SVG
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -47,6 +48,8 @@ import math
 import re
 import sys
 import tokenize
+import xml.parsers.expat as expat
+from html.parser import HTMLParser
 from pathlib import Path
 
 import textstat
@@ -70,7 +73,8 @@ ROOT = _find_root(Path(__file__).parent)
 
 # Suffixes this checker understands. Anything else is not a checkable
 # target and is excluded from the file count rather than reported as clean.
-SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql")
+SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql",
+                      ".html", ".htm", ".xml", ".svg")
 
 # The setting applied to prose the extractor does not select, when the
 # caller names none.
@@ -706,6 +710,169 @@ def extract_stdin_prose(source):
     return items
 
 
+# HTML elements whose descendant content is not visible document prose. A
+# comment inside one of them is excluded with the subtree.
+HTML_EXCLUDED = frozenset({"script", "style", "template", "code", "pre"})
+
+# HTML elements that structure a document into separate prose blocks. Text
+# either side of one belongs to different units; inline markup does not.
+HTML_BLOCKS = frozenset({
+    "address", "article", "aside", "blockquote", "body", "caption", "dd",
+    "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
+    "title", "tr", "ul",
+})
+
+# The one HTML element that separates words without ending the prose run.
+HTML_BREAK = "br"
+
+# SVG elements whose character data is visible text.
+SVG_TEXT_ELEMENTS = frozenset({"text", "tspan", "textPath"})
+
+# SVG elements carrying machine-readable description rather than prose.
+SVG_EXCLUDED_TEXT = frozenset({"title", "desc"})
+
+
+class HtmlProseParser(HTMLParser):
+    """Collect visible HTML text as prose runs and HTML comments as blocks.
+
+    Inline markup does not divide a run. A structural block element, a
+    comment, an excluded subtree, and the end of input are the boundaries.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.units = []
+        self.excluded = 0
+        self.parts = []
+        self.opening = 0
+
+    def flush(self):
+        """Close the open prose run, if it carries any visible text."""
+        text = "".join(self.parts).strip()
+        if text:
+            self.units.append((self.opening, "prose", text))
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in HTML_EXCLUDED:
+            if not self.excluded:
+                self.flush()
+            self.excluded += 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
+        elif tag == HTML_BREAK and not self.excluded and self.parts:
+            # A break separates the words either side of it. Before any
+            # visible text it opens nothing, so the run keeps its own line.
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in HTML_EXCLUDED and self.excluded:
+            self.excluded -= 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
+
+    def handle_data(self, data):
+        if self.excluded:
+            return
+        # Whitespace alone neither opens a run nor fixes its starting line.
+        if not self.parts and not data.strip():
+            return
+        if not self.parts:
+            self.opening = self.getpos()[0]
+        self.parts.append(data)
+
+    def handle_comment(self, data):
+        if self.excluded:
+            return
+        self.flush()
+        text = data.strip()
+        if text:
+            self.units.append((self.getpos()[0], "block", text))
+
+
+def extract_html_prose(source):
+    """Return HTML prose runs and comments as (line, kind, text) triples."""
+    parser = HtmlProseParser()
+    parser.feed(source)
+    parser.close()
+    parser.flush()
+    return parser.units
+
+
+def local_name(name):
+    """Return the local part of a namespace-separated element name."""
+    return name.rsplit(" ", 1)[-1]
+
+
+def extract_xml_units(source, text_elements):
+    """Return XML comments, and text from `text_elements`, as prose units.
+
+    A document whose parse does not complete yields nothing, so a partial
+    read never reaches the checks.
+    """
+    units = []
+    parts = []
+    depth = 0
+    excluded = 0
+    opening = 0
+    parser = expat.ParserCreate(namespace_separator=" ")
+
+    def start(name, attrs):
+        nonlocal depth, excluded, opening
+        tag = local_name(name)
+        if tag in SVG_EXCLUDED_TEXT:
+            excluded += 1
+        elif tag in text_elements:
+            if not depth:
+                opening = parser.CurrentLineNumber
+            depth += 1
+
+    def end(name):
+        nonlocal depth, excluded, parts
+        tag = local_name(name)
+        if tag in SVG_EXCLUDED_TEXT:
+            excluded = max(excluded - 1, 0)
+        elif tag in text_elements and depth:
+            depth -= 1
+            if not depth:
+                text = "".join(parts).strip()
+                if text:
+                    units.append((opening, "prose", text))
+                parts = []
+
+    def characters(data):
+        if depth and not excluded:
+            parts.append(data)
+
+    def comment(data):
+        text = data.strip()
+        if text:
+            units.append((parser.CurrentLineNumber, "block", text))
+
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = characters
+    parser.CommentHandler = comment
+    try:
+        parser.Parse(source, True)
+    except expat.ExpatError:
+        return []
+    return units
+
+
+def extract_xml_comments(source):
+    """Return generic XML comments, and no element text, as prose units."""
+    return extract_xml_units(source, frozenset())
+
+
+def extract_svg_prose(source):
+    """Return SVG comments and supported text elements as prose units."""
+    return extract_xml_units(source, SVG_TEXT_ELEMENTS)
+
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -956,6 +1123,12 @@ def extract_units(path, source):
         return extract_markdown_prose(source)
     if path.suffix == ".sql":
         return extract_sql_comments(source)
+    if path.suffix in (".html", ".htm"):
+        return extract_html_prose(source)
+    if path.suffix == ".xml":
+        return extract_xml_comments(source)
+    if path.suffix == ".svg":
+        return extract_svg_prose(source)
     return []
 
 

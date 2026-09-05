@@ -714,6 +714,17 @@ def extract_stdin_prose(source):
 # comment inside one of them is excluded with the subtree.
 HTML_EXCLUDED = frozenset({"script", "style", "template", "code", "pre"})
 
+# HTML elements that structure a document into separate prose blocks. Text
+# either side of one belongs to different units; inline markup does not.
+HTML_BLOCKS = frozenset({
+    "address", "article", "aside", "blockquote", "body", "caption", "dd",
+    "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
+    "title", "tr", "ul",
+})
+
 # SVG elements whose character data is visible text.
 SVG_TEXT_ELEMENTS = frozenset({"text", "tspan", "textPath"})
 
@@ -724,8 +735,8 @@ SVG_EXCLUDED_TEXT = frozenset({"title", "desc"})
 class HtmlProseParser(HTMLParser):
     """Collect visible HTML text as prose runs and HTML comments as blocks.
 
-    Ordinary markup does not divide a run. A comment, an excluded subtree,
-    and the end of input are the only boundaries.
+    Inline markup does not divide a run. A structural block element, a
+    comment, an excluded subtree, and the end of input are the boundaries.
     """
 
     def __init__(self):
@@ -747,10 +758,14 @@ class HtmlProseParser(HTMLParser):
             if not self.excluded:
                 self.flush()
             self.excluded += 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
 
     def handle_endtag(self, tag):
         if tag in HTML_EXCLUDED and self.excluded:
             self.excluded -= 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
 
     def handle_data(self, data):
         if self.excluded:

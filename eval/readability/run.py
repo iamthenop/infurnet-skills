@@ -226,6 +226,12 @@ MARKUP_SOURCES = (
      [(2, "block"), (3, "prose")]),
 )
 
+# Structural blocks reach the measurement as separate units, so both scripts
+# report a unit per block rather than one page-sized run.
+HTML_STRUCTURAL = (f"<p>{PROSE_FINDING}</p>\n<p>{PROSE_FINDING}</p>\n"
+                   f"<ul>\n  <li>{PROSE_FINDING}</li>\n</ul>\n")
+HTML_STRUCTURAL_UNITS = [(1, "prose"), (2, "prose"), (4, "prose")]
+
 # Inline markup must reach the measurement as one unit of visible text.
 HTML_INLINE = ("<p>The validator reads the accepted workorder and rejects "
                "a change the <em>governing instructions</em> do not "
@@ -1158,6 +1164,33 @@ def html_inline_markup_is_measured_as_one_unit(results, workdir):
     )
 
 
+def html_structural_units_match_the_prose_checker(results, workdir):
+    """Both scripts see one unit per structural block, not one merged run."""
+    root = workdir / "html-structural-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+    fixture = root / "fixtures" / "blocks.html"
+    write(fixture, HTML_STRUCTURAL)
+
+    _, prose_output = run_script(checker, [str(fixture)])
+    _, grade_output = run_script(script, [str(fixture), "--top", "5"])
+    prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+    grade_units = detail_units(grade_output)
+    results.check(
+        "check-prose.py — reports one unit per structural block",
+        prose_units == HTML_STRUCTURAL_UNITS,
+        f"expected {HTML_STRUCTURAL_UNITS!r}, saw {prose_units!r}. A merged "
+        f"run reports one unit at the first line. Output:\n{prose_output}",
+    )
+    results.check(
+        "check-readability.py — measures the same structural units",
+        grade_units == prose_units,
+        f"the readability units {grade_units!r} differ from the extractor's "
+        f"{prose_units!r}, so a second boundary is in use. "
+        f"Output:\n{grade_output}",
+    )
+
+
 def readability_holds_no_native_suffix_ladder(results, workdir):
     """The readability script selects no native extraction of its own."""
     source = READABILITY.read_text(encoding="utf-8")
@@ -1220,6 +1253,7 @@ def main():
 
         markup_units_match_the_prose_checker(results, workdir)
         html_inline_markup_is_measured_as_one_unit(results, workdir)
+        html_structural_units_match_the_prose_checker(results, workdir)
         readability_holds_no_native_suffix_ladder(results, workdir)
 
     if results.failures:

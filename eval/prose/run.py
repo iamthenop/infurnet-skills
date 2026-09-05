@@ -265,6 +265,39 @@ HTML_EXCLUSIONS = (
      f'<img alt="{S13}" title="{S13}" aria-label="{S13}">\n'),
 )
 
+# Structural block elements bound a prose run; inline markup does not. Each
+# fixture carries S13 per block, so every unit reports its own finding.
+HTML_STRUCTURAL = (
+    ("adjacent paragraphs", f"<p>{S13}</p>\n<p>{S13}</p>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("adjacent sections", f"<section>{S13}</section>\n<section>{S13}</section>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("adjacent divs", f"<div>{S13}</div>\n<div>{S13}</div>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("a heading and the paragraph after it", f"<h1>{S13}</h1>\n<p>{S13}</p>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("list items", f"<ul>\n  <li>{S13}</li>\n  <li>{S13}</li>\n</ul>\n",
+     [(2, "prose"), (3, "prose")]),
+    ("table cells",
+     f"<table>\n  <tr>\n    <th>{S13}</th>\n    <td>{S13}</td>\n  </tr>\n</table>\n",
+     [(3, "prose"), (4, "prose")]),
+    ("a title and the body after it",
+     f"<title>{S13}</title>\n<body><p>{S13}</p></body>\n",
+     [(1, "prose"), (2, "prose")]),
+)
+
+# Nesting must not duplicate text, and the inline `em` must not split its
+# paragraph into two units.
+HTML_NESTED = (
+    f"<article>\n  <p>{S13}</p>\n"
+    "  <p>The validator reads the <em>accepted workorder</em> and rejects "
+    "the change without a signature.</p>\n</article>\n"
+)
+
+# Three blocks, each inside the fixture unit limit, whose concatenation is
+# above it. A merged run fails on unit words alone.
+HTML_SEPARATE_BLOCKS = f"<p>{A10}</p>\n<p>{B10}</p>\n<p>{C10}</p>\n"
+
 # Tag and attribute names alone carry no prose.
 HTML_MARKUP_ONLY = '<section class="wrapper"><div id="main"><br></div></section>\n'
 
@@ -1578,6 +1611,63 @@ def existing_extraction_is_unchanged(results, workdir):
 
 # --- markup ----------------------------------------------------------------
 
+def html_structural_blocks_end_a_prose_run(results, workdir):
+    """A structural block element bounds the prose run either side of it."""
+    root = workdir / "html-structural"
+    script = build_tree(root)
+    for index, (label, source, expected) in enumerate(HTML_STRUCTURAL):
+        fixture = root / "fixtures" / f"structural-{index}.html"
+        write(fixture, source)
+        _, output, _ = check_one(script, fixture)
+        results.check(
+            f"html — {label} stay separate units",
+            units(output) == expected,
+            f"expected {expected!r}, saw {units(output)!r}. One merged unit "
+            f"reports a single starting line. Output:\n{output}",
+        )
+
+
+def html_nested_structure_does_not_duplicate(results, workdir):
+    """Nested blocks yield one unit each, and inline markup splits none."""
+    root = workdir / "html-nested"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "nested.html"
+    write(fixture, HTML_NESTED)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "html — nested blocks produce one unit each without duplication",
+        units(output) == [(2, "prose"), (3, "prose")],
+        f"expected prose units at lines 2 and 3, saw {units(output)!r}. An "
+        f"enclosing block emitting its own unit duplicates the text here. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "html — inline markup still leaves its paragraph whole",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. A unit split at the "
+        f"`em` boundary reports fewer. Output:\n{output}",
+    )
+
+
+def html_blocks_are_measured_separately(results, workdir):
+    """Separate blocks are not failed for a length only their merger has."""
+    root = workdir / "html-separate-blocks"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "blocks.html"
+    write(fixture, HTML_SEPARATE_BLOCKS)
+
+    _, output, found = check_one(script, fixture)
+    merged = words(f"{A10} {B10} {C10}")
+    results.check(
+        "html — separate blocks each stay inside the prose unit limit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Each block carries "
+        f"{words(A10)} words, inside the {DEFAULT_UNIT_WORDS} word limit, "
+        f"while their merger carries {merged}. Output:\n{output}",
+    )
+
+
 def markup_suffixes_are_supported(results, workdir):
     """Both HTML suffixes are discovered by a directory walk."""
     root = workdir / "markup-discovery"
@@ -1889,6 +1979,9 @@ def main():
         existing_extraction_is_unchanged(results, workdir)
 
         markup_suffixes_are_supported(results, workdir)
+        html_structural_blocks_end_a_prose_run(results, workdir)
+        html_nested_structure_does_not_duplicate(results, workdir)
+        html_blocks_are_measured_separately(results, workdir)
         html_inline_markup_keeps_one_unit(results, workdir)
         html_comment_is_a_block_between_runs(results, workdir)
         html_comment_reports_its_opening_line(results, workdir)

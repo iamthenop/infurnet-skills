@@ -3,10 +3,11 @@
 
 Each regression builds a throwaway skill tree in a temporary directory, copies
 the real checker into it beside a fixture settings reference, then runs the
-checker as a subprocess. Every assertion rests on the checker's own exit
-status and printed output, and every density limit comes from the fixture
-reference rather than from the harness or the canonical table.
+checker as a subprocess. Every density limit comes from the fixture
+reference, and every assertion reads the checker's exit status and printed
+output except where a regression names the extraction it reads directly.
 """
+import importlib.util
 import pathlib
 import re
 import shutil
@@ -165,6 +166,209 @@ TAGGED_UNIT = "The read<br>write record holds after the second review."
 SPANNED_POLICY = "The check will `utilize` the record and it `may` stop and it could halt."
 
 
+# --- stdin fixtures ----------------------------------------------------------
+# S13 wrapped across two physical lines. Neither half reaches the sentence
+# limit, so a finding proves the checker joined them into one prose unit.
+WRAP_FIRST = "The validator reads the accepted workorder and rejects"
+WRAP_SECOND = "the change without a signature."
+
+# Two paragraphs framed by leading, repeated, and trailing blank lines. The
+# findings fall on lines 3 and 7 when blank runs create no unit and still
+# carry line attribution.
+STDIN_PARAGRAPHS = f"\n\n{WRAP_FIRST}\n{WRAP_SECOND}\n\n\n{S13}\n\n"
+STDIN_FIRST_LINE = 3
+STDIN_SECOND_LINE = 7
+
+# A Markdown heading. The Markdown extractor drops it, so the same bytes
+# read from stdin must reach the checker as ordinary prose.
+STDIN_HEADING = f"# {S13}\n"
+
+MIXED_INPUT_ERROR = "stdin '-' cannot be combined with file or directory paths"
+STDIN_SOURCE = "<stdin>"
+
+
+# --- PostgreSQL fixtures ---------------------------------------------------
+# Every fixture carries S13, one word above the fixture sentence limit. A
+# finding proves the checker extracted the comment holding it, and silence
+# proves PostgreSQL syntax kept it out.
+SQL_LINE_COMMENT = f"SELECT 1;\n-- {S13}\nSELECT 2;\n"
+SQL_BLOCK_COMMENT = f"SELECT 1;\n/* {S13} */\nSELECT 2;\n"
+SQL_COMMENT_LINE = 2
+
+# Two comments on consecutive physical lines.
+SQL_CONSECUTIVE = f"-- {S13}\n-- {S13}\n"
+
+# The opening delimiter sits on line 2 and the prose runs past it.
+SQL_MULTILINE_BLOCK = f"SELECT 1;\n/* {S13}\n   The boundary holds. */\n"
+
+# PostgreSQL nests block comments. A dialect that does not would close the
+# outer comment at the inner delimiter and leave a second unit behind.
+SQL_NESTED_BLOCK = f"/*\n{S13}\n    /* The nested note. */\nThe outer note.\n*/\n"
+
+# One line comment and one block comment, each above the sentence limit.
+SQL_BOTH_KINDS = f"-- {S13}\n/* {S13} */\n"
+
+SQL_NO_COMMENTS = "SELECT id, name FROM example WHERE id > 10 ORDER BY name;\n"
+SQL_VOCABULARY = f"-- {VOCAB}\n"
+
+# Each hides S13 where PostgreSQL syntax, not a prose rule, must exclude it.
+SQL_EXCLUSIONS = (
+    ("a line marker inside an ordinary string", f"SELECT '-- {S13}';\n"),
+    ("a block marker inside an ordinary string", f"SELECT '/* {S13} */';\n"),
+    ("an untagged dollar-quoted DO body",
+     f"DO $$\nBEGIN\n    -- {S13}\n    NULL;\nEND\n$$;\n"),
+    ("a tagged dollar-quoted body",
+     "CREATE FUNCTION example() RETURNS void AS $body$\nBEGIN\n"
+     f"    /* {S13} */\n    NULL;\nEND\n$body$ LANGUAGE plpgsql;\n"),
+    ("a COMMENT ON statement",
+     f"COMMENT ON TABLE example IS '{S13}';\n"),
+    ("a MySQL comment marker", f"SELECT 1; # {S13}\n"),
+    ("a line marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' -- {S13}';\n"),
+    ("a block marker after an escaped quote in an escape string",
+     f"SELECT E'abc\\' /* {S13} */';\n"),
+    ("a standalone tagged dollar-quoted body", f"SELECT $tag$ {S13} $tag$;\n"),
+)
+
+# A backslash-escaped quote keeps a PostgreSQL escape string open, so the
+# string ends at its real closing quote and the comment after it is real.
+SQL_ESCAPE_THEN_COMMENT = f"SELECT E'abc\\' still string';\n-- {S13}\n"
+
+# PostgreSQL allows `$` after an identifier's first character, so `foo$tag$`
+# is one identifier and opens no dollar quote.
+# The comment carries a matching `$tag$`, so a dollar quote opening inside
+# the identifier would run through it and swallow the comment whole.
+SQL_IDENTIFIER_DOLLAR = f"SELECT foo$tag$;\n-- {S13} $tag$\n"
+
+
+# --- markup fixtures -------------------------------------------------------
+# Every hidden region carries S13, one word above the fixture sentence limit,
+# so a finding proves the structural boundary leaked.
+HTML_INLINE = f"<p>The validator reads the <em>accepted workorder</em> and " \
+              f"rejects the change without a signature.</p>\n"
+HTML_COMMENT = f"<p>{S13}</p>\n<!-- {S13} -->\n<p>{S13}</p>\n"
+HTML_MULTILINE_COMMENT = f"<p>Visible.</p>\n<!-- {S13}\n     continues -->\n"
+HTML_HTM = f"<p>{S13}</p>\n"
+
+# Each hides S13 where HTML structure, not a prose rule, must exclude it.
+HTML_EXCLUSIONS = (
+    ("a script element", f"<script>var s = \"{S13}\";</script>\n"),
+    ("a style element", f"<style>/* {S13} */</style>\n"),
+    ("a template element", f"<template><p>{S13}</p></template>\n"),
+    ("a code element", f"<code>{S13}</code>\n"),
+    ("a pre element", f"<pre>{S13}</pre>\n"),
+    ("a descendant of an excluded element",
+     f"<pre><code><em>{S13}</em></code></pre>\n"),
+    ("a comment inside an excluded element",
+     f"<template><!-- {S13} --></template>\n"),
+    ("an alt, title, or aria-label attribute",
+     f'<img alt="{S13}" title="{S13}" aria-label="{S13}">\n'),
+)
+
+# Structural block elements bound a prose run; inline markup does not. Each
+# fixture carries S13 per block, so every unit reports its own finding.
+HTML_STRUCTURAL = (
+    ("adjacent paragraphs", f"<p>{S13}</p>\n<p>{S13}</p>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("adjacent sections", f"<section>{S13}</section>\n<section>{S13}</section>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("adjacent divs", f"<div>{S13}</div>\n<div>{S13}</div>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("a heading and the paragraph after it", f"<h1>{S13}</h1>\n<p>{S13}</p>\n",
+     [(1, "prose"), (2, "prose")]),
+    ("list items", f"<ul>\n  <li>{S13}</li>\n  <li>{S13}</li>\n</ul>\n",
+     [(2, "prose"), (3, "prose")]),
+    ("table cells",
+     f"<table>\n  <tr>\n    <th>{S13}</th>\n    <td>{S13}</td>\n  </tr>\n</table>\n",
+     [(3, "prose"), (4, "prose")]),
+    ("a title and the body after it",
+     f"<title>{S13}</title>\n<body><p>{S13}</p></body>\n",
+     [(1, "prose"), (2, "prose")]),
+)
+
+# Nesting must not duplicate text, and the inline `em` must not split its
+# paragraph into two units.
+HTML_NESTED = (
+    f"<article>\n  <p>{S13}</p>\n"
+    "  <p>The validator reads the <em>accepted workorder</em> and rejects "
+    "the change without a signature.</p>\n</article>\n"
+)
+
+# Three blocks, each inside the fixture unit limit, whose concatenation is
+# above it. A merged run fails on unit words alone.
+HTML_SEPARATE_BLOCKS = f"<p>{A10}</p>\n<p>{B10}</p>\n<p>{C10}</p>\n"
+
+# A line break separates the words either side of it without ending the run.
+# Split at an S13 word boundary: joined the sentence counts 12 words, exactly
+# the fixture limit, and separated it counts 13, one above it.
+HTML_BREAK_OPEN = f"<p>{WRAP_FIRST}<br>{WRAP_SECOND}</p>\n"
+HTML_BREAK_CLOSED = f"<p>{WRAP_FIRST}<br/>{WRAP_SECOND}</p>\n"
+HTML_BREAK_LEADING = f"<p><br>{S13}</p>\n"
+HTML_BREAK_PLAIN = f"<p>{S13}</p>\n"
+HTML_BREAK_EXCLUDED = f"<code>{WRAP_FIRST}<br>{WRAP_SECOND}</code>\n"
+
+# Tag and attribute names alone carry no prose.
+HTML_MARKUP_ONLY = '<section class="wrapper"><div id="main"><br></div></section>\n'
+
+XML_COMMENT = f'<root attr="{S13}">\n  <!-- {S13} -->\n  <child>{S13}</child>\n</root>\n'
+
+# Each hides S13 where the generic XML contract excludes it.
+XML_EXCLUSIONS = (
+    ("element text", f"<root><child>{S13}</child></root>\n"),
+    ("an attribute", f'<root attr="{S13}"><child other="{S13}"/></root>\n'),
+    ("CDATA", f"<root><![CDATA[{S13}]]></root>\n"),
+    ("a processing instruction", f"<root><?target {S13}?></root>\n"),
+    ("SVG-shaped content under the .xml suffix",
+     '<svg xmlns="http://www.w3.org/2000/svg">\n'
+     f"  <text>{S13}</text>\n</svg>\n"),
+)
+
+# A comment precedes the error, so a partial read would report it.
+XML_MALFORMED = f"<root>\n  <!-- {S13} -->\n  <unclosed>\n</root>\n"
+
+SVG_COMMENT_AND_TEXT = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <!-- {S13} -->\n"
+    f'  <text x="1" y="2">{S13}</text>\n</svg>\n'
+)
+SVG_NESTED_TSPAN = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    "  <text>The validator reads the <tspan>accepted workorder</tspan> and "
+    "rejects the change without a signature.</text>\n</svg>\n"
+)
+SVG_NESTED_TEXTPATH = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n  <text>\n'
+    "    The validator reads the accepted workorder and rejects\n"
+    '    <textPath href="#p">the change without a signature.</textPath>\n'
+    "  </text>\n</svg>\n"
+)
+SVG_STANDALONE = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <tspan>{S13}</tspan>\n  <textPath>{S13}</textPath>\n</svg>\n"
+)
+SVG_PREFIXED = (
+    '<s:svg xmlns:s="http://www.w3.org/2000/svg">\n'
+    f"  <s:text>{S13}</s:text>\n</s:svg>\n"
+)
+
+# Each hides S13 where the SVG contract excludes it.
+SVG_EXCLUSIONS = (
+    ("a title element",
+     f'<svg xmlns="http://www.w3.org/2000/svg"><title>{S13}</title></svg>\n'),
+    ("a desc element",
+     f'<svg xmlns="http://www.w3.org/2000/svg"><desc>{S13}</desc></svg>\n'),
+    ("attribute, geometry, and style data",
+     '<svg xmlns="http://www.w3.org/2000/svg">\n'
+     f'  <path id="{S13}" d="M0 0 L10 10" style="fill:red" data-note="{S13}"/>\n'
+     "</svg>\n"),
+)
+
+SVG_MALFORMED = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <!-- {S13} -->\n  <text>{S13}</text>\n  <bad>\n</svg>\n"
+)
+
+
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
 SUMMARY_LINE = re.compile(
     r"^(\d+) finding\(s\) across (\d+) file\(s\) "
@@ -202,10 +406,15 @@ def build_tree(root, agents_text=AT_LIMIT):
     return scripts / CHECKER.name
 
 
-def run_checker(script, args):
+def run_checker(script, args, stdin_text=None):
+    """Run the checker, passing `stdin_text` on standard input when given.
+
+    Without it the call inherits this process's standard input, which is
+    what every filesystem regression does.
+    """
     proc = subprocess.run(
         [sys.executable, str(script)] + args,
-        capture_output=True, text=True,
+        input=stdin_text, capture_output=True, text=True,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -232,6 +441,17 @@ def counts(output):
 def check_one(script, path, extra=()):
     """Run the checker over one file and return its findings."""
     code, output = run_checker(script, [str(path)] + list(extra))
+    return code, output, messages(output)
+
+
+def units(output):
+    """Every finding the checker printed, as (line, kind) pairs."""
+    return [(int(line), kind) for line, kind, _ in FINDING_LINE.findall(output)]
+
+
+def check_stdin(script, text, extra=()):
+    """Run the checker over one block of standard input."""
+    code, output = run_checker(script, ["-"] + list(extra), stdin_text=text)
     return code, output, messages(output)
 
 
@@ -951,6 +1171,802 @@ def inline_html_does_not_join_words(results, workdir):
     )
 
 
+# --- standard input --------------------------------------------------------
+
+def stdin_joins_contiguous_lines(results, workdir):
+    """A run of nonblank stdin lines is one prose unit at its first line."""
+    root = workdir / "stdin-paragraphs"
+    script = build_tree(root)
+
+    _, output, found = check_stdin(script, STDIN_PARAGRAPHS)
+    results.check(
+        "stdin — one unit per contiguous run, attributed to its first line",
+        units(output) == [(STDIN_FIRST_LINE, "prose"),
+                          (STDIN_SECOND_LINE, "prose")],
+        f"expected units at lines {STDIN_FIRST_LINE} and {STDIN_SECOND_LINE}, "
+        f"saw {units(output)!r}. A wrapped line left unjoined falls under the "
+        f"limit, and a blank run counted as a unit moves the line. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "stdin — the joined unit is measured against the sentence limit",
+        has(found, f"above {DEFAULT_SENTENCE_WORDS} words",
+            f"longest is {words(S13)}"),
+        f"expected a sentence-word finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def stdin_is_named_as_the_source(results, workdir):
+    """Findings from standard input name it, and never name the selector."""
+    root = workdir / "stdin-source"
+    script = build_tree(root)
+
+    _, output, _ = check_stdin(script, STDIN_PARAGRAPHS)
+    results.check(
+        f"stdin — findings sit under {STDIN_SOURCE}",
+        f"\n{STDIN_SOURCE}\n" in output,
+        f"expected a {STDIN_SOURCE} source header. Output:\n{output}",
+    )
+    results.check(
+        "stdin — the selector is not the reported source",
+        "\n-\n" not in output,
+        f"the selector is reported as a source name. Output:\n{output}",
+    )
+
+
+def stdin_is_not_parsed_as_a_format(results, workdir):
+    """Standard input receives no Markdown parsing and no file inference."""
+    root = workdir / "stdin-format"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "heading.md"
+    write(fixture, STDIN_HEADING)
+
+    _, file_output, file_found = check_one(script, fixture)
+    _, stdin_output, stdin_found = check_stdin(script, STDIN_HEADING)
+    results.check(
+        "heading in a Markdown file — excluded by the Markdown extractor",
+        not file_found,
+        f"the fixture must be excluded as a heading, saw {file_found!r}. "
+        f"Output:\n{file_output}",
+    )
+    results.check(
+        "the same bytes on stdin — measured as plain prose",
+        units(stdin_output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(stdin_output)!r}. "
+        f"Output:\n{stdin_output}",
+    )
+
+
+def stdin_rejects_filesystem_paths(results, workdir):
+    """The stdin selector cannot be combined with a path, in either order."""
+    root = workdir / "stdin-mixed"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "paragraph.md"
+    write(fixture, S13 + "\n")
+
+    for label, args in (("stdin first", ["-", str(fixture)]),
+                        ("path first", [str(fixture), "-"])):
+        code, output = run_checker(script, args)
+        results.check(
+            f"{label} — rejected as a request error naming the rule",
+            code == 2 and MIXED_INPUT_ERROR in output,
+            f"exit {code}, expected 2 carrying {MIXED_INPUT_ERROR!r}. "
+            f"Output:\n{output}",
+        )
+
+
+def empty_stdin_is_clean(results, workdir):
+    """Empty and whitespace-only standard input create no prose unit."""
+    root = workdir / "stdin-empty"
+    script = build_tree(root)
+
+    for label, text in (("empty", ""), ("whitespace only", "  \n\t\n\n")):
+        code, output, found = check_stdin(script, text)
+        results.check(
+            f"{label} stdin — a clean run with no unit",
+            code == 0 and counts(output) == (0, 0, 0, 0) and not found,
+            f"exit {code} with findings {found!r}. Output:\n{output}",
+        )
+
+
+def stdin_keeps_the_existing_options(results, workdir):
+    """--strict, --vocabulary, and --setting hold their meanings on stdin."""
+    root = workdir / "stdin-options"
+    script = build_tree(root)
+
+    code, _ = run_checker(script, ["-", "--strict"],
+                          stdin_text=STDIN_PARAGRAPHS)
+    results.check(
+        "stdin — --strict exits 1 on a finding",
+        code == 1,
+        f"expected exit 1, got {code}",
+    )
+
+    _, output, found = check_stdin(script, VOCAB + "\n", ["--vocabulary"])
+    results.check(
+        "stdin — --vocabulary reports the vocabulary finding alone",
+        counts(output) == (1, 1, 0, 1) and has(found, "consider: use"),
+        f"summary {counts(output)!r} with {found!r}. Output:\n{output}",
+    )
+
+    _, without, _ = check_stdin(script, S12 + "\n")
+    _, with_setting, found = check_stdin(
+        script, S12 + "\n", ["--setting", CALLER_SETTING])
+    results.check(
+        f"stdin — --setting applies the {CALLER_SETTING} sentence limit",
+        counts(without) == (0, 0, 0, 0)
+        and has(found, f"above {CALLER_SENTENCE_WORDS} words",
+                f"under {CALLER_SETTING}"),
+        f"default saw {counts(without)!r}, {CALLER_SETTING} saw {found!r}. "
+        f"Output:\n{with_setting}",
+    )
+
+
+# --- PostgreSQL ------------------------------------------------------------
+
+def sql_is_a_supported_file(results, workdir):
+    """A .sql file is discovered by a directory walk and checked."""
+    root = workdir / "sql-discovery"
+    script = build_tree(root)
+    write(root / "fixtures" / "schema.sql", SQL_LINE_COMMENT)
+
+    _, output = run_checker(script, [str(root / "fixtures")])
+    results.check(
+        "sql — a .sql file is discovered and counted as a checked file",
+        counts(output) is not None and counts(output)[1] == 1,
+        f"expected one checked file, saw {counts(output)!r}. A suffix the "
+        f"walk does not know is dropped before the count. Output:\n{output}",
+    )
+
+
+def sql_line_comment_is_one_inline_unit(results, workdir):
+    """A `--` comment becomes one inline unit without its delimiter."""
+    root = workdir / "sql-line-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "line.sql"
+    write(fixture, SQL_LINE_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — a line comment is one inline unit at its own line",
+        units(output) == [(SQL_COMMENT_LINE, "inline")],
+        f"expected one inline unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+    results.check(
+        "sql — the line-comment delimiter is not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. A counted `--` reports "
+        f"one word more. Output:\n{output}",
+    )
+
+
+def sql_block_comment_is_one_block_unit(results, workdir):
+    """A `/* */` comment becomes one block unit without its delimiters."""
+    root = workdir / "sql-block-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "block.sql"
+    write(fixture, SQL_BLOCK_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — a block comment is one block unit at its own line",
+        units(output) == [(SQL_COMMENT_LINE, "block")],
+        f"expected one block unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+    results.check(
+        "sql — the block delimiters are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Counted delimiters "
+        f"report more. Output:\n{output}",
+    )
+
+
+def sql_consecutive_line_comments_stay_separate(results, workdir):
+    """Two `--` comments on consecutive lines stay two units."""
+    root = workdir / "sql-consecutive"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "consecutive.sql"
+    write(fixture, SQL_CONSECUTIVE)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — consecutive line comments keep separate source lines",
+        units(output) == [(1, "inline"), (2, "inline")],
+        f"expected an inline unit on lines 1 and 2, saw {units(output)!r}. "
+        f"A line comment carries its own newline, so joining the tokens "
+        f"merges the pair into one unit. Output:\n{output}",
+    )
+
+
+def sql_block_comment_reports_its_opening_line(results, workdir):
+    """A multiline block comment is attributed to its opening delimiter."""
+    root = workdir / "sql-multiline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "multiline.sql"
+    write(fixture, SQL_MULTILINE_BLOCK)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a multiline block comment reports its opening physical line",
+        units(output) == [(SQL_COMMENT_LINE, "block")],
+        f"expected one block unit at line {SQL_COMMENT_LINE}, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+
+
+def sql_nested_block_stays_one_unit(results, workdir):
+    """A nested block comment stays one unit opening at the outer delimiter."""
+    root = workdir / "sql-nested"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "nested.sql"
+    write(fixture, SQL_NESTED_BLOCK)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a nested block comment is one unit at the outer opening line",
+        units(output) == [(1, "block")],
+        f"expected one block unit at line 1, saw {units(output)!r}. Closing "
+        f"the outer comment at the inner delimiter leaves a second unit. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_excluded_regions_are_not_prose(results, workdir):
+    """SQL syntax hides the same prose the checker flags in a comment."""
+    root = workdir / "sql-exclusions"
+    script = build_tree(root)
+
+    exposed = root / "fixtures" / "exposed.sql"
+    write(exposed, SQL_LINE_COMMENT)
+    _, oracle_output, oracle = check_one(script, exposed)
+    results.check(
+        "sql — the hidden prose is flagged when it is a real comment",
+        has(oracle, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"the exclusion fixtures hide prose the checker flags nowhere, so "
+        f"excluding it proves nothing. Saw {oracle!r}. "
+        f"Output:\n{oracle_output}",
+    )
+
+    for index, (label, source) in enumerate(SQL_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.sql"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"sql — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
+# `normalize_prose` turns a star into a space before any rule reads it, so a
+# preserved star never reaches the checker's printed output. These cases read
+# the extractor, which is where the star has to survive.
+STAR_CASES = (
+    ("`A* search` keeps its star",
+     "/* A* search explores the frontier. */\n",
+     "A* search explores the frontier."),
+    ("`rows * columns` keeps its star",
+     "/* The total is rows * columns here. */\n",
+     "The total is rows * columns here."),
+    ("a line-leading decorative star is dropped",
+     "/*\n * Human explanation of it.\n * Second sentence here.\n */\n",
+     "Human explanation of it.\nSecond sentence here."),
+)
+
+
+def load_checker():
+    """Import the checker so a regression can read its extraction directly."""
+    spec = importlib.util.spec_from_file_location("check_prose", CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(module)
+    return module
+
+
+def sql_block_stars_are_extracted_as_written(results, workdir):
+    """Only a line-leading decorative star leaves a PostgreSQL block comment."""
+    prose = load_checker()
+    for label, source, expected in STAR_CASES:
+        extracted = prose.extract_sql_comments(source)
+        results.check(
+            f"sql — {label}",
+            extracted == [(1, "block", expected)],
+            f"expected [(1, 'block', {expected!r})], saw {extracted!r}. A "
+            f"global star substitution drops every star, not the decoration "
+            f"alone.",
+        )
+
+
+def sql_escape_string_keeps_its_boundary(results, workdir):
+    """A completed escape string still yields the comment that follows it."""
+    root = workdir / "sql-escape-string"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "escape.sql"
+    write(fixture, SQL_ESCAPE_THEN_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after a completed escape string is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A string "
+        f"closed at its escaped quote swallows the comment that follows. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_identifier_dollar_opens_no_quote(results, workdir):
+    """A dollar sign continuing an identifier opens no dollar-quoted span."""
+    root = workdir / "sql-identifier-dollar"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "identifier.sql"
+    write(fixture, SQL_IDENTIFIER_DOLLAR)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "sql — a comment after an identifier carrying a dollar sign is extracted",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. A dollar "
+        f"quote opening inside the identifier swallows the comment. "
+        f"Output:\n{output}",
+    )
+
+
+def sql_without_comments_is_clean(results, workdir):
+    """SQL carrying no source comment produces no prose unit."""
+    root = workdir / "sql-clean"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "clean.sql"
+    write(fixture, SQL_NO_COMMENTS)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "sql — statements alone carry no prose unit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def sql_comments_take_the_existing_checks(results, workdir):
+    """Density and vocabulary apply to an extracted PostgreSQL comment."""
+    root = workdir / "sql-existing-checks"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    write(fixtures / "density.sql", SQL_LINE_COMMENT)
+    write(fixtures / "vocabulary.sql", SQL_VOCABULARY)
+
+    _, density_output, density_found = check_one(script, fixtures / "density.sql")
+    results.check(
+        "sql — density applies to an extracted comment",
+        has(density_found, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"expected a sentence-word finding, saw {density_found!r}. "
+        f"Output:\n{density_output}",
+    )
+
+    _, vocab_output, vocab_found = check_one(script, fixtures / "vocabulary.sql")
+    results.check(
+        "sql — vocabulary applies to an extracted comment",
+        counts(vocab_output) is not None and counts(vocab_output)[3] == 1,
+        f"expected one vocabulary finding, saw {vocab_found!r}. "
+        f"Output:\n{vocab_output}",
+    )
+
+
+def sql_kinds_are_the_existing_ones(results, workdir):
+    """Extraction reports the existing prose kinds and no lexer category."""
+    root = workdir / "sql-kinds"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "kinds.sql"
+    write(fixture, SQL_BOTH_KINDS)
+
+    _, output, _ = check_one(script, fixture)
+    kinds = [kind for _, kind in units(output)]
+    results.check(
+        "sql — the reported kinds are the existing inline and block kinds",
+        kinds == ["inline", "block"],
+        f"expected ['inline', 'block'], saw {kinds!r}. A lexer token "
+        f"category reaching the report names itself here. Output:\n{output}",
+    )
+
+
+def sql_dialect_is_not_inferred_from_content(results, workdir):
+    """The dialect boundary reads the same comment the same way either side."""
+    root = workdir / "sql-no-detection"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    write(fixtures / "postgres.sql", f"-- {S13}\nSELECT $tag$ body $tag$;\n")
+    write(fixtures / "mysql.sql", f"-- {S13}\nSELECT `col` FROM t; # note\n")
+
+    _, first, _ = check_one(script, fixtures / "postgres.sql")
+    _, second, _ = check_one(script, fixtures / "mysql.sql")
+    results.check(
+        "sql — surrounding dialect flavour does not change the units",
+        units(first) == units(second) == [(1, "inline")],
+        f"the two flavours gave {units(first)!r} and {units(second)!r}, so "
+        f"the boundary read the file content. Output:\n{first}\n{second}",
+    )
+
+
+def existing_extraction_is_unchanged(results, workdir):
+    """Adding .sql leaves Python, Java, Markdown, and stdin extraction alone."""
+    root = workdir / "sql-existing-extractors"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    cases = [
+        ("module.py", f"# {S13}\n", [(1, "inline")]),
+        ("Type.java", f"class A {{\n// {S13}\n}}\n", [(2, "inline")]),
+        ("doc.md", f"{S13}\n", [(1, "prose")]),
+        ("schema.sql", f"-- {S13}\n", [(1, "inline")]),
+    ]
+    for name, body, expected in cases:
+        fixture = fixtures / name
+        write(fixture, body)
+        _, output, _ = check_one(script, fixture)
+        results.check(
+            f"sql — {name} extraction is unchanged",
+            units(output) == expected,
+            f"expected {expected!r}, saw {units(output)!r}. Output:\n{output}",
+        )
+
+    _, output, _ = check_stdin(script, f"{S13}\n")
+    results.check(
+        "sql — stdin extraction is unchanged",
+        units(output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+# --- markup ----------------------------------------------------------------
+
+def html_structural_blocks_end_a_prose_run(results, workdir):
+    """A structural block element bounds the prose run either side of it."""
+    root = workdir / "html-structural"
+    script = build_tree(root)
+    for index, (label, source, expected) in enumerate(HTML_STRUCTURAL):
+        fixture = root / "fixtures" / f"structural-{index}.html"
+        write(fixture, source)
+        _, output, _ = check_one(script, fixture)
+        results.check(
+            f"html — {label} stay separate units",
+            units(output) == expected,
+            f"expected {expected!r}, saw {units(output)!r}. One merged unit "
+            f"reports a single starting line. Output:\n{output}",
+        )
+
+
+def html_line_breaks_keep_word_boundaries(results, workdir):
+    """A line break separates words without ending the prose run."""
+    root = workdir / "html-break"
+    script = build_tree(root)
+    for name, source in (("open.html", HTML_BREAK_OPEN),
+                         ("closed.html", HTML_BREAK_CLOSED)):
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"html — the break in {name} leaves one prose unit",
+            units(output) == [(1, "prose")],
+            f"expected one prose unit at line 1, saw {units(output)!r}. A "
+            f"break that ends the run reports two. Output:\n{output}",
+        )
+        results.check(
+            f"html — the break in {name} keeps the words apart",
+            has(found, f"above {DEFAULT_SENTENCE_WORDS} words",
+                f"longest is {words(S13)}"),
+            f"expected {words(S13)} words, saw {found!r}. Words joined "
+            f"across the break count one fewer and clear the limit. "
+            f"Output:\n{output}",
+        )
+
+    leading = root / "fixtures" / "leading.html"
+    plain = root / "fixtures" / "plain.html"
+    write(leading, HTML_BREAK_LEADING)
+    write(plain, HTML_BREAK_PLAIN)
+    _, leading_output, _ = check_one(script, leading)
+    _, plain_output, _ = check_one(script, plain)
+    results.check(
+        "html — a leading break adds no unit and moves no starting line",
+        units(leading_output) == units(plain_output) == [(1, "prose")],
+        f"expected the same single unit either way, saw "
+        f"{units(leading_output)!r} against {units(plain_output)!r}. "
+        f"Output:\n{leading_output}",
+    )
+
+    excluded = root / "fixtures" / "excluded.html"
+    write(excluded, HTML_BREAK_EXCLUDED)
+    _, output, found = check_one(script, excluded)
+    results.check(
+        "html — a break inside an excluded subtree contributes nothing",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def html_nested_structure_does_not_duplicate(results, workdir):
+    """Nested blocks yield one unit each, and inline markup splits none."""
+    root = workdir / "html-nested"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "nested.html"
+    write(fixture, HTML_NESTED)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "html — nested blocks produce one unit each without duplication",
+        units(output) == [(2, "prose"), (3, "prose")],
+        f"expected prose units at lines 2 and 3, saw {units(output)!r}. An "
+        f"enclosing block emitting its own unit duplicates the text here. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "html — inline markup still leaves its paragraph whole",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. A unit split at the "
+        f"`em` boundary reports fewer. Output:\n{output}",
+    )
+
+
+def html_blocks_are_measured_separately(results, workdir):
+    """Separate blocks are not failed for a length only their merger has."""
+    root = workdir / "html-separate-blocks"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "blocks.html"
+    write(fixture, HTML_SEPARATE_BLOCKS)
+
+    _, output, found = check_one(script, fixture)
+    merged = words(f"{A10} {B10} {C10}")
+    results.check(
+        "html — separate blocks each stay inside the prose unit limit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Each block carries "
+        f"{words(A10)} words, inside the {DEFAULT_UNIT_WORDS} word limit, "
+        f"while their merger carries {merged}. Output:\n{output}",
+    )
+
+
+def markup_suffixes_are_supported(results, workdir):
+    """Both HTML suffixes are discovered by a directory walk."""
+    root = workdir / "markup-discovery"
+    script = build_tree(root)
+    write(root / "fixtures" / "page.html", HTML_HTM)
+    write(root / "fixtures" / "page.htm", HTML_HTM)
+
+    _, output = run_checker(script, [str(root / "fixtures")])
+    results.check(
+        "markup — .html and .htm are both discovered and checked",
+        counts(output) is not None and counts(output)[1] == 2,
+        f"expected two checked files, saw {counts(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_inline_markup_keeps_one_unit(results, workdir):
+    """Ordinary inline markup does not fragment one sentence."""
+    root = workdir / "html-inline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "inline.html"
+    write(fixture, HTML_INLINE)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "html — inline markup leaves one prose unit at line 1",
+        units(output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(output)!r}. A unit "
+        f"per markup fragment leaves each half under the limit. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "html — the tags are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Counted tag names "
+        f"report more. Output:\n{output}",
+    )
+
+
+def html_comment_is_a_block_between_runs(results, workdir):
+    """A comment is one block unit and separates the prose either side."""
+    root = workdir / "html-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "comment.html"
+    write(fixture, HTML_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "html — a comment is a block unit separating two prose runs",
+        units(output) == [(1, "prose"), (2, "block"), (3, "prose")],
+        f"expected prose, block, prose on lines 1-3, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_comment_reports_its_opening_line(results, workdir):
+    """A multiline comment is attributed to its opening delimiter."""
+    root = workdir / "html-multiline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "multiline.html"
+    write(fixture, HTML_MULTILINE_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "html — a multiline comment reports its opening physical line",
+        units(output) == [(2, "block")],
+        f"expected one block unit at line 2, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_excluded_structures_are_not_prose(results, workdir):
+    """HTML structure hides the prose the checker flags when it is visible."""
+    root = workdir / "html-exclusions"
+    script = build_tree(root)
+
+    exposed = root / "fixtures" / "exposed.html"
+    write(exposed, f"<p>{S13}</p>\n")
+    _, oracle_output, oracle = check_one(script, exposed)
+    results.check(
+        "html — the hidden prose is flagged when it is visible text",
+        has(oracle, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"the exclusion fixtures hide prose the checker flags nowhere, so "
+        f"excluding it proves nothing. Saw {oracle!r}. "
+        f"Output:\n{oracle_output}",
+    )
+
+    for index, (label, source) in enumerate(HTML_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.html"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"html — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+    markup = root / "fixtures" / "markup-only.html"
+    write(markup, HTML_MARKUP_ONLY)
+    _, output, found = check_one(script, markup)
+    results.check(
+        "html — tag and attribute names carry no prose unit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def xml_extracts_comments_only(results, workdir):
+    """Generic XML contributes its comments and nothing else."""
+    root = workdir / "xml-comments"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "doc.xml"
+    write(fixture, XML_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "xml — the comment is one block unit at its opening line",
+        units(output) == [(2, "block")],
+        f"expected one block unit at line 2, saw {units(output)!r}. Element "
+        f"text or an attribute reaching the checker adds a unit here. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "xml — the comment delimiters are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Output:\n{output}",
+    )
+
+
+def xml_out_of_scope_content_is_not_prose(results, workdir):
+    """Generic XML hides prose everywhere except a comment."""
+    root = workdir / "xml-exclusions"
+    script = build_tree(root)
+    for index, (label, source) in enumerate(XML_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.xml"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"xml — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
+def malformed_markup_yields_no_partial_units(results, workdir):
+    """A document whose XML parse fails contributes nothing."""
+    root = workdir / "markup-malformed"
+    script = build_tree(root)
+    cases = (("bad.xml", XML_MALFORMED), ("bad.svg", SVG_MALFORMED))
+    for name, source in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        code, output, found = check_one(script, fixture)
+        results.check(
+            f"markup — malformed {name} produces no partial unit",
+            code == 0 and counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected a clean run, saw exit {code} and {found!r}. The "
+            f"comment before the parse error is reported by a partial read. "
+            f"Output:\n{output}",
+        )
+
+
+def svg_comment_and_text_are_extracted(results, workdir):
+    """SVG contributes its comments as blocks and its text as prose."""
+    root = workdir / "svg-basic"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "basic.svg"
+    write(fixture, SVG_COMMENT_AND_TEXT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "svg — a comment is a block unit and text is a prose unit",
+        units(output) == [(2, "block"), (3, "prose")],
+        f"expected a block at line 2 and prose at line 3, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+
+
+def svg_nested_text_is_one_unit(results, workdir):
+    """A nested text element joins its outer unit rather than duplicating."""
+    root = workdir / "svg-nested"
+    script = build_tree(root)
+    cases = (("tspan.svg", SVG_NESTED_TSPAN), ("textpath.svg", SVG_NESTED_TEXTPATH))
+    for name, source in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"svg — nested text in {name} is one unit at the outer line",
+            units(output) == [(2, "prose")],
+            f"expected one prose unit at line 2, saw {units(output)!r}. A "
+            f"duplicate unit or an inner starting line shows here. "
+            f"Output:\n{output}",
+        )
+        results.check(
+            f"svg — the flattened unit in {name} carries the whole sentence",
+            has(found, f"longest is {words(S13)}"),
+            f"expected {words(S13)} words, saw {found!r}. A split unit "
+            f"reports fewer. Output:\n{output}",
+        )
+
+
+def svg_text_elements_are_recognized(results, workdir):
+    """Standalone and prefixed supported elements are recognized."""
+    root = workdir / "svg-elements"
+    script = build_tree(root)
+    standalone = root / "fixtures" / "standalone.svg"
+    write(standalone, SVG_STANDALONE)
+    _, output, _ = check_one(script, standalone)
+    results.check(
+        "svg — standalone tspan and textPath each start a unit",
+        units(output) == [(2, "prose"), (3, "prose")],
+        f"expected prose units at lines 2 and 3, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+    prefixed = root / "fixtures" / "prefixed.svg"
+    write(prefixed, SVG_PREFIXED)
+    _, output, _ = check_one(script, prefixed)
+    results.check(
+        "svg — a prefixed namespace is recognized",
+        units(output) == [(2, "prose")],
+        f"expected one prose unit at line 2, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def svg_excluded_structures_are_not_prose(results, workdir):
+    """SVG structure hides prose the checker flags inside a text element."""
+    root = workdir / "svg-exclusions"
+    script = build_tree(root)
+    for index, (label, source) in enumerate(SVG_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.svg"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"svg — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
 def main():
     if not CHECKER.exists():
         print(f"FAIL  checker not found at {CHECKER}")
@@ -996,6 +2012,45 @@ def main():
         policy_rules_read_the_written_prose(results, workdir)
         delimiter_does_not_join_words(results, workdir)
         inline_html_does_not_join_words(results, workdir)
+        stdin_joins_contiguous_lines(results, workdir)
+        stdin_is_named_as_the_source(results, workdir)
+        stdin_is_not_parsed_as_a_format(results, workdir)
+        stdin_rejects_filesystem_paths(results, workdir)
+        empty_stdin_is_clean(results, workdir)
+        stdin_keeps_the_existing_options(results, workdir)
+
+        sql_is_a_supported_file(results, workdir)
+        sql_line_comment_is_one_inline_unit(results, workdir)
+        sql_block_comment_is_one_block_unit(results, workdir)
+        sql_consecutive_line_comments_stay_separate(results, workdir)
+        sql_block_comment_reports_its_opening_line(results, workdir)
+        sql_nested_block_stays_one_unit(results, workdir)
+        sql_excluded_regions_are_not_prose(results, workdir)
+        sql_block_stars_are_extracted_as_written(results, workdir)
+        sql_escape_string_keeps_its_boundary(results, workdir)
+        sql_identifier_dollar_opens_no_quote(results, workdir)
+        sql_without_comments_is_clean(results, workdir)
+        sql_comments_take_the_existing_checks(results, workdir)
+        sql_kinds_are_the_existing_ones(results, workdir)
+        sql_dialect_is_not_inferred_from_content(results, workdir)
+        existing_extraction_is_unchanged(results, workdir)
+
+        markup_suffixes_are_supported(results, workdir)
+        html_structural_blocks_end_a_prose_run(results, workdir)
+        html_line_breaks_keep_word_boundaries(results, workdir)
+        html_nested_structure_does_not_duplicate(results, workdir)
+        html_blocks_are_measured_separately(results, workdir)
+        html_inline_markup_keeps_one_unit(results, workdir)
+        html_comment_is_a_block_between_runs(results, workdir)
+        html_comment_reports_its_opening_line(results, workdir)
+        html_excluded_structures_are_not_prose(results, workdir)
+        xml_extracts_comments_only(results, workdir)
+        xml_out_of_scope_content_is_not_prose(results, workdir)
+        malformed_markup_yields_no_partial_units(results, workdir)
+        svg_comment_and_text_are_extracted(results, workdir)
+        svg_nested_text_is_one_unit(results, workdir)
+        svg_text_elements_are_recognized(results, workdir)
+        svg_excluded_structures_are_not_prose(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

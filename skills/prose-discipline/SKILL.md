@@ -227,6 +227,20 @@ preserves the required meaning.
   defines. Invoke as:
   `python3 <vendor-path>/skills/prose-discipline/scripts/check-readability.py [--setting <name>] [path ...]`
 
+For either script, pass `-` as the sole path to read already-selected plain
+prose from standard input. Standard input is not parsed as a file format.
+
+Native file support is Python (`.py`), Java (`.java`), Markdown (`.md`),
+PostgreSQL (`.sql`), HTML (`.html`, `.htm`), generic XML (`.xml`), and SVG
+(`.svg`). SQL files pass through a dialect-selection boundary that currently
+resolves to PostgreSQL unconditionally. HTML contributes visible document text
+and HTML comments; generic XML contributes XML comments only; SVG contributes
+XML comments and text from `<text>`, `<tspan>`, and `<textPath>`.
+
+The tooling performs no SQL dialect detection and supports no other SQL
+dialect. Markup extraction is structural; it does not evaluate CSS,
+attributes, or rendered layout.
+
 ## Final rule
 
 One pass. One meaning. No assembly required.

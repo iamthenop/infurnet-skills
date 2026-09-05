@@ -5,6 +5,7 @@ docstrings, and Markdown files.
 
 Usage:
     python3 skills/prose-discipline/scripts/check-prose.py [path ...]
+    python3 skills/prose-discipline/scripts/check-prose.py -
     --setting NAME    # apply a deliverable-selected setting's density limits
     --density         # density checks only
     --vocabulary      # vocabulary checks only
@@ -17,6 +18,9 @@ Ownership:
     the vocabulary list, the prose boundaries, and the normalization both
         checkers measure — this script
     the word count and the other lexical primitives — textstat
+    the PostgreSQL lexical grammar — Pygments, whose dollar-quoted bodies
+        this script leaves opaque
+    the markup structure — html.parser for HTML, expat for XML and SVG
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -44,9 +48,14 @@ import math
 import re
 import sys
 import tokenize
+import xml.parsers.expat as expat
+from html.parser import HTMLParser
 from pathlib import Path
 
 import textstat
+from pygments.lexer import RegexLexer, bygroups
+from pygments.lexers.sql import PostgresLexer, language_callback
+from pygments.token import Comment, String
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
@@ -64,7 +73,8 @@ ROOT = _find_root(Path(__file__).parent)
 
 # Suffixes this checker understands. Anything else is not a checkable
 # target and is excluded from the file count rather than reported as clean.
-SUPPORTED_SUFFIXES = (".py", ".java", ".md")
+SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql",
+                      ".html", ".htm", ".xml", ".svg")
 
 # The setting applied to prose the extractor does not select, when the
 # caller names none.
@@ -75,6 +85,8 @@ DESIGN_SETTING = "design"
 
 # The file whose body prose carries the other zero-hedge invariant.
 SKILL_FILE = "SKILL.md"
+STDIN_PATH = "-"
+STDIN_SOURCE = "<stdin>"
 
 # The two selection mechanisms the reference names.
 BY_DELIVERABLE = "deliverable"
@@ -668,6 +680,199 @@ def extract_markdown_prose(source):
     return items
 
 
+def extract_stdin_prose(source):
+    """Return standard input's prose units as (line, kind, text) triples.
+
+    Standard input carries no file format. A run of nonblank physical lines
+    is one unit, a blank line closes it, and the reported line is the first
+    physical line carrying that unit's text.
+    """
+    items = []
+    para_start = None
+    para_lines = []
+
+    def flush():
+        nonlocal para_start, para_lines
+        if para_lines:
+            items.append((para_start, "prose", " ".join(para_lines)))
+        para_lines = []
+        para_start = None
+
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if not line.strip():
+            flush()
+            continue
+        if para_start is None:
+            para_start = lineno
+        para_lines.append(line.strip())
+
+    flush()
+    return items
+
+
+# HTML elements whose descendant content is not visible document prose. A
+# comment inside one of them is excluded with the subtree.
+HTML_EXCLUDED = frozenset({"script", "style", "template", "code", "pre"})
+
+# HTML elements that structure a document into separate prose blocks. Text
+# either side of one belongs to different units; inline markup does not.
+HTML_BLOCKS = frozenset({
+    "address", "article", "aside", "blockquote", "body", "caption", "dd",
+    "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
+    "title", "tr", "ul",
+})
+
+# The one HTML element that separates words without ending the prose run.
+HTML_BREAK = "br"
+
+# SVG elements whose character data is visible text.
+SVG_TEXT_ELEMENTS = frozenset({"text", "tspan", "textPath"})
+
+# SVG elements carrying machine-readable description rather than prose.
+SVG_EXCLUDED_TEXT = frozenset({"title", "desc"})
+
+
+class HtmlProseParser(HTMLParser):
+    """Collect visible HTML text as prose runs and HTML comments as blocks.
+
+    Inline markup does not divide a run. A structural block element, a
+    comment, an excluded subtree, and the end of input are the boundaries.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.units = []
+        self.excluded = 0
+        self.parts = []
+        self.opening = 0
+
+    def flush(self):
+        """Close the open prose run, if it carries any visible text."""
+        text = "".join(self.parts).strip()
+        if text:
+            self.units.append((self.opening, "prose", text))
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in HTML_EXCLUDED:
+            if not self.excluded:
+                self.flush()
+            self.excluded += 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
+        elif tag == HTML_BREAK and not self.excluded and self.parts:
+            # A break separates the words either side of it. Before any
+            # visible text it opens nothing, so the run keeps its own line.
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in HTML_EXCLUDED and self.excluded:
+            self.excluded -= 1
+        elif tag in HTML_BLOCKS and not self.excluded:
+            self.flush()
+
+    def handle_data(self, data):
+        if self.excluded:
+            return
+        # Whitespace alone neither opens a run nor fixes its starting line.
+        if not self.parts and not data.strip():
+            return
+        if not self.parts:
+            self.opening = self.getpos()[0]
+        self.parts.append(data)
+
+    def handle_comment(self, data):
+        if self.excluded:
+            return
+        self.flush()
+        text = data.strip()
+        if text:
+            self.units.append((self.getpos()[0], "block", text))
+
+
+def extract_html_prose(source):
+    """Return HTML prose runs and comments as (line, kind, text) triples."""
+    parser = HtmlProseParser()
+    parser.feed(source)
+    parser.close()
+    parser.flush()
+    return parser.units
+
+
+def local_name(name):
+    """Return the local part of a namespace-separated element name."""
+    return name.rsplit(" ", 1)[-1]
+
+
+def extract_xml_units(source, text_elements):
+    """Return XML comments, and text from `text_elements`, as prose units.
+
+    A document whose parse does not complete yields nothing, so a partial
+    read never reaches the checks.
+    """
+    units = []
+    parts = []
+    depth = 0
+    excluded = 0
+    opening = 0
+    parser = expat.ParserCreate(namespace_separator=" ")
+
+    def start(name, attrs):
+        nonlocal depth, excluded, opening
+        tag = local_name(name)
+        if tag in SVG_EXCLUDED_TEXT:
+            excluded += 1
+        elif tag in text_elements:
+            if not depth:
+                opening = parser.CurrentLineNumber
+            depth += 1
+
+    def end(name):
+        nonlocal depth, excluded, parts
+        tag = local_name(name)
+        if tag in SVG_EXCLUDED_TEXT:
+            excluded = max(excluded - 1, 0)
+        elif tag in text_elements and depth:
+            depth -= 1
+            if not depth:
+                text = "".join(parts).strip()
+                if text:
+                    units.append((opening, "prose", text))
+                parts = []
+
+    def characters(data):
+        if depth and not excluded:
+            parts.append(data)
+
+    def comment(data):
+        text = data.strip()
+        if text:
+            units.append((parser.CurrentLineNumber, "block", text))
+
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = characters
+    parser.CommentHandler = comment
+    try:
+        parser.Parse(source, True)
+    except expat.ExpatError:
+        return []
+    return units
+
+
+def extract_xml_comments(source):
+    """Return generic XML comments, and no element text, as prose units."""
+    return extract_xml_units(source, frozenset())
+
+
+def extract_svg_prose(source):
+    """Return SVG comments and supported text elements as prose units."""
+    return extract_xml_units(source, SVG_TEXT_ELEMENTS)
+
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -760,6 +965,155 @@ def check_vocabulary(lineno, kind, text):
 # File dispatch
 # ---------------------------------------------------------------------------
 
+# The SQL dialect every `.sql` file is read as.
+POSTGRESQL_DIALECT = "postgresql"
+
+
+def select_sql_dialect():
+    """Return the SQL dialect a `.sql` file is read as.
+
+    The suffix is the whole input. File content, repository metadata,
+    configuration, and the environment take no part in the result.
+    """
+    return POSTGRESQL_DIALECT
+
+
+def opaque_dollar_quote(lexer, match):
+    """Yield a dollar-quoted span whole, leaving its body unlexed.
+
+    Pygments otherwise hands a procedural body to a second lexer, which
+    reports the markers inside that body as PostgreSQL source comments.
+    """
+    yield match.start(1), String, match.group(1)
+    yield match.start(2), String.Delimiter, match.group(2)
+    yield match.start(3), String, match.group(3)
+    yield match.start(4), String, match.group(4)
+    yield match.start(5), String, match.group(5)
+    yield match.start(6), String.Delimiter, match.group(6)
+    yield match.start(7), String, match.group(7)
+
+
+# PostgreSQL allows a dollar sign after an unquoted identifier's first
+# character, so a `$` following one continues the identifier and opens no
+# dollar quote.
+DOLLAR_QUOTE_BOUNDARY = r"(?<![\w$])"
+
+# A PostgreSQL escape string ends at its first unescaped quote, so a
+# backslash-escaped quote keeps the string open.
+ESCAPE_STRING_STATE = [
+    (r"\\.", String.Escape),
+    (r"[^'\\]+", String.Single),
+    (r"''", String.Single),
+    (r"'", String.Single, "#pop"),
+]
+
+
+def guard_dollar_quote(pattern):
+    """Insert the identifier boundary after the pattern's leading flags.
+
+    A global flag group is only valid at the start of a regular expression,
+    so the boundary follows it rather than displacing it.
+    """
+    flags = re.match(r"\(\?[aiLmsux]+\)", pattern)
+    cut = flags.end() if flags else 0
+    return pattern[:cut] + DOLLAR_QUOTE_BOUNDARY + pattern[cut:]
+
+
+def find_rule(root, matches, description):
+    """Return the index of the one root rule the caller describes."""
+    found = [i for i, rule in enumerate(root) if matches(rule)]
+    if len(found) != 1:
+        raise ProseError(
+            f"the PostgreSQL grammar carries {len(found)} {description}")
+    return found[0]
+
+
+def postgres_comment_grammar():
+    """Copy the PostgreSQL grammar, adapting only what comment extraction needs.
+
+    A dollar-quoted body stays opaque, a dollar quote cannot open inside an
+    unquoted identifier, and an escape string keeps its backslash escapes.
+    """
+    states = {state: rules[:] for state, rules in PostgresLexer.tokens.items()}
+    root = states["root"]
+
+    quoted = find_rule(root, lambda rule: rule[1] is language_callback,
+                       "dollar-quote rules")
+    root[quoted] = (guard_dollar_quote(root[quoted][0]),
+                    opaque_dollar_quote)
+
+    string = find_rule(root, lambda rule: len(rule) == 3 and rule[2] == "string",
+                       "string rules")
+    root.insert(string, (r"(E)(')", bygroups(String.Affix, String.Single),
+                         "escape-string"))
+    states["escape-string"] = ESCAPE_STRING_STATE
+    return states
+
+
+class PostgresCommentLexer(RegexLexer):
+    """The PostgreSQL grammar, adapted where comment boundaries require it."""
+
+    name = "PostgreSQL SQL dialect with opaque dollar-quoted bodies"
+    aliases = []
+    flags = re.IGNORECASE
+    tokens = postgres_comment_grammar()
+
+
+POSTGRES_LEXER = PostgresCommentLexer()
+
+
+# A star opening a block-comment line, followed by a space or the line end,
+# is decoration. A star anywhere else is prose, as in `A* search`.
+DECORATIVE_STAR_RE = re.compile(r"(?m)^[ \t]*\*(?:[ \t]|$)")
+
+
+def extract_postgres_comments(source):
+    """Return PostgreSQL source comments as (line, kind, text) triples.
+
+    A nested block comment stays one unit opening at its outer delimiter,
+    and the delimiters themselves stay outside the extracted text.
+    """
+    items = []
+    opening, parts, depth = 0, [], 0
+
+    for index, token, value in POSTGRES_LEXER.get_tokens_unprocessed(source):
+        if token is Comment.Single:
+            text = value.lstrip("-").strip()
+            if text:
+                items.append((source.count("\n", 0, index) + 1, "inline", text))
+        elif token is Comment.Multiline:
+            if value == "/*":
+                if depth == 0:
+                    opening, parts = source.count("\n", 0, index) + 1, []
+                depth += 1
+            elif value == "*/":
+                depth -= 1
+                if depth == 0:
+                    items.append((opening, "block", block_text(parts)))
+            else:
+                parts.append(value)
+
+    if depth > 0:
+        # PostgreSQL runs an unclosed block comment to the end of the file.
+        items.append((opening, "block", block_text(parts)))
+
+    return [(line, kind, text) for line, kind, text in items if text]
+
+
+def block_text(parts):
+    """Join a block comment's content, dropping its line-leading decoration."""
+    return DECORATIVE_STAR_RE.sub("", "".join(parts)).strip()
+
+
+SQL_DIALECT_EXTRACTORS = {POSTGRESQL_DIALECT: extract_postgres_comments}
+
+
+def extract_sql_comments(source):
+    """Extract SQL comments through the dialect the boundary resolves to."""
+    extract = SQL_DIALECT_EXTRACTORS[select_sql_dialect()]
+    return extract(source)
+
+
 def extract_units(path, source):
     if path.suffix == ".py":
         return extract_python_comments(source)
@@ -767,48 +1121,86 @@ def extract_units(path, source):
         return extract_java_comments(source)
     if path.suffix == ".md":
         return extract_markdown_prose(source)
+    if path.suffix == ".sql":
+        return extract_sql_comments(source)
+    if path.suffix in (".html", ".htm"):
+        return extract_html_prose(source)
+    if path.suffix == ".xml":
+        return extract_xml_comments(source)
+    if path.suffix == ".svg":
+        return extract_svg_prose(source)
     return []
 
 
-def zero_hedge_file(path, caller_name):
-    """True when a hard invariant bars every hedge in this file's prose.
+def zero_hedge_prose(name, caller_name):
+    """True when a hard invariant bars every hedge in this source's prose.
 
     `SKILL.md` body prose and prose under the caller-selected `design`
     setting carry no hedge. An extractor-selected setting cannot weaken
     either rule.
     """
-    return path.name == SKILL_FILE or caller_name == DESIGN_SETTING
+    return name == SKILL_FILE or caller_name == DESIGN_SETTING
 
 
-def check_file(path, run_density, run_vocabulary, caller, by_extractor):
-    """Return one file's findings as (path, line, kind, message, category)."""
+def check_source(source_id, source, units, run_density, run_vocabulary,
+                 caller, by_extractor, suffix="", zero_hedges=False):
+    """Return one source's findings as (source, line, kind, message, category).
+
+    `source_id` names the source in the report. A file passes its path and
+    standard input passes its own pseudo-source name.
+    """
     findings = []
-    try:
-        source = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return findings
+    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, suffix)
 
-    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, path.suffix)
-    caller_name, _ = caller
-    zero_hedges = zero_hedge_file(path, caller_name)
-
-    for lineno, kind, text in extract_units(path, source):
+    for lineno, kind, text in units:
         if run_density:
             # The extractor selects a setting named after the prose kind;
             # everything else takes the caller's setting.
             selected = (kind, by_extractor[kind]) if kind in by_extractor else caller
             findings.extend(
-                (path, ln, k, msg, DENSITY)
+                (source_id, ln, k, msg, DENSITY)
                 for ln, k, msg in check_density(
                     lineno, kind, text, stop_words, selected, zero_hedges)
             )
         if run_vocabulary:
             findings.extend(
-                (path, ln, k, msg, VOCABULARY_CATEGORY)
+                (source_id, ln, k, msg, VOCABULARY_CATEGORY)
                 for ln, k, msg in check_vocabulary(lineno, kind, text)
             )
 
     return findings
+
+
+def check_file(path, run_density, run_vocabulary, caller, by_extractor):
+    """Return one file's findings as (path, line, kind, message, category)."""
+    try:
+        source = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    caller_name, _ = caller
+    return check_source(
+        path, source, extract_units(path, source), run_density,
+        run_vocabulary, caller, by_extractor, suffix=path.suffix,
+        zero_hedges=zero_hedge_prose(path.name, caller_name))
+
+
+def stdin_requested(paths):
+    """True when the caller selected standard input, which stands alone."""
+    if STDIN_PATH not in paths:
+        return False
+    if len(paths) > 1:
+        raise ProseError(
+            "stdin '-' cannot be combined with file or directory paths")
+    return True
+
+
+def read_stdin():
+    """Read standard input as already-selected plain prose."""
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is None:
+        return sys.stdin.read()
+    return stream.read().decode("utf-8", errors="ignore")
 
 
 def collect_files(targets):
@@ -835,10 +1227,14 @@ def collect_files(targets):
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Check prose density and vocabulary sprawl.",
+        epilog="SQL files use PostgreSQL semantics. Other SQL dialects are "
+               "not detected or supported.",
     )
     parser.add_argument(
         "paths", nargs="*",
-        help="Files or directories to check (default: repo root)")
+        help="Files or directories to check (default: repo root); "
+             "'-' alone reads plain prose from stdin; "
+             ".sql uses PostgreSQL only")
     parser.add_argument(
         "--setting", metavar="NAME",
         help=f"Apply the density limits the named setting defines "
@@ -863,22 +1259,32 @@ def main(argv=None):
         caller_name = args.setting or DEFAULT_SETTING
         caller = (caller_name, resolve_caller_setting(settings, caller_name))
         by_extractor = extractor_limits(settings)
+        reads_stdin = stdin_requested(args.paths)
     except ProseError as exc:
         print(f"ERROR — {exc}", file=sys.stderr)
         return 2
 
-    files = collect_files(args.paths or [str(ROOT)])
-    if not files:
-        print("No files found.")
-        return 0
-
-    all_findings = []
-    for f in files:
-        all_findings.extend(
-            check_file(f, run_density, run_vocabulary, caller, by_extractor))
+    if reads_stdin:
+        # Standard input is one source, read once and checked as it stands.
+        source = read_stdin()
+        checked = 1
+        all_findings = check_source(
+            STDIN_SOURCE, source, extract_stdin_prose(source), run_density,
+            run_vocabulary, caller, by_extractor,
+            zero_hedges=zero_hedge_prose(STDIN_SOURCE, caller_name))
+    else:
+        files = collect_files(args.paths or [str(ROOT)])
+        if not files:
+            print("No files found.")
+            return 0
+        checked = len(files)
+        all_findings = []
+        for f in files:
+            all_findings.extend(
+                check_file(f, run_density, run_vocabulary, caller, by_extractor))
 
     if not all_findings:
-        print(f"PASS — {len(files)} files checked, no findings")
+        print(f"PASS — {checked} files checked, no findings")
         return 0
 
     by_file: dict = {}

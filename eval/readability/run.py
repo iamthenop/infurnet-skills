@@ -213,6 +213,24 @@ SQL_EDGE_FINDINGS = (f"SELECT E'abc\\' still string';\n-- {PROSE_FINDING}\n"
                      f"SELECT foo$tag$;\n-- {PROSE_FINDING} $tag$\n")
 SQL_EDGE_UNITS = [(2, "inline"), (4, "inline")]
 
+# --- markup fixtures ---------------------------------------------------------
+# The finding prose written into each markup form, so both scripts report the
+# same units across one shared boundary.
+MARKUP_SOURCES = (
+    ("page.html", f"<p>{PROSE_FINDING}</p>\n<!-- {PROSE_FINDING} -->\n",
+     [(1, "prose"), (2, "block")]),
+    ("doc.xml", f"<root>\n  <!-- {PROSE_FINDING} -->\n</root>\n",
+     [(2, "block")]),
+    ("art.svg", '<svg xmlns="http://www.w3.org/2000/svg">\n'
+     f"  <!-- {PROSE_FINDING} -->\n  <text>{PROSE_FINDING}</text>\n</svg>\n",
+     [(2, "block"), (3, "prose")]),
+)
+
+# Inline markup must reach the measurement as one unit of visible text.
+HTML_INLINE = ("<p>The validator reads the accepted workorder and rejects "
+               "a change the <em>governing instructions</em> do not "
+               "authorize.</p>\n")
+
 
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
 DETAIL_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] +-?\d+\.\d{2}", re.MULTILINE)
@@ -1094,6 +1112,63 @@ def sql_edge_units_match_the_prose_checker(results, workdir):
     )
 
 
+# --- markup ------------------------------------------------------------------
+
+def markup_units_match_the_prose_checker(results, workdir):
+    """Both scripts report the same markup units, so one boundary serves."""
+    root = workdir / "markup-shared-boundary"
+    script = build_tree(root, 12)
+    checker = script.parent / PROSE.name
+    for name, source, expected in MARKUP_SOURCES:
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        _, prose_output = run_script(checker, [str(fixture)])
+        _, grade_output = run_script(script, [str(fixture), "--top", "5"])
+        prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
+        grade_units = detail_units(grade_output)
+        results.check(
+            f"check-prose.py — reports the {name} units",
+            prose_units == expected,
+            f"expected {expected!r}, saw {prose_units!r}. "
+            f"Output:\n{prose_output}",
+        )
+        results.check(
+            f"check-readability.py — reports the same {name} units",
+            grade_units == prose_units,
+            f"the readability units {grade_units!r} differ from the "
+            f"extractor's {prose_units!r}, so a second boundary is in use. "
+            f"Output:\n{grade_output}",
+        )
+
+
+def html_inline_markup_is_measured_as_one_unit(results, workdir):
+    """Inline markup reaches the measurement as one run of visible text."""
+    root = workdir / "html-inline-measured"
+    script = build_tree(root, 30)
+    fixture = root / "fixtures" / "inline.html"
+    write(fixture, HTML_INLINE)
+
+    _, output = run_script(script, [str(fixture)])
+    results.check(
+        "html — inline markup is measured as the visible sentence",
+        measured_grade(output) == expected_grade(PARAGRAPH),
+        f"expected {expected_grade(PARAGRAPH)}, "
+        f"measured {measured_grade(output)!r}. A measured tag name or a "
+        f"fragmented unit moves the grade. Output:\n{output}",
+    )
+
+
+def readability_holds_no_native_suffix_ladder(results, workdir):
+    """The readability script selects no native extraction of its own."""
+    source = READABILITY.read_text(encoding="utf-8")
+    results.check(
+        "check-readability.py — carries no native suffix selection",
+        "path.suffix" not in source,
+        "the readability script inspects a file suffix, so a second native "
+        "dispatch has returned beside the extractor's own.",
+    )
+
+
 def main():
     for path in (READABILITY, PROSE):
         if not path.exists():
@@ -1142,6 +1217,10 @@ def main():
         sql_meaningful_stars_survive_extraction(results, workdir)
         sql_decorative_stars_are_dropped(results, workdir)
         sql_edge_units_match_the_prose_checker(results, workdir)
+
+        markup_units_match_the_prose_checker(results, workdir)
+        html_inline_markup_is_measured_as_one_unit(results, workdir)
+        readability_holds_no_native_suffix_ladder(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

@@ -241,6 +241,92 @@ SQL_ESCAPE_THEN_COMMENT = f"SELECT E'abc\\' still string';\n-- {S13}\n"
 SQL_IDENTIFIER_DOLLAR = f"SELECT foo$tag$;\n-- {S13} $tag$\n"
 
 
+# --- markup fixtures -------------------------------------------------------
+# Every hidden region carries S13, one word above the fixture sentence limit,
+# so a finding proves the structural boundary leaked.
+HTML_INLINE = f"<p>The validator reads the <em>accepted workorder</em> and " \
+              f"rejects the change without a signature.</p>\n"
+HTML_COMMENT = f"<p>{S13}</p>\n<!-- {S13} -->\n<p>{S13}</p>\n"
+HTML_MULTILINE_COMMENT = f"<p>Visible.</p>\n<!-- {S13}\n     continues -->\n"
+HTML_HTM = f"<p>{S13}</p>\n"
+
+# Each hides S13 where HTML structure, not a prose rule, must exclude it.
+HTML_EXCLUSIONS = (
+    ("a script element", f"<script>var s = \"{S13}\";</script>\n"),
+    ("a style element", f"<style>/* {S13} */</style>\n"),
+    ("a template element", f"<template><p>{S13}</p></template>\n"),
+    ("a code element", f"<code>{S13}</code>\n"),
+    ("a pre element", f"<pre>{S13}</pre>\n"),
+    ("a descendant of an excluded element",
+     f"<pre><code><em>{S13}</em></code></pre>\n"),
+    ("a comment inside an excluded element",
+     f"<template><!-- {S13} --></template>\n"),
+    ("an alt, title, or aria-label attribute",
+     f'<img alt="{S13}" title="{S13}" aria-label="{S13}">\n'),
+)
+
+# Tag and attribute names alone carry no prose.
+HTML_MARKUP_ONLY = '<section class="wrapper"><div id="main"><br></div></section>\n'
+
+XML_COMMENT = f'<root attr="{S13}">\n  <!-- {S13} -->\n  <child>{S13}</child>\n</root>\n'
+
+# Each hides S13 where the generic XML contract excludes it.
+XML_EXCLUSIONS = (
+    ("element text", f"<root><child>{S13}</child></root>\n"),
+    ("an attribute", f'<root attr="{S13}"><child other="{S13}"/></root>\n'),
+    ("CDATA", f"<root><![CDATA[{S13}]]></root>\n"),
+    ("a processing instruction", f"<root><?target {S13}?></root>\n"),
+    ("SVG-shaped content under the .xml suffix",
+     '<svg xmlns="http://www.w3.org/2000/svg">\n'
+     f"  <text>{S13}</text>\n</svg>\n"),
+)
+
+# A comment precedes the error, so a partial read would report it.
+XML_MALFORMED = f"<root>\n  <!-- {S13} -->\n  <unclosed>\n</root>\n"
+
+SVG_COMMENT_AND_TEXT = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <!-- {S13} -->\n"
+    f'  <text x="1" y="2">{S13}</text>\n</svg>\n'
+)
+SVG_NESTED_TSPAN = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    "  <text>The validator reads the <tspan>accepted workorder</tspan> and "
+    "rejects the change without a signature.</text>\n</svg>\n"
+)
+SVG_NESTED_TEXTPATH = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n  <text>\n'
+    "    The validator reads the accepted workorder and rejects\n"
+    '    <textPath href="#p">the change without a signature.</textPath>\n'
+    "  </text>\n</svg>\n"
+)
+SVG_STANDALONE = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <tspan>{S13}</tspan>\n  <textPath>{S13}</textPath>\n</svg>\n"
+)
+SVG_PREFIXED = (
+    '<s:svg xmlns:s="http://www.w3.org/2000/svg">\n'
+    f"  <s:text>{S13}</s:text>\n</s:svg>\n"
+)
+
+# Each hides S13 where the SVG contract excludes it.
+SVG_EXCLUSIONS = (
+    ("a title element",
+     f'<svg xmlns="http://www.w3.org/2000/svg"><title>{S13}</title></svg>\n'),
+    ("a desc element",
+     f'<svg xmlns="http://www.w3.org/2000/svg"><desc>{S13}</desc></svg>\n'),
+    ("attribute, geometry, and style data",
+     '<svg xmlns="http://www.w3.org/2000/svg">\n'
+     f'  <path id="{S13}" d="M0 0 L10 10" style="fill:red" data-note="{S13}"/>\n'
+     "</svg>\n"),
+)
+
+SVG_MALFORMED = (
+    '<svg xmlns="http://www.w3.org/2000/svg">\n'
+    f"  <!-- {S13} -->\n  <text>{S13}</text>\n  <bad>\n</svg>\n"
+)
+
+
 FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] (.*)$", re.MULTILINE)
 SUMMARY_LINE = re.compile(
     r"^(\d+) finding\(s\) across (\d+) file\(s\) "
@@ -1469,6 +1555,7 @@ def existing_extraction_is_unchanged(results, workdir):
         ("module.py", f"# {S13}\n", [(1, "inline")]),
         ("Type.java", f"class A {{\n// {S13}\n}}\n", [(2, "inline")]),
         ("doc.md", f"{S13}\n", [(1, "prose")]),
+        ("schema.sql", f"-- {S13}\n", [(1, "inline")]),
     ]
     for name, body, expected in cases:
         fixture = fixtures / name
@@ -1487,6 +1574,250 @@ def existing_extraction_is_unchanged(results, workdir):
         f"expected one prose unit at line 1, saw {units(output)!r}. "
         f"Output:\n{output}",
     )
+
+
+# --- markup ----------------------------------------------------------------
+
+def markup_suffixes_are_supported(results, workdir):
+    """Both HTML suffixes are discovered by a directory walk."""
+    root = workdir / "markup-discovery"
+    script = build_tree(root)
+    write(root / "fixtures" / "page.html", HTML_HTM)
+    write(root / "fixtures" / "page.htm", HTML_HTM)
+
+    _, output = run_checker(script, [str(root / "fixtures")])
+    results.check(
+        "markup — .html and .htm are both discovered and checked",
+        counts(output) is not None and counts(output)[1] == 2,
+        f"expected two checked files, saw {counts(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_inline_markup_keeps_one_unit(results, workdir):
+    """Ordinary inline markup does not fragment one sentence."""
+    root = workdir / "html-inline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "inline.html"
+    write(fixture, HTML_INLINE)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "html — inline markup leaves one prose unit at line 1",
+        units(output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(output)!r}. A unit "
+        f"per markup fragment leaves each half under the limit. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "html — the tags are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Counted tag names "
+        f"report more. Output:\n{output}",
+    )
+
+
+def html_comment_is_a_block_between_runs(results, workdir):
+    """A comment is one block unit and separates the prose either side."""
+    root = workdir / "html-comment"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "comment.html"
+    write(fixture, HTML_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "html — a comment is a block unit separating two prose runs",
+        units(output) == [(1, "prose"), (2, "block"), (3, "prose")],
+        f"expected prose, block, prose on lines 1-3, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_comment_reports_its_opening_line(results, workdir):
+    """A multiline comment is attributed to its opening delimiter."""
+    root = workdir / "html-multiline"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "multiline.html"
+    write(fixture, HTML_MULTILINE_COMMENT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "html — a multiline comment reports its opening physical line",
+        units(output) == [(2, "block")],
+        f"expected one block unit at line 2, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def html_excluded_structures_are_not_prose(results, workdir):
+    """HTML structure hides the prose the checker flags when it is visible."""
+    root = workdir / "html-exclusions"
+    script = build_tree(root)
+
+    exposed = root / "fixtures" / "exposed.html"
+    write(exposed, f"<p>{S13}</p>\n")
+    _, oracle_output, oracle = check_one(script, exposed)
+    results.check(
+        "html — the hidden prose is flagged when it is visible text",
+        has(oracle, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"the exclusion fixtures hide prose the checker flags nowhere, so "
+        f"excluding it proves nothing. Saw {oracle!r}. "
+        f"Output:\n{oracle_output}",
+    )
+
+    for index, (label, source) in enumerate(HTML_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.html"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"html — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+    markup = root / "fixtures" / "markup-only.html"
+    write(markup, HTML_MARKUP_ONLY)
+    _, output, found = check_one(script, markup)
+    results.check(
+        "html — tag and attribute names carry no prose unit",
+        counts(output) == (0, 0, 0, 0) and found == [],
+        f"expected no finding, saw {found!r}. Output:\n{output}",
+    )
+
+
+def xml_extracts_comments_only(results, workdir):
+    """Generic XML contributes its comments and nothing else."""
+    root = workdir / "xml-comments"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "doc.xml"
+    write(fixture, XML_COMMENT)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "xml — the comment is one block unit at its opening line",
+        units(output) == [(2, "block")],
+        f"expected one block unit at line 2, saw {units(output)!r}. Element "
+        f"text or an attribute reaching the checker adds a unit here. "
+        f"Output:\n{output}",
+    )
+    results.check(
+        "xml — the comment delimiters are not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Output:\n{output}",
+    )
+
+
+def xml_out_of_scope_content_is_not_prose(results, workdir):
+    """Generic XML hides prose everywhere except a comment."""
+    root = workdir / "xml-exclusions"
+    script = build_tree(root)
+    for index, (label, source) in enumerate(XML_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.xml"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"xml — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
+def malformed_markup_yields_no_partial_units(results, workdir):
+    """A document whose XML parse fails contributes nothing."""
+    root = workdir / "markup-malformed"
+    script = build_tree(root)
+    cases = (("bad.xml", XML_MALFORMED), ("bad.svg", SVG_MALFORMED))
+    for name, source in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        code, output, found = check_one(script, fixture)
+        results.check(
+            f"markup — malformed {name} produces no partial unit",
+            code == 0 and counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected a clean run, saw exit {code} and {found!r}. The "
+            f"comment before the parse error is reported by a partial read. "
+            f"Output:\n{output}",
+        )
+
+
+def svg_comment_and_text_are_extracted(results, workdir):
+    """SVG contributes its comments as blocks and its text as prose."""
+    root = workdir / "svg-basic"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "basic.svg"
+    write(fixture, SVG_COMMENT_AND_TEXT)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "svg — a comment is a block unit and text is a prose unit",
+        units(output) == [(2, "block"), (3, "prose")],
+        f"expected a block at line 2 and prose at line 3, "
+        f"saw {units(output)!r}. Output:\n{output}",
+    )
+
+
+def svg_nested_text_is_one_unit(results, workdir):
+    """A nested text element joins its outer unit rather than duplicating."""
+    root = workdir / "svg-nested"
+    script = build_tree(root)
+    cases = (("tspan.svg", SVG_NESTED_TSPAN), ("textpath.svg", SVG_NESTED_TEXTPATH))
+    for name, source in cases:
+        fixture = root / "fixtures" / name
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"svg — nested text in {name} is one unit at the outer line",
+            units(output) == [(2, "prose")],
+            f"expected one prose unit at line 2, saw {units(output)!r}. A "
+            f"duplicate unit or an inner starting line shows here. "
+            f"Output:\n{output}",
+        )
+        results.check(
+            f"svg — the flattened unit in {name} carries the whole sentence",
+            has(found, f"longest is {words(S13)}"),
+            f"expected {words(S13)} words, saw {found!r}. A split unit "
+            f"reports fewer. Output:\n{output}",
+        )
+
+
+def svg_text_elements_are_recognized(results, workdir):
+    """Standalone and prefixed supported elements are recognized."""
+    root = workdir / "svg-elements"
+    script = build_tree(root)
+    standalone = root / "fixtures" / "standalone.svg"
+    write(standalone, SVG_STANDALONE)
+    _, output, _ = check_one(script, standalone)
+    results.check(
+        "svg — standalone tspan and textPath each start a unit",
+        units(output) == [(2, "prose"), (3, "prose")],
+        f"expected prose units at lines 2 and 3, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+    prefixed = root / "fixtures" / "prefixed.svg"
+    write(prefixed, SVG_PREFIXED)
+    _, output, _ = check_one(script, prefixed)
+    results.check(
+        "svg — a prefixed namespace is recognized",
+        units(output) == [(2, "prose")],
+        f"expected one prose unit at line 2, saw {units(output)!r}. "
+        f"Output:\n{output}",
+    )
+
+
+def svg_excluded_structures_are_not_prose(results, workdir):
+    """SVG structure hides prose the checker flags inside a text element."""
+    root = workdir / "svg-exclusions"
+    script = build_tree(root)
+    for index, (label, source) in enumerate(SVG_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.svg"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"svg — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
 
 
 def main():
@@ -1556,6 +1887,19 @@ def main():
         sql_kinds_are_the_existing_ones(results, workdir)
         sql_dialect_is_not_inferred_from_content(results, workdir)
         existing_extraction_is_unchanged(results, workdir)
+
+        markup_suffixes_are_supported(results, workdir)
+        html_inline_markup_keeps_one_unit(results, workdir)
+        html_comment_is_a_block_between_runs(results, workdir)
+        html_comment_reports_its_opening_line(results, workdir)
+        html_excluded_structures_are_not_prose(results, workdir)
+        xml_extracts_comments_only(results, workdir)
+        xml_out_of_scope_content_is_not_prose(results, workdir)
+        malformed_markup_yields_no_partial_units(results, workdir)
+        svg_comment_and_text_are_extracted(results, workdir)
+        svg_nested_text_is_one_unit(results, workdir)
+        svg_text_elements_are_recognized(results, workdir)
+        svg_excluded_structures_are_not_prose(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

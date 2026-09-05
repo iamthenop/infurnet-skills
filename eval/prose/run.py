@@ -307,6 +307,21 @@ HTML_BREAK_LEADING = f"<p><br>{S13}</p>\n"
 HTML_BREAK_PLAIN = f"<p>{S13}</p>\n"
 HTML_BREAK_EXCLUDED = f"<code>{WRAP_FIRST}<br>{WRAP_SECOND}</code>\n"
 
+# A run opens on the line carrying its first visible character, not on the
+# line the parser's data chunk began. Each fixture reports the prose line.
+HTML_ATTRIBUTION = (
+    ("a newline before the prose", f"<p>\n{S13}</p>\n", 2),
+    ("a break then a newline", f"<p><br>\n{S13}</p>\n", 2),
+    ("a newline, a break, then a newline", f"<p>\n<br>\n{S13}</p>\n", 3),
+    ("a closed break then a newline", f"<p><br/>\n{S13}</p>\n", 2),
+    ("spaces and tabs on the prose line", f"<p>   \t{S13}</p>\n", 1),
+    ("several newlines before the prose", f"<p>\n\n\n{S13}</p>\n", 4),
+)
+
+# The run opens on the first line and an inline element inside it must not
+# move that attribution to the second.
+HTML_ATTRIBUTION_INLINE = f"<p>{WRAP_FIRST}\n<em>{WRAP_SECOND}</em></p>\n"
+
 # Tag and attribute names alone carry no prose.
 HTML_MARKUP_ONLY = '<section class="wrapper"><div id="main"><br></div></section>\n'
 
@@ -1636,6 +1651,38 @@ def html_structural_blocks_end_a_prose_run(results, workdir):
         )
 
 
+def html_prose_opens_on_its_first_visible_line(results, workdir):
+    """A run reports the line carrying its first visible character."""
+    root = workdir / "html-attribution"
+    script = build_tree(root)
+    for index, (label, source, expected) in enumerate(HTML_ATTRIBUTION):
+        fixture = root / "fixtures" / f"attribution-{index}.html"
+        write(fixture, source)
+        _, output, _ = check_one(script, fixture)
+        results.check(
+            f"html — {label} reports line {expected}",
+            units(output) == [(expected, "prose")],
+            f"expected one prose unit at line {expected}, saw "
+            f"{units(output)!r}. Discarded leading newlines leave the unit "
+            f"on the line the data chunk began. Output:\n{output}",
+        )
+
+    fixture = root / "fixtures" / "inline.html"
+    write(fixture, HTML_ATTRIBUTION_INLINE)
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "html — an inline element inside an open run moves no starting line",
+        units(output) == [(1, "prose")],
+        f"expected one prose unit at line 1, saw {units(output)!r}. Text "
+        f"appended to an open run must not reopen it. Output:\n{output}",
+    )
+    results.check(
+        "html — the reopened run would have measured fewer words",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. Output:\n{output}",
+    )
+
+
 def html_line_breaks_keep_word_boundaries(results, workdir):
     """A line break separates words without ending the prose run."""
     root = workdir / "html-break"
@@ -2037,6 +2084,7 @@ def main():
 
         markup_suffixes_are_supported(results, workdir)
         html_structural_blocks_end_a_prose_run(results, workdir)
+        html_prose_opens_on_its_first_visible_line(results, workdir)
         html_line_breaks_keep_word_boundaries(results, workdir)
         html_nested_structure_does_not_duplicate(results, workdir)
         html_blocks_are_measured_separately(results, workdir)

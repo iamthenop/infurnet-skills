@@ -2312,6 +2312,7 @@ def extraction_hands_over_no_parser_object(results, workdir):
         ("document.md", MARKDOWN_SOURCE),
         ("schema.sql", f"-- {S13}\nSELECT 1;\n"),
         ("page.html", HTML_COMMENT), ("figure.svg", SVG_COMMENT_AND_TEXT),
+        ("script.sh", BASH_ATTRIBUTION),
     )
     for name, source in cases:
         units_read = extractor.extract_units(pathlib.Path(name), source)
@@ -2333,6 +2334,140 @@ def extraction_hands_over_no_parser_object(results, workdir):
             located,
             f"a unit from {name} can be located by neither: {units_read!r}.",
         )
+
+
+# --- Bash fixtures ---------------------------------------------------------
+# Every hidden region carries S13, one word above the fixture sentence limit,
+# so a finding proves the shell grammar let a comment open where none does.
+BASH_SHEBANG = f"#!/usr/bin/env bash\n# {S13}\n"
+
+# Two real comments, on lines 3 and 5, each following syntax carrying a hash.
+BASH_ATTRIBUTION = ("#!/usr/bin/env bash\nvalue=abcdef\n"
+                    f"# {S13}\n" + "trimmed=${value#pattern}\n"
+                    f'echo "$trimmed"   # {S13}\n')
+BASH_UNITS = [(3, "inline"), (5, "inline")]
+
+BASH_EXCLUSIONS = (
+    ("a hash inside a single-quoted string", f"echo 'a # {S13}'\n"),
+    ("a hash inside a double-quoted string", f'echo "a # {S13}"\n'),
+    ("a parameter expansion trimming a prefix",
+     "value=abcdef\n" + "trimmed=${value#" + S13 + "}\n"),
+    ("a parameter expansion trimming the longest prefix",
+     "value=abcdef\n" + "trimmed=${value##" + S13 + "}\n"),
+    ("an arithmetic base", 'number=$((16#ff))\necho "$number"\n'),
+    ("a command substitution", f'sub=$(echo "# {S13}")\n'),
+    ("a hash inside nested quoting", f"nested=\"outer '# {S13}' outer\"\n"),
+    ("a quoted heredoc body", f"cat <<'EOT'\n# {S13}\nEOT\n"),
+    ("an unquoted heredoc body", f"cat <<EOT\n# {S13}\nEOT\n"),
+)
+
+# The shell suffixes the walk knows, and one it must leave alone.
+BASH_SUFFIXES = (".sh", ".bash")
+UNSUPPORTED_SHELL_SUFFIX = ".zsh"
+
+
+# --- Bash ------------------------------------------------------------------
+
+def bash_suffixes_are_supported(results, workdir):
+    """Both Bash suffixes are discovered by a directory walk, and no other."""
+    root = workdir / "bash-discovery"
+    script = build_tree(root)
+    fixtures = root / "fixtures"
+    for suffix in BASH_SUFFIXES:
+        write(fixtures / f"script{suffix}", f"# {S13}\n")
+    write(fixtures / f"script{UNSUPPORTED_SHELL_SUFFIX}", f"# {S13}\n")
+    write(fixtures / "extensionless", f"#!/bin/sh\n# {S13}\n")
+
+    _, output = run_checker(script, [str(fixtures)])
+    results.check(
+        "bash — both Bash suffixes are discovered and counted",
+        counts(output) is not None and counts(output)[1] == len(BASH_SUFFIXES),
+        f"expected {len(BASH_SUFFIXES)} checked files, saw {counts(output)!r}. "
+        f"Another shell suffix or an extensionless script raises the count. "
+        f"Output:\n{output}",
+    )
+
+
+def bash_comments_are_inline_units(results, workdir):
+    """A full-line and a trailing comment are inline units at their lines."""
+    root = workdir / "bash-attribution"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "script.sh"
+    write(fixture, BASH_ATTRIBUTION)
+
+    _, output, found = check_one(script, fixture)
+    results.check(
+        "bash — a full-line and a trailing comment report their own lines",
+        units(output) == BASH_UNITS,
+        f"expected {BASH_UNITS!r}, saw {units(output)!r}. Output:\n{output}",
+    )
+    results.check(
+        "bash — the comment delimiter is not measured as prose",
+        has(found, f"longest is {words(S13)}"),
+        f"expected {words(S13)} words, saw {found!r}. A counted `#` reports "
+        f"one word more. Output:\n{output}",
+    )
+
+
+def bash_shebang_is_not_prose(results, workdir):
+    """The shebang carries no prose unit, and the comment under it does."""
+    root = workdir / "bash-shebang"
+    script = build_tree(root)
+    fixture = root / "fixtures" / "script.sh"
+    write(fixture, BASH_SHEBANG)
+
+    _, output, _ = check_one(script, fixture)
+    results.check(
+        "bash — the shebang carries no prose unit",
+        units(output) == [(2, "inline")],
+        f"expected one inline unit at line 2, saw {units(output)!r}. The "
+        f"shebang reads as a comment to the grammar. Output:\n{output}",
+    )
+
+
+def bash_excluded_regions_are_not_prose(results, workdir):
+    """Shell syntax hides the same prose the checker flags in a comment."""
+    root = workdir / "bash-exclusions"
+    script = build_tree(root)
+
+    exposed = root / "fixtures" / "exposed.sh"
+    write(exposed, f"# {S13}\n")
+    _, oracle_output, oracle = check_one(script, exposed)
+    results.check(
+        "bash — the hidden prose is flagged when it is a real comment",
+        has(oracle, f"above {DEFAULT_SENTENCE_WORDS} words"),
+        f"the exclusion fixtures hide prose the checker flags nowhere, so "
+        f"excluding it proves nothing. Saw {oracle!r}. "
+        f"Output:\n{oracle_output}",
+    )
+
+    for index, (label, source) in enumerate(BASH_EXCLUSIONS):
+        fixture = root / "fixtures" / f"excluded-{index}.sh"
+        write(fixture, source)
+        _, output, found = check_one(script, fixture)
+        results.check(
+            f"bash — {label} carries no prose unit",
+            counts(output) == (0, 0, 0, 0) and found == [],
+            f"expected no finding, saw {found!r}. Output:\n{output}",
+        )
+
+
+def bash_real_comment_survives_hidden_syntax(results, workdir):
+    """A real comment after quoted or expanded syntax is still extracted."""
+    root = workdir / "bash-after-syntax"
+    script = build_tree(root)
+    for index, (label, source) in enumerate(BASH_EXCLUSIONS):
+        fixture = root / "fixtures" / f"after-{index}.sh"
+        write(fixture, source + f"# {S13}\n")
+        _, output, _ = check_one(script, fixture)
+        opened = [unit for unit in units(output) if unit[1] == "inline"]
+        results.check(
+            f"bash — a comment after {label} is extracted",
+            len(opened) == 1,
+            f"expected one inline unit, saw {units(output)!r}. Syntax "
+            f"swallowing the comment after it leaves none. Output:\n{output}",
+        )
+
 
 
 def main():
@@ -2430,6 +2565,11 @@ def main():
         markdown_prose_surfaces_are_preserved(results, workdir)
         checkers_hold_no_source_parser(results, workdir)
         extraction_hands_over_no_parser_object(results, workdir)
+        bash_suffixes_are_supported(results, workdir)
+        bash_comments_are_inline_units(results, workdir)
+        bash_shebang_is_not_prose(results, workdir)
+        bash_excluded_regions_are_not_prose(results, workdir)
+        bash_real_comment_survives_hidden_syntax(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

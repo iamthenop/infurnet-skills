@@ -17,6 +17,7 @@ Parsers, one per format:
     PostgreSQL — SQLGlot, `postgres` dialect
     HTML — tree-sitter-html
     XML and SVG — the standard library `xml.parsers.expat`
+    Bash — tree-sitter-bash
     standard input — none, because it carries no file format
 
 A parser identifies the prose, and what it found becomes `Unit` values here.
@@ -36,6 +37,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 import sqlglot
+import tree_sitter_bash
 import tree_sitter_html
 import tree_sitter_java
 from markdown_it import MarkdownIt
@@ -74,8 +76,8 @@ ROOT = _find_root(Path(__file__).parent)
 
 # Suffixes this module understands. Anything else is not a checkable target
 # and is excluded from the file count rather than reported as clean.
-SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql",
-                      ".html", ".htm", ".xml", ".svg")
+SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql", ".html", ".htm",
+                      ".xml", ".svg", ".sh", ".bash")
 
 STDIN_PATH = "-"
 STDIN_SOURCE = "<stdin>"
@@ -92,6 +94,7 @@ def _language(module):
     return Parser(Language(module.language()))
 
 
+BASH_PARSER = _language(tree_sitter_bash)
 HTML_PARSER = _language(tree_sitter_html)
 JAVA_PARSER = _language(tree_sitter_java)
 
@@ -239,6 +242,34 @@ def extract_java_comments(source):
             continue
         if text:
             units.append(Unit(node.start_point[0] + 1, kind, text))
+    return units
+
+
+# ---------------------------------------------------------------------------
+# Bash
+# ---------------------------------------------------------------------------
+
+SHEBANG = "#!"
+
+
+def extract_bash_comments(source):
+    """Return Bash comments as prose units, and the shebang as none.
+
+    The grammar decides what a `#` opens. A quoted string, a parameter
+    expansion, an arithmetic base, a command substitution, and a heredoc
+    body are syntax, so none of them yields a unit.
+    """
+    units = []
+    for node in _walk(BASH_PARSER.parse(source.encode("utf-8")).root_node):
+        if node.type != "comment":
+            continue
+        body = _decode(node)
+        # The grammar reports the shebang as a comment on the opening line.
+        if node.start_point[0] == 0 and body.startswith(SHEBANG):
+            continue
+        text = body.lstrip("#").strip()
+        if text:
+            units.append(Unit(node.start_point[0] + 1, INLINE, text))
     return units
 
 
@@ -593,6 +624,8 @@ EXTRACTORS = {
     ".htm": extract_html_prose,
     ".xml": extract_xml_comments,
     ".svg": extract_svg_prose,
+    ".sh": extract_bash_comments,
+    ".bash": extract_bash_comments,
 }
 
 

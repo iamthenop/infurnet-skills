@@ -1,4 +1,8 @@
-Pygments==2.21.0
+markdown-it-py==4.2.0
 pyyaml==6.0.2
 skills-ref==0.1.1
+sqlglot==30.18.0
 textstat==0.7.4
+tree-sitter==0.26.0
+tree-sitter-html==0.23.2
+tree-sitter-java==0.23.5

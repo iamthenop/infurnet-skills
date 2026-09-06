@@ -15,12 +15,11 @@ Ownership:
     named settings, their density limits, and the mechanism selecting each
         one — references/complexity-settings.md
     the categorical prose rules — SKILL.md
-    the vocabulary list, the prose boundaries, and the normalization both
-        checkers measure — this script
+    the vocabulary list and the normalization both checkers measure —
+        this script
     the word count and the other lexical primitives — textstat
-    the PostgreSQL lexical grammar — Pygments, whose dollar-quoted bodies
-        this script leaves opaque
-    the markup structure — html.parser for HTML, expat for XML and SVG
+    the source formats, their parsers, and the prose units both checkers
+        read — source.py, which hands over no parser object
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -42,39 +41,38 @@ Exit status:
     2   the request or the settings reference could not be read
 """
 import argparse
-import ast
-import io
+import importlib.util
 import math
 import re
 import sys
-import tokenize
-import xml.parsers.expat as expat
-from html.parser import HTMLParser
 from pathlib import Path
 
 import textstat
-from pygments.lexer import RegexLexer, bygroups
-from pygments.lexers.sql import PostgresLexer, language_callback
-from pygments.token import Comment, String
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
+SOURCE_EXTRACTOR = SCRIPT_DIR / "source.py"
 
 
-def _find_root(start):
-    p = start.resolve()
-    for parent in [p] + list(p.parents):
-        if any((parent / m).exists() for m in (".git", "AGENTS.md", "ADOPTION.md")):
-            return parent
-    return p  # fallback: script's own directory
+def load_source_extractor():
+    """Load source.py, which owns every source format this checker reads."""
+    if not SOURCE_EXTRACTOR.exists():
+        raise SystemExit(f"ERROR — source extractor not found at "
+                         f"{SOURCE_EXTRACTOR}")
+    spec = importlib.util.spec_from_file_location("prose_source",
+                                                  SOURCE_EXTRACTOR)
+    module = importlib.util.module_from_spec(spec)
+    # Loading the extractor must leave no cache directory beside it.
+    written = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = written
+    return module
 
 
-ROOT = _find_root(Path(__file__).parent)
-
-# Suffixes this checker understands. Anything else is not a checkable
-# target and is excluded from the file count rather than reported as clean.
-SUPPORTED_SUFFIXES = (".py", ".java", ".md", ".sql",
-                      ".html", ".htm", ".xml", ".svg")
+extractor = load_source_extractor()
 
 # The setting applied to prose the extractor does not select, when the
 # caller names none.
@@ -85,8 +83,14 @@ DESIGN_SETTING = "design"
 
 # The file whose body prose carries the other zero-hedge invariant.
 SKILL_FILE = "SKILL.md"
-STDIN_PATH = "-"
-STDIN_SOURCE = "<stdin>"
+
+# A finding on a unit the parser gave no line, and the width of the line
+# column it stands in.
+NO_LINE = "-"
+LINE_WIDTH = 4
+
+# The prose kept beside a finding that carries no line.
+SNIPPET_WIDTH = 60
 
 # The two selection mechanisms the reference names.
 BY_DELIVERABLE = "deliverable"
@@ -330,24 +334,6 @@ BASE_STOP_WORDS = {
 }
 
 
-def extract_code_identifiers(source, suffix):
-    identifiers = set()
-    if suffix == ".py":
-        try:
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                      ast.ClassDef)):
-                    parts = re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", node.name)
-                    identifiers.update(p.lower() for p in parts if len(p) > 2)
-        except SyntaxError:
-            pass
-    for m in re.finditer(r"\b([A-Z][a-zA-Z0-9]{2,})\b", source):
-        parts = re.split(r"(?<=[a-z])(?=[A-Z])", m.group(1))
-        identifiers.update(p.lower() for p in parts if len(p) > 2)
-    return identifiers
-
-
 def meaningful_tokens(text, stop_words):
     tokens = re.findall(r"\b[a-z]{3,}\b", text.lower())
     return [t for t in tokens if t not in stop_words]
@@ -538,345 +524,6 @@ def normalize_prose(text):
 
 
 # ---------------------------------------------------------------------------
-# Extraction
-# ---------------------------------------------------------------------------
-
-def extract_python_comments(source):
-    items = []
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
-            if tok.type == tokenize.COMMENT:
-                text = tok.string.lstrip("#").strip()
-                if text:
-                    items.append((tok.start[0], "inline", text))
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        pass
-    try:
-        tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef, ast.Module)):
-                docstring = ast.get_docstring(node)
-                if docstring:
-                    lineno = getattr(node, "lineno", 1)
-                    items.append((lineno, "docstring", docstring))
-    except SyntaxError:
-        pass
-    return items
-
-
-def extract_java_comments(source):
-    items = []
-    i, n, line = 0, len(source), 1
-    while i < n:
-        c = source[i]
-        if c == "\n":
-            line += 1
-            i += 1
-        elif c == '"':
-            if source.startswith('"""', i):
-                i += 3
-                while i < n and not source.startswith('"""', i):
-                    if source[i] == "\n":
-                        line += 1
-                    i += 1
-                i += 3
-            else:
-                i += 1
-                while i < n and source[i] != '"':
-                    if source[i] == "\\":
-                        i += 1
-                    elif source[i] == "\n":
-                        line += 1
-                    i += 1
-                i += 1
-        elif c == "'":
-            i += 1
-            while i < n and source[i] not in ("'", "\n"):
-                if source[i] == "\\":
-                    i += 1
-                i += 1
-            if i < n and source[i] == "'":
-                i += 1
-        elif source.startswith("//", i):
-            start = line
-            i += 2
-            begin = i
-            while i < n and source[i] != "\n":
-                i += 1
-            text = source[begin:i].strip()
-            if text:
-                items.append((start, "inline", text))
-        elif source.startswith("/*", i):
-            start = line
-            i += 2
-            begin = i
-            while i < n and not source.startswith("*/", i):
-                if source[i] == "\n":
-                    line += 1
-                i += 1
-            text = re.sub(r"\s*\*\s*", " ", source[begin:i]).strip()
-            i += 2
-            if text:
-                items.append((start, "block", text))
-        else:
-            i += 1
-    return items
-
-
-def extract_markdown_prose(source):
-    items = []
-    fence = None  # (marker char, length) while a fence is open
-    in_frontmatter = False
-    fence_re = re.compile(r'^\s*(`{3,}|~{3,})')
-    frontmatter_re = re.compile(r'^---\s*$')
-    list_re = re.compile(r'^\s*(\*|-|\d+\.)\s')
-    table_re = re.compile(r'^\s*\|')
-    lineno = 0
-    para_start = None
-    para_lines = []
-
-    def flush():
-        nonlocal para_start, para_lines
-        if para_lines:
-            items.append((para_start, "prose", " ".join(para_lines)))
-        para_lines = []
-        para_start = None
-
-    for line in source.splitlines():
-        lineno += 1
-        if lineno == 1 and frontmatter_re.match(line):
-            in_frontmatter = True
-            continue
-        if in_frontmatter:
-            if frontmatter_re.match(line):
-                in_frontmatter = False
-            continue
-        fence_match = fence_re.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                flush()
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        if fence is not None:
-            continue
-        if re.match(r'^\s*#', line) or not line.strip():
-            flush()
-            continue
-        if list_re.match(line) or table_re.match(line):
-            flush()
-            text = line.strip().lstrip('*-|0123456789. ').strip()
-            if text:
-                items.append((lineno, "prose", text))
-            continue
-        if para_start is None:
-            para_start = lineno
-        para_lines.append(line.strip())
-
-    flush()
-    return items
-
-
-def extract_stdin_prose(source):
-    """Return standard input's prose units as (line, kind, text) triples.
-
-    Standard input carries no file format. A run of nonblank physical lines
-    is one unit, a blank line closes it, and the reported line is the first
-    physical line carrying that unit's text.
-    """
-    items = []
-    para_start = None
-    para_lines = []
-
-    def flush():
-        nonlocal para_start, para_lines
-        if para_lines:
-            items.append((para_start, "prose", " ".join(para_lines)))
-        para_lines = []
-        para_start = None
-
-    for lineno, line in enumerate(source.splitlines(), start=1):
-        if not line.strip():
-            flush()
-            continue
-        if para_start is None:
-            para_start = lineno
-        para_lines.append(line.strip())
-
-    flush()
-    return items
-
-
-# HTML elements whose descendant content is not visible document prose. A
-# comment inside one of them is excluded with the subtree.
-HTML_EXCLUDED = frozenset({"script", "style", "template", "code", "pre"})
-
-# HTML elements that structure a document into separate prose blocks. Text
-# either side of one belongs to different units; inline markup does not.
-HTML_BLOCKS = frozenset({
-    "address", "article", "aside", "blockquote", "body", "caption", "dd",
-    "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption",
-    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
-    "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p",
-    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
-    "title", "tr", "ul",
-})
-
-# The one HTML element that separates words without ending the prose run.
-HTML_BREAK = "br"
-
-# SVG elements whose character data is visible text.
-SVG_TEXT_ELEMENTS = frozenset({"text", "tspan", "textPath"})
-
-# SVG elements carrying machine-readable description rather than prose.
-SVG_EXCLUDED_TEXT = frozenset({"title", "desc"})
-
-
-class HtmlProseParser(HTMLParser):
-    """Collect visible HTML text as prose runs and HTML comments as blocks.
-
-    Inline markup does not divide a run. A structural block element, a
-    comment, an excluded subtree, and the end of input are the boundaries.
-    """
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.units = []
-        self.excluded = 0
-        self.parts = []
-        self.opening = 0
-
-    def flush(self):
-        """Close the open prose run, if it carries any visible text."""
-        text = "".join(self.parts).strip()
-        if text:
-            self.units.append((self.opening, "prose", text))
-        self.parts = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in HTML_EXCLUDED:
-            if not self.excluded:
-                self.flush()
-            self.excluded += 1
-        elif tag in HTML_BLOCKS and not self.excluded:
-            self.flush()
-        elif tag == HTML_BREAK and not self.excluded and self.parts:
-            # A break separates the words either side of it. Before any
-            # visible text it opens nothing, so the run keeps its own line.
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in HTML_EXCLUDED and self.excluded:
-            self.excluded -= 1
-        elif tag in HTML_BLOCKS and not self.excluded:
-            self.flush()
-
-    def handle_data(self, data):
-        if self.excluded:
-            return
-        # Whitespace alone neither opens a run nor fixes its starting line.
-        if not self.parts and not data.strip():
-            return
-        if not self.parts:
-            # The chunk can open with newlines the strip discards, so the run
-            # starts on the line carrying its first visible character.
-            leading = len(data) - len(data.lstrip())
-            self.opening = self.getpos()[0] + data.count("\n", 0, leading)
-        self.parts.append(data)
-
-    def handle_comment(self, data):
-        if self.excluded:
-            return
-        self.flush()
-        text = data.strip()
-        if text:
-            self.units.append((self.getpos()[0], "block", text))
-
-
-def extract_html_prose(source):
-    """Return HTML prose runs and comments as (line, kind, text) triples."""
-    parser = HtmlProseParser()
-    parser.feed(source)
-    parser.close()
-    parser.flush()
-    return parser.units
-
-
-def local_name(name):
-    """Return the local part of a namespace-separated element name."""
-    return name.rsplit(" ", 1)[-1]
-
-
-def extract_xml_units(source, text_elements):
-    """Return XML comments, and text from `text_elements`, as prose units.
-
-    A document whose parse does not complete yields nothing, so a partial
-    read never reaches the checks.
-    """
-    units = []
-    parts = []
-    depth = 0
-    excluded = 0
-    opening = 0
-    parser = expat.ParserCreate(namespace_separator=" ")
-
-    def start(name, attrs):
-        nonlocal depth, excluded, opening
-        tag = local_name(name)
-        if tag in SVG_EXCLUDED_TEXT:
-            excluded += 1
-        elif tag in text_elements:
-            if not depth:
-                opening = parser.CurrentLineNumber
-            depth += 1
-
-    def end(name):
-        nonlocal depth, excluded, parts
-        tag = local_name(name)
-        if tag in SVG_EXCLUDED_TEXT:
-            excluded = max(excluded - 1, 0)
-        elif tag in text_elements and depth:
-            depth -= 1
-            if not depth:
-                text = "".join(parts).strip()
-                if text:
-                    units.append((opening, "prose", text))
-                parts = []
-
-    def characters(data):
-        if depth and not excluded:
-            parts.append(data)
-
-    def comment(data):
-        text = data.strip()
-        if text:
-            units.append((parser.CurrentLineNumber, "block", text))
-
-    parser.StartElementHandler = start
-    parser.EndElementHandler = end
-    parser.CharacterDataHandler = characters
-    parser.CommentHandler = comment
-    try:
-        parser.Parse(source, True)
-    except expat.ExpatError:
-        return []
-    return units
-
-
-def extract_xml_comments(source):
-    """Return generic XML comments, and no element text, as prose units."""
-    return extract_xml_units(source, frozenset())
-
-
-def extract_svg_prose(source):
-    """Return SVG comments and supported text elements as prose units."""
-    return extract_xml_units(source, SVG_TEXT_ELEMENTS)
-
-
-# ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
 
@@ -964,177 +611,6 @@ def check_vocabulary(lineno, kind, text):
     return findings
 
 
-# ---------------------------------------------------------------------------
-# File dispatch
-# ---------------------------------------------------------------------------
-
-# The SQL dialect every `.sql` file is read as.
-POSTGRESQL_DIALECT = "postgresql"
-
-
-def select_sql_dialect():
-    """Return the SQL dialect a `.sql` file is read as.
-
-    The suffix is the whole input. File content, repository metadata,
-    configuration, and the environment take no part in the result.
-    """
-    return POSTGRESQL_DIALECT
-
-
-def opaque_dollar_quote(lexer, match):
-    """Yield a dollar-quoted span whole, leaving its body unlexed.
-
-    Pygments otherwise hands a procedural body to a second lexer, which
-    reports the markers inside that body as PostgreSQL source comments.
-    """
-    yield match.start(1), String, match.group(1)
-    yield match.start(2), String.Delimiter, match.group(2)
-    yield match.start(3), String, match.group(3)
-    yield match.start(4), String, match.group(4)
-    yield match.start(5), String, match.group(5)
-    yield match.start(6), String.Delimiter, match.group(6)
-    yield match.start(7), String, match.group(7)
-
-
-# PostgreSQL allows a dollar sign after an unquoted identifier's first
-# character, so a `$` following one continues the identifier and opens no
-# dollar quote.
-DOLLAR_QUOTE_BOUNDARY = r"(?<![\w$])"
-
-# A PostgreSQL escape string ends at its first unescaped quote, so a
-# backslash-escaped quote keeps the string open.
-ESCAPE_STRING_STATE = [
-    (r"\\.", String.Escape),
-    (r"[^'\\]+", String.Single),
-    (r"''", String.Single),
-    (r"'", String.Single, "#pop"),
-]
-
-
-def guard_dollar_quote(pattern):
-    """Insert the identifier boundary after the pattern's leading flags.
-
-    A global flag group is only valid at the start of a regular expression,
-    so the boundary follows it rather than displacing it.
-    """
-    flags = re.match(r"\(\?[aiLmsux]+\)", pattern)
-    cut = flags.end() if flags else 0
-    return pattern[:cut] + DOLLAR_QUOTE_BOUNDARY + pattern[cut:]
-
-
-def find_rule(root, matches, description):
-    """Return the index of the one root rule the caller describes."""
-    found = [i for i, rule in enumerate(root) if matches(rule)]
-    if len(found) != 1:
-        raise ProseError(
-            f"the PostgreSQL grammar carries {len(found)} {description}")
-    return found[0]
-
-
-def postgres_comment_grammar():
-    """Copy the PostgreSQL grammar, adapting only what comment extraction needs.
-
-    A dollar-quoted body stays opaque, a dollar quote cannot open inside an
-    unquoted identifier, and an escape string keeps its backslash escapes.
-    """
-    states = {state: rules[:] for state, rules in PostgresLexer.tokens.items()}
-    root = states["root"]
-
-    quoted = find_rule(root, lambda rule: rule[1] is language_callback,
-                       "dollar-quote rules")
-    root[quoted] = (guard_dollar_quote(root[quoted][0]),
-                    opaque_dollar_quote)
-
-    string = find_rule(root, lambda rule: len(rule) == 3 and rule[2] == "string",
-                       "string rules")
-    root.insert(string, (r"(E)(')", bygroups(String.Affix, String.Single),
-                         "escape-string"))
-    states["escape-string"] = ESCAPE_STRING_STATE
-    return states
-
-
-class PostgresCommentLexer(RegexLexer):
-    """The PostgreSQL grammar, adapted where comment boundaries require it."""
-
-    name = "PostgreSQL SQL dialect with opaque dollar-quoted bodies"
-    aliases = []
-    flags = re.IGNORECASE
-    tokens = postgres_comment_grammar()
-
-
-POSTGRES_LEXER = PostgresCommentLexer()
-
-
-# A star opening a block-comment line, followed by a space or the line end,
-# is decoration. A star anywhere else is prose, as in `A* search`.
-DECORATIVE_STAR_RE = re.compile(r"(?m)^[ \t]*\*(?:[ \t]|$)")
-
-
-def extract_postgres_comments(source):
-    """Return PostgreSQL source comments as (line, kind, text) triples.
-
-    A nested block comment stays one unit opening at its outer delimiter,
-    and the delimiters themselves stay outside the extracted text.
-    """
-    items = []
-    opening, parts, depth = 0, [], 0
-
-    for index, token, value in POSTGRES_LEXER.get_tokens_unprocessed(source):
-        if token is Comment.Single:
-            text = value.lstrip("-").strip()
-            if text:
-                items.append((source.count("\n", 0, index) + 1, "inline", text))
-        elif token is Comment.Multiline:
-            if value == "/*":
-                if depth == 0:
-                    opening, parts = source.count("\n", 0, index) + 1, []
-                depth += 1
-            elif value == "*/":
-                depth -= 1
-                if depth == 0:
-                    items.append((opening, "block", block_text(parts)))
-            else:
-                parts.append(value)
-
-    if depth > 0:
-        # PostgreSQL runs an unclosed block comment to the end of the file.
-        items.append((opening, "block", block_text(parts)))
-
-    return [(line, kind, text) for line, kind, text in items if text]
-
-
-def block_text(parts):
-    """Join a block comment's content, dropping its line-leading decoration."""
-    return DECORATIVE_STAR_RE.sub("", "".join(parts)).strip()
-
-
-SQL_DIALECT_EXTRACTORS = {POSTGRESQL_DIALECT: extract_postgres_comments}
-
-
-def extract_sql_comments(source):
-    """Extract SQL comments through the dialect the boundary resolves to."""
-    extract = SQL_DIALECT_EXTRACTORS[select_sql_dialect()]
-    return extract(source)
-
-
-def extract_units(path, source):
-    if path.suffix == ".py":
-        return extract_python_comments(source)
-    if path.suffix == ".java":
-        return extract_java_comments(source)
-    if path.suffix == ".md":
-        return extract_markdown_prose(source)
-    if path.suffix == ".sql":
-        return extract_sql_comments(source)
-    if path.suffix in (".html", ".htm"):
-        return extract_html_prose(source)
-    if path.suffix == ".xml":
-        return extract_xml_comments(source)
-    if path.suffix == ".svg":
-        return extract_svg_prose(source)
-    return []
-
-
 def zero_hedge_prose(name, caller_name):
     """True when a hard invariant bars every hedge in this source's prose.
 
@@ -1145,30 +621,53 @@ def zero_hedge_prose(name, caller_name):
     return name == SKILL_FILE or caller_name == DESIGN_SETTING
 
 
-def check_source(source_id, source, units, run_density, run_vocabulary,
-                 caller, by_extractor, suffix="", zero_hedges=False):
+def snippet(text):
+    """Return enough of a prose unit for a reader to find it."""
+    one_line = " ".join(text.split())
+    if len(one_line) <= SNIPPET_WIDTH:
+        return one_line
+    return one_line[:SNIPPET_WIDTH - 1] + "…"
+
+
+def locate(unit, message):
+    """Return a message that locates a finding the parser gave no line.
+
+    The unit's navigation context and its prose stand in for the line. No
+    line is invented for it.
+    """
+    if unit.line is not None:
+        return message
+    return f"{message} — {unit.context}: {snippet(unit.text)}"
+
+
+def check_source(source_id, text, units, run_density, run_vocabulary,
+                 caller, by_extractor, path=None, zero_hedges=False):
     """Return one source's findings as (source, line, kind, message, category).
 
     `source_id` names the source in the report. A file passes its path and
     standard input passes its own pseudo-source name.
     """
     findings = []
-    stop_words = BASE_STOP_WORDS | extract_code_identifiers(source, suffix)
+    stop_words = BASE_STOP_WORDS | extractor.extract_code_identifiers(
+        text, path)
 
-    for lineno, kind, text in units:
+    for unit in units:
         if run_density:
             # The extractor selects a setting named after the prose kind;
             # everything else takes the caller's setting.
-            selected = (kind, by_extractor[kind]) if kind in by_extractor else caller
+            selected = ((unit.kind, by_extractor[unit.kind])
+                        if unit.kind in by_extractor else caller)
             findings.extend(
-                (source_id, ln, k, msg, DENSITY)
+                (source_id, ln, k, locate(unit, msg), DENSITY)
                 for ln, k, msg in check_density(
-                    lineno, kind, text, stop_words, selected, zero_hedges)
+                    unit.line, unit.kind, unit.text, stop_words, selected,
+                    zero_hedges)
             )
         if run_vocabulary:
             findings.extend(
-                (source_id, ln, k, msg, VOCABULARY_CATEGORY)
-                for ln, k, msg in check_vocabulary(lineno, kind, text)
+                (source_id, ln, k, locate(unit, msg), VOCABULARY_CATEGORY)
+                for ln, k, msg in check_vocabulary(
+                    unit.line, unit.kind, unit.text)
             )
 
     return findings
@@ -1183,49 +682,27 @@ def check_file(path, run_density, run_vocabulary, caller, by_extractor):
 
     caller_name, _ = caller
     return check_source(
-        path, source, extract_units(path, source), run_density,
-        run_vocabulary, caller, by_extractor, suffix=path.suffix,
+        path, source, extractor.extract_units(path, source), run_density,
+        run_vocabulary, caller, by_extractor, path=path,
         zero_hedges=zero_hedge_prose(path.name, caller_name))
-
-
-def stdin_requested(paths):
-    """True when the caller selected standard input, which stands alone."""
-    if STDIN_PATH not in paths:
-        return False
-    if len(paths) > 1:
-        raise ProseError(
-            "stdin '-' cannot be combined with file or directory paths")
-    return True
-
-
-def read_stdin():
-    """Read standard input as already-selected plain prose."""
-    stream = getattr(sys.stdin, "buffer", None)
-    if stream is None:
-        return sys.stdin.read()
-    return stream.read().decode("utf-8", errors="ignore")
-
-
-def collect_files(targets):
-    skip_dirs = {".git", "vendor", ".venv", "__pycache__", "node_modules"}
-    files = []
-    for target in targets:
-        p = Path(target)
-        if p.is_file():
-            if p.suffix in SUPPORTED_SUFFIXES:
-                files.append(p)
-        elif p.is_dir():
-            for suffix in SUPPORTED_SUFFIXES:
-                files.extend(
-                    f for f in p.rglob(f"*{suffix}")
-                    if not any(part in skip_dirs for part in f.parts)
-                )
-    return sorted(set(files))
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def line_column(lineno):
+    """Render a finding's line, or the stand-in for a unit carrying none."""
+    if lineno is None:
+        return f"{NO_LINE:>{LINE_WIDTH}}"
+    return f"{lineno:{LINE_WIDTH}d}"
+
+
+def finding_order(finding):
+    """Order findings by line, and place a unit carrying no line last."""
+    lineno, kind, message = finding
+    return (lineno is None, lineno or 0, kind, message)
+
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -1262,21 +739,22 @@ def main(argv=None):
         caller_name = args.setting or DEFAULT_SETTING
         caller = (caller_name, resolve_caller_setting(settings, caller_name))
         by_extractor = extractor_limits(settings)
-        reads_stdin = stdin_requested(args.paths)
-    except ProseError as exc:
+        reads_stdin = extractor.stdin_requested(args.paths)
+    except (ProseError, extractor.SourceError) as exc:
         print(f"ERROR — {exc}", file=sys.stderr)
         return 2
 
     if reads_stdin:
         # Standard input is one source, read once and checked as it stands.
-        source = read_stdin()
+        source = extractor.read_stdin()
         checked = 1
         all_findings = check_source(
-            STDIN_SOURCE, source, extract_stdin_prose(source), run_density,
+            extractor.STDIN_SOURCE, source,
+            extractor.extract_stdin_prose(source), run_density,
             run_vocabulary, caller, by_extractor,
-            zero_hedges=zero_hedge_prose(STDIN_SOURCE, caller_name))
+            zero_hedges=zero_hedge_prose(extractor.STDIN_SOURCE, caller_name))
     else:
-        files = collect_files(args.paths or [str(ROOT)])
+        files = extractor.collect_files(args.paths or [str(extractor.ROOT)])
         if not files:
             print("No files found.")
             return 0
@@ -1299,8 +777,8 @@ def main(argv=None):
 
     for filepath in sorted(by_file):
         print(f"\n{filepath}")
-        for lineno, kind, message in sorted(by_file[filepath]):
-            print(f"  {lineno:4d}  [{kind}] {message}")
+        for lineno, kind, message in sorted(by_file[filepath], key=finding_order):
+            print(f"  {line_column(lineno)}  [{kind}] {message}")
 
     print(
         f"\n{len(all_findings)} finding(s) across {len(by_file)} file(s) "

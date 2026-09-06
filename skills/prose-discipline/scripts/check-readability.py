@@ -14,8 +14,10 @@ Ownership:
     named settings, their maximum grades, and the mechanism selecting each
         one — references/complexity-settings.md
     the grade calculation — textstat.flesch_kincaid_grade()
-    the prose boundaries and the normalization the grade measures —
-        check-prose.py, read here and never changed
+    the source formats and the prose units the grade measures — source.py,
+        read here and never changed
+    the normalization the grade measures — check-prose.py, read here and
+        never changed
 
 Selection follows the reference's `Selected by` column, and this script adds
 no third mechanism:
@@ -28,7 +30,7 @@ no third mechanism:
 
 This script adds no readability formula, no syllable counter, no readability
 dictionary, and no tokenizer, and the boundaries it inherits keep Markdown
-frontmatter, headings, and fenced code outside the measurement.
+headings and code blocks outside the measurement.
 
 Exit status:
     0   every applied maximum holds, or no maximum applies
@@ -47,6 +49,7 @@ import textstat
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_REFERENCE = SCRIPT_DIR.parent / "references" / "complexity-settings.md"
 PROSE_CHECKER = SCRIPT_DIR / "check-prose.py"
+SOURCE_EXTRACTOR = SCRIPT_DIR / "source.py"
 
 # The reference columns this script reads. Each header cell must match
 # exactly, so the setting-contract table above the settings table, which
@@ -60,6 +63,11 @@ BY_EXTRACTOR = "extractor"
 
 SNIPPET_WIDTH = 60
 
+# A detail line for a unit the parser gave no line, and the width of the
+# line column it stands in.
+NO_LINE = "-"
+LINE_WIDTH = 4
+
 
 class ReadabilityError(Exception):
     """A request or a reference the script cannot read."""
@@ -69,13 +77,12 @@ class ReadabilityError(Exception):
 # Prose boundaries
 # ---------------------------------------------------------------------------
 
-def load_prose_checker():
-    """Load check-prose.py so both scripts share one set of prose boundaries."""
-    if not PROSE_CHECKER.exists():
-        raise ReadabilityError(f"prose extractor not found at {PROSE_CHECKER}")
-    spec = importlib.util.spec_from_file_location("check_prose", PROSE_CHECKER)
+def load_module(name, path, missing):
+    """Load one sibling script without leaving a cache directory beside it."""
+    if not path.exists():
+        raise ReadabilityError(f"{missing} not found at {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
-    # Loading the extractor must leave no cache directory beside it.
     written = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
@@ -85,15 +92,25 @@ def load_prose_checker():
     return module
 
 
-def stdin_requested(prose, paths):
+def load_source_extractor():
+    """Load source.py, which owns every source format this script measures."""
+    return load_module("prose_source", SOURCE_EXTRACTOR, "source extractor")
+
+
+def load_prose_checker():
+    """Load check-prose.py so both scripts measure one normalized prose."""
+    return load_module("check_prose", PROSE_CHECKER, "prose checker")
+
+
+def stdin_requested(extractor, paths):
     """True when the caller selected standard input.
 
     The extractor owns the selector and the rule that it stands alone, so
     this script restates neither.
     """
     try:
-        return prose.stdin_requested(paths)
-    except prose.ProseError as exc:
+        return extractor.stdin_requested(paths)
+    except extractor.SourceError as exc:
         raise ReadabilityError(str(exc)) from exc
 
 
@@ -207,32 +224,33 @@ def grade(text):
 def measure_units(prose, extracted):
     """Return the source grade and the per-unit grades for one unit list."""
     units = []
-    for lineno, kind, text in extracted:
-        # The extractor owns the boundary; check-prose.py owns the
+    for unit in extracted:
+        # source.py owns the boundary; check-prose.py owns the
         # normalization. Both grades measure that one representation, and
         # the snippet keeps the written prose so a reader can find it.
-        measured = prose.normalize_prose(text)
+        measured = prose.normalize_prose(unit.text)
         if measured:
-            units.append((lineno, kind, measured, text))
+            units.append((unit, measured))
 
     if not units:
         return None, []
 
-    file_grade = grade("\n".join(unit[2] for unit in units))
-    measured = [
-        (lineno, kind, grade(text), " ".join(written.split()))
-        for lineno, kind, text, written in units
+    file_grade = grade("\n".join(measured for _, measured in units))
+    graded = [
+        (unit.line, unit.kind, grade(measured),
+         " ".join(unit.text.split()), unit.context)
+        for unit, measured in units
     ]
-    return file_grade, measured
+    return file_grade, graded
 
 
-def measure_file(path, prose):
+def measure_file(path, prose, extractor):
     """Return the file grade and the per-unit grades for one file."""
     try:
         source = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None, []
-    return measure_units(prose, prose.extract_units(path, source))
+    return measure_units(prose, extractor.extract_units(path, source))
 
 
 def unit_maximum(kind, maxima):
@@ -249,24 +267,37 @@ def over_units(measured, maxima):
     ]
 
 
+def unit_order(unit):
+    """Order units by line, and place a unit carrying no line last."""
+    return (unit[0] is None, unit[0] or 0, unit[2])
+
+
 def detail_lines(measured, maximum, maxima, top):
     """Select the units that locate a file's highest-complexity prose."""
     selected = over_units(measured, maxima)
     if maximum is None:
-        ranked = sorted(measured, key=lambda u: (-u[2], u[0]))[:top]
+        ranked = sorted(measured, key=lambda u: (-u[2], u[0] is None,
+                                                 u[0] or 0))[:top]
         selected = selected + [u for u in ranked if u not in selected]
     else:
         selected = selected + [
             u for u in measured
             if u[2] > maximum and u not in selected
         ]
-    return sorted(selected, key=lambda u: (u[0], u[2]))
+    return sorted(selected, key=unit_order)
 
 
 def snippet(text):
     if len(text) <= SNIPPET_WIDTH:
         return text
     return text[:SNIPPET_WIDTH - 1] + "…"
+
+
+def line_column(lineno):
+    """Render a unit's line, or the stand-in for a unit carrying none."""
+    if lineno is None:
+        return f"{NO_LINE:>{LINE_WIDTH}}"
+    return f"{lineno:{LINE_WIDTH}d}"
 
 
 # ---------------------------------------------------------------------------
@@ -317,13 +348,16 @@ def report(results, maximum, maxima, top):
         print(f"\n{path}")
         print(header)
         for unit in units:
-            lineno, kind, unit_grade, text = unit
+            lineno, kind, unit_grade, text, context = unit
             bound = unit_maximum(kind, maxima)
             mark = ""
             if bound is not None and unit_grade > bound:
                 mark = f"  OVER {kind} maximum {bound:g}"
-            print(f"  {lineno:4d}  [{kind}] {unit_grade:6.2f}  "
-                  f"{snippet(text)}{mark}")
+            # A unit the parser gave no line is located by its context.
+            located = f"{context}: {snippet(text)}" if lineno is None \
+                else snippet(text)
+            print(f"  {line_column(lineno)}  [{kind}] {unit_grade:6.2f}  "
+                  f"{located}{mark}")
     return failed
 
 
@@ -336,8 +370,9 @@ def main(argv=None):
         # positional paths are validated before any early return. Reading
         # the selector also precedes the path check, which would otherwise
         # reject it as a path that does not exist.
+        extractor = load_source_extractor()
         prose = load_prose_checker()
-        reads_stdin = stdin_requested(prose, args.paths)
+        reads_stdin = stdin_requested(extractor, args.paths)
         if args.list_settings:
             for name in sorted(settings):
                 mechanism, maximum = settings[name]
@@ -358,21 +393,22 @@ def main(argv=None):
 
     if reads_stdin:
         # Standard input is one virtual source, graded as a whole.
-        source = prose.read_stdin()
+        source = extractor.read_stdin()
         counted = 1
         file_grade, measured = measure_units(
-            prose, prose.extract_stdin_prose(source))
+            prose, extractor.extract_stdin_prose(source))
         results = ([] if file_grade is None
-                   else [(prose.STDIN_SOURCE, file_grade, measured)])
+                   else [(extractor.STDIN_SOURCE, file_grade, measured)])
     else:
-        files = prose.collect_files(args.paths or [str(prose.ROOT)])
+        files = extractor.collect_files(
+            args.paths or [str(extractor.ROOT)])
         if not files:
             print("No files found.")
             return 0
         counted = len(files)
         results = []
         for path in files:
-            file_grade, measured = measure_file(path, prose)
+            file_grade, measured = measure_file(path, prose, extractor)
             if file_grade is not None:
                 results.append((path, file_grade, measured))
 

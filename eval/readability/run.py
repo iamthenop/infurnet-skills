@@ -19,6 +19,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SCRIPTS = REPO_ROOT / "skills" / "prose-discipline" / "scripts"
 READABILITY = SCRIPTS / "check-readability.py"
 PROSE = SCRIPTS / "check-prose.py"
+SOURCE = SCRIPTS / "source.py"
 
 SETTING = "fixture"
 EXTRACTOR_SETTING = "inline"
@@ -191,27 +192,30 @@ SQL_EXCLUDED = (f"DO $$\nBEGIN\n    -- {EXCLUDED}\n    NULL;\nEND\n$$;\n"
 
 # The finding prose written as both comment kinds. One shared boundary
 # reports the units at lines 1 and 2.
-SQL_FINDINGS = f"-- {PROSE_FINDING}\n/* {PROSE_FINDING} */\n"
-SQL_FINDING_UNITS = [(1, "inline"), (2, "block")]
+# SQLGlot attaches a comment to a parsed statement and reports no comment
+# position, so each fixture carries a statement, every unit reports the
+# `block` kind, and no unit carries a line.
+SQL_FINDINGS = f"-- {PROSE_FINDING}\n/* {PROSE_FINDING} */\nSELECT 1;\n"
+SQL_FINDING_UNITS = [(None, "block"), (None, "block")]
 
 # A star carrying meaning survives extraction; only a line-leading decorative
 # star is removed. The reported unit text shows which happened, and each stays
 # inside the snippet width so it is reported whole.
 STAR_MEANINGFUL = (
-    ("A* search", "/* A* search explores the frontier. */\n",
+    ("A* search", "/* A* search explores the frontier. */\nSELECT 1;\n",
      "A* search explores the frontier."),
-    ("rows * columns", "/* The total is rows * columns here. */\n",
+    ("rows * columns", "/* The total is rows * columns here. */\nSELECT 1;\n",
      "The total is rows * columns here."),
 )
 STAR_DECORATIVE = ("/*\n * Human explanation of it.\n"
-                   " * Second sentence here.\n */\n")
+                   " * Second sentence here.\n */\nSELECT 1;\n")
 STAR_DECORATIVE_TEXT = "Human explanation of it. Second sentence here."
 
 # The finding prose behind a corrected escape string and a corrected
 # identifier, so both scripts are compared across the changed boundaries.
 SQL_EDGE_FINDINGS = (f"SELECT E'abc\\' still string';\n-- {PROSE_FINDING}\n"
                      f"SELECT foo$tag$;\n-- {PROSE_FINDING} $tag$\n")
-SQL_EDGE_UNITS = [(2, "inline"), (4, "inline")]
+SQL_EDGE_UNITS = [(None, "block"), (None, "block")]
 
 # --- markup fixtures ---------------------------------------------------------
 # The finding prose written into each markup form, so both scripts report the
@@ -250,8 +254,8 @@ HTML_INLINE = ("<p>The validator reads the accepted workorder and rejects "
 
 
 GRADE_LINE = re.compile(r"^\s*grade (-?\d+\.\d{2})", re.MULTILINE)
-DETAIL_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] +-?\d+\.\d{2}", re.MULTILINE)
-PROSE_FINDING_LINE = re.compile(r"^ +(\d+) +\[(\w+)\] ", re.MULTILINE)
+DETAIL_LINE = re.compile(r"^ +(\d+|-) +\[(\w+)\] +-?\d+\.\d{2}", re.MULTILINE)
+PROSE_FINDING_LINE = re.compile(r"^ +(\d+|-) +\[(\w+)\] ", re.MULTILINE)
 PROSE_SUMMARY = re.compile(
     r"^\d+ finding\(s\) across \d+ file\(s\) "
     r"— density: \d+, vocabulary: \d+$", re.MULTILINE)
@@ -268,6 +272,8 @@ def build_tree(root, maximum, inline_maximum=INLINE_MAXIMUM):
     scripts.mkdir(parents=True, exist_ok=True)
     shutil.copy(READABILITY, scripts / READABILITY.name)
     shutil.copy(PROSE, scripts / PROSE.name)
+    # Both scripts read their source formats from the extractor beside them.
+    shutil.copy(SOURCE, scripts / SOURCE.name)
     write(root / "skills" / "prose-discipline" / "references"
           / "complexity-settings.md",
           SETTINGS_REFERENCE.format(
@@ -298,7 +304,8 @@ def measured_grade(output):
 
 def detail_units(output, pattern=DETAIL_LINE):
     """The units one script reported, as (line, kind) pairs."""
-    return [(int(line), kind) for line, kind in pattern.findall(output)]
+    return [(None if line == "-" else int(line), kind)
+            for line, kind in pattern.findall(output)]
 
 
 def expected_grade(text):
@@ -1056,7 +1063,7 @@ def sql_units_match_the_prose_checker(results, workdir):
     prose_units = detail_units(prose_output, PROSE_FINDING_LINE)
     grade_units = detail_units(grade_output)
     results.check(
-        "check-prose.py — reports each PostgreSQL unit at its own line",
+        "check-prose.py — reports each PostgreSQL unit with its context",
         prose_units == SQL_FINDING_UNITS,
         f"expected {SQL_FINDING_UNITS!r}, saw {prose_units!r}. "
         f"Output:\n{prose_output}",
@@ -1259,7 +1266,7 @@ def readability_holds_no_native_suffix_ladder(results, workdir):
 
 
 def main():
-    for path in (READABILITY, PROSE):
+    for path in (READABILITY, PROSE, SOURCE):
         if not path.exists():
             print(f"FAIL  script not found at {path}")
             return 1

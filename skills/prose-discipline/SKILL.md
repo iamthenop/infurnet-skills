@@ -226,20 +226,32 @@ preserves the required meaning.
   setting, and fails a file whose grade exceeds the maximum that setting
   defines. Invoke as:
   `python3 <vendor-path>/skills/prose-discipline/scripts/check-readability.py [--setting <name>] [path ...]`
+* [`scripts/source.py`](scripts/source.py) — reads each supported file
+  format and hands both checkers the prose units they measure. It selects
+  the parser by file suffix and passes on no parser object. It is not run
+  directly.
 
 For either script, pass `-` as the sole path to read already-selected plain
 prose from standard input. Standard input is not parsed as a file format.
 
 Native file support is Python (`.py`), Java (`.java`), Markdown (`.md`),
-PostgreSQL (`.sql`), HTML (`.html`, `.htm`), generic XML (`.xml`), and SVG
-(`.svg`). SQL files pass through a dialect-selection boundary that currently
-resolves to PostgreSQL unconditionally. HTML contributes visible document text
-and HTML comments; generic XML contributes XML comments only; SVG contributes
-XML comments and text from `<text>`, `<tspan>`, and `<textPath>`.
+PostgreSQL (`.sql`), HTML (`.html`, `.htm`), generic XML (`.xml`), SVG
+(`.svg`), and Bash (`.sh`, `.bash`). SQL files pass through a
+dialect-selection boundary that currently resolves to PostgreSQL
+unconditionally. HTML contributes visible document text and HTML comments;
+generic XML contributes XML comments only; SVG contributes XML comments and
+text from `<text>`, `<tspan>`, and `<textPath>`.
+
+Bash contributes comments only, and never the shebang. No other shell suffix
+and no extensionless script is checked.
 
 The tooling performs no SQL dialect detection and supports no other SQL
 dialect. Markup extraction is structural; it does not evaluate CSS,
 attributes, or rendered layout.
+
+An established parser or lexer decides where prose starts and ends in each
+format. A PostgreSQL comment carries navigation context rather than a
+physical line, because the SQL parser reports no comment position.
 
 ## Final rule
 

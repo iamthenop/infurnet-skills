@@ -4,9 +4,9 @@ description: Lisp-family implementation rules for syntax, dialect boundaries, sc
 license: MIT
 compatibility: Requires a declared Lisp-family dialect and implementation.
 metadata:
-skill-type: standard
-infurnet-compat: lisp
-skill-dependency: error-handling,code-comments
+  skill-type: standard
+  infurnet-compat: lisp
+  skill-dependency: error-handling,code-comments
 ---
 
 # Lisp standard

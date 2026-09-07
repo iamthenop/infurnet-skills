@@ -38,6 +38,8 @@ discovered skills; profiles are not trigger candidates.
 | 20 | "Add lodash as a dependency for the new report script" | bazel-discipline | deploy-standard |
 | 21 | "Write the PR body for the work I just completed under WO-42" | builder-report | workorder-drafting |
 | 22 | "Write up the tests and evidence from validating WO-42" | tester-report | builder-report |
+| 23 | "Add a macro to this Common Lisp package and keep its bindings hygienic" | lisp-standard | python-standard |
+| 24 | "Can you explain what a cons cell is?" | (none) | lisp-standard |
 
 Scoring: a run passes when every "should discover" skill is discovered and no
 "should not discover" skill is discovered. "(none)" rows guard against

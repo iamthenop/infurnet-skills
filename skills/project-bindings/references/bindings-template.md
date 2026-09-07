@@ -111,6 +111,23 @@ project imports.)
 | Cross-cutting transport headers | *not yet defined* |
 | Vocabulary authority | *not yet defined* (canonical glossary location) |
 
+## Lisp
+
+<!-- Applies when `lisp-standard` is installed. -->
+
+| Binding | Value |
+| :--- | :--- |
+| Lisp dialect | *not yet defined* |
+| Lisp implementation | *not yet defined* |
+| Language version or standard | *not yet defined* |
+| Canonical syntax | `prefix-lisp` unless explicitly overridden |
+| Namespace mechanism | *not yet defined* |
+| Approved implementation extensions | *not yet defined* |
+| Formatter | *not yet defined* |
+| Compiler or interpreter | *not yet defined* |
+| Linter | *not yet defined* |
+| Test runner | *not yet defined* |
+
 ## Placement reference
 
 | Work item | Home |

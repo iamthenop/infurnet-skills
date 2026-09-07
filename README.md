@@ -44,6 +44,7 @@ permit a deliverable, or change the assigned profile.
 | [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) |
 | [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries |
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests |
+| [`lisp-standard`](skills/lisp-standard/SKILL.md) | Lisp dialect, syntax, scope, symbols, macros, mutation, and evaluation |
 | [`prose-discipline`](skills/prose-discipline/SKILL.md) | Clarity, compression, voice, and structure for governed prose |
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation |
 | [`test-maintenance`](skills/test-maintenance/SKILL.md) | Persistent repository test creation, ownership, consolidation, and retirement |

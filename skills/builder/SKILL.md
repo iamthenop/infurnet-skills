@@ -30,7 +30,9 @@ Outside an approved workorder, Builder is limited to inspection and reporting.
 
 ## Required standards
 
-None.
+| Standard | Purpose |
+| :--- | :--- |
+| `test-maintenance` | Govern creation and maintenance of persistent repository tests |
 
 ## MCP policy
 

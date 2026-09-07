@@ -46,6 +46,7 @@ permit a deliverable, or change the assigned profile.
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests |
 | [`prose-discipline`](skills/prose-discipline/SKILL.md) | Clarity, compression, voice, and structure for governed prose |
 | [`python-standard`](skills/python-standard/SKILL.md) | Python typing, validation boundaries, dep isolation |
+| [`test-maintenance`](skills/test-maintenance/SKILL.md) | Persistent repository test creation, ownership, consolidation, and retirement |
 | [`type-discipline`](skills/type-discipline/SKILL.md) | Load-bearing value types; parse-once boundaries |
 | [`vocabulary-control`](skills/vocabulary-control/SKILL.md) | Term introduction; drift control; one home per fact |
 | [`web-standard`](skills/web-standard/SKILL.md) | Templates, page model, palette tokens, accessibility |

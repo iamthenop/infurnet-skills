@@ -96,10 +96,59 @@ def read_manifest():
     return json.loads(MANIFEST.read_text())
 
 
+def check_git(adoption):
+    """Check the installed Git checkout."""
+    if not (VENDOR / ".git").exists():
+        return ["vendor tree is not a git checkout (.git missing)"]
+
+    findings = []
+
+    head = subprocess.run(
+        ["git", "-C", str(VENDOR), "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    )
+    actual_head = head.stdout.strip()
+    if head.returncode != 0 or actual_head != adoption["pin"]:
+        findings.append(
+            f"HEAD mismatch: ADOPTION.md={adoption['pin'][:12]} "
+            f"HEAD={(actual_head or '<unreadable>')[:12]}"
+        )
+
+    detached = subprocess.run(
+        ["git", "-C", str(VENDOR), "symbolic-ref", "-q", "HEAD"],
+        capture_output=True, text=True,
+    )
+    if detached.returncode == 0:
+        findings.append(
+            f"HEAD is attached to a branch ({detached.stdout.strip()}); "
+            "expected a detached HEAD"
+        )
+
+    status = subprocess.run(
+        ["git", "-C", str(VENDOR), "status", "--porcelain"],
+        capture_output=True, text=True,
+    )
+    if status.stdout.strip():
+        findings.append("vendor working tree is dirty")
+
+    origin = subprocess.run(
+        ["git", "-C", str(VENDOR), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+    )
+    actual_origin = origin.stdout.strip()
+    if origin.returncode != 0 or actual_origin != adoption["repo"]:
+        findings.append(
+            f"origin mismatch: ADOPTION.md={adoption['repo']} "
+            f"origin={actual_origin or '<none>'}"
+        )
+
+    return findings
+
+
 def verify_state(adoption):
     declared_pin = adoption["pin"]
     manifest = read_manifest()
-    errors = []
+    errors = check_git(adoption)
 
     if manifest is None:
         errors.append("manifest missing — run --apply to regenerate")
@@ -371,15 +420,19 @@ def main():
     if args.apply:
         print("4. Applying update...")
 
-        # step 1: replace vendor tree
+        # step 1: install the fetched checkout itself, retaining its .git —
+        # the vendor tree is disposable and replaced wholesale, never
+        # migrated file-by-file.
+        fetch_root = candidate_tree.parent
         shutil.rmtree(VENDOR)
-        shutil.copytree(str(candidate_tree), str(VENDOR))
+        shutil.move(str(candidate_tree), str(VENDOR))
+        shutil.rmtree(fetch_root, ignore_errors=True)
 
-        # step 2: regenerate manifest
+        # step 2: regenerate manifest from the installed checkout
         skill_names = sorted(
-            p.parent.name for p in candidate_tree.glob("skills/*/SKILL.md")
+            p.parent.name for p in VENDOR.glob("skills/*/SKILL.md")
         )
-        manifest = generate_manifest(candidate_tree, candidate_sha)
+        manifest = generate_manifest(VENDOR, candidate_sha)
         MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n")
 
         # step 3: update ADOPTION.md

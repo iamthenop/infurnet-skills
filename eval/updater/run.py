@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression harness for the installed-location checks in
+"""Regression harness for the installed-location and Git-checkout checks in
 tools/update-skills.py.
 
 Each regression builds a temporary consumer-repository layout containing the
@@ -9,16 +9,15 @@ regression fails.
 """
 import hashlib
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 UPDATER = REPO_ROOT / "tools" / "update-skills.py"
-
-PINNED_COMMIT = "a" * 40
-SOURCE_REPO = "https://example.invalid/owner/infurnet-skills"
 
 MUST_BE_INSTALLED_AT = "must be installed at"
 
@@ -28,36 +27,71 @@ def write(path, text):
     path.write_text(text)
 
 
-def build_canonical_consumer(root):
-    """
-    A consumer repository with the updater installed at the one valid
-    location, and a vendor tree/manifest/ADOPTION.md that agree with each
-    other, so an integrity check on it passes cleanly.
+def run_git(args, cwd):
+    result = subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+        env={**os.environ, "GIT_AUTHOR_NAME": "fixture",
+             "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+             "GIT_COMMITTER_NAME": "fixture",
+             "GIT_COMMITTER_EMAIL": "fixture@example.invalid"},
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git {args} in {cwd} failed: {result.stderr}")
+    return result.stdout.strip()
 
-    Returns the path to the installed update-skills.py.
-    """
-    vendor_name_dir = root / ".agents" / "vendor" / "example"
-    updater_path = vendor_name_dir / "infurnet-skills" / "tools" / "update-skills.py"
-    write(updater_path, UPDATER.read_text())
 
-    # Hashed from the file as actually written to disk, so this can't drift
-    # from whatever write()/read_text() did to line endings or encoding.
-    file_hash = hashlib.sha256(updater_path.read_bytes()).hexdigest()
-    manifest = {
-        "pinned_commit": PINNED_COMMIT,
-        "file_count": 1,
-        "skill_count": 0,
-        "skills": [],
-        "files": {"tools/update-skills.py": file_hash},
+def make_repo(root):
+    """A local git repo carrying the real update-skills.py plus a README,
+    across two commits on `main`. Returns (root, [first_sha, second_sha])."""
+    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
+    run_git(["init", "-q"], root)
+    write(root / "tools" / "update-skills.py", UPDATER.read_text())
+    write(root / "README.md", "infurnet-skills fixture\n")
+    run_git(["add", "-A"], root)
+    run_git(["commit", "-q", "-m", "first"], root)
+    first = run_git(["rev-parse", "HEAD"], root)
+    write(root / "README.md", "infurnet-skills fixture, updated\n")
+    run_git(["commit", "-q", "-am", "second"], root)
+    second = run_git(["rev-parse", "HEAD"], root)
+    run_git(["branch", "-M", "main"], root)
+    return root, [first, second]
+
+
+def checkout(upstream, dest, sha):
+    """Mirrors production fetch_tree: clone --no-checkout, then checkout."""
+    run_git(["clone", "-q", "--no-checkout", str(upstream), str(dest)], upstream)
+    run_git(["checkout", "-q", sha], dest)
+
+
+def manifest(tree, sha):
+    files = {
+        str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(tree.rglob("*"))
+        if p.is_file() and ".git" not in p.parts
     }
+    return {"pinned_commit": sha, "file_count": len(files),
+            "skill_count": 0, "skills": [], "files": files}
+
+
+def make_consumer(root, change=None):
+    """A consumer whose vendor tree is a real git checkout pinned at the
+    upstream tip. `change(vendor, upstream, commits)`, if given, disturbs
+    the checkout before the manifest is written, so the manifest always
+    matches what ends up on disk. Returns (updater_path, upstream, commits)."""
+    upstream, commits = make_repo(root / "upstream")
+    sha = commits[-1]
+    vendor_name_dir = root / "consumer" / ".agents" / "vendor" / "example"
+    vendor = vendor_name_dir / "infurnet-skills"
+    checkout(upstream, vendor, sha)
+    if change:
+        change(vendor, upstream, commits)
     write(vendor_name_dir / "infurnet-skills.manifest.json",
-          json.dumps(manifest, indent=2) + "\n")
-
-    write(root / "ADOPTION.md",
-          f"| Pinned commit             | `{PINNED_COMMIT}` |\n"
-          f"| Source repository         | `{SOURCE_REPO}` |\n")
-
-    return updater_path
+          json.dumps(manifest(vendor, sha), indent=2) + "\n")
+    write(root / "consumer" / "ADOPTION.md",
+          f"| Pinned commit             | `{sha}` |\n"
+          f"| Source repository         | `{upstream}` |\n")
+    return vendor / "tools" / "update-skills.py", upstream, commits
 
 
 def run_updater(updater_path, args, cwd=None):
@@ -82,7 +116,7 @@ class Results:
 
 def canonical_location_is_accepted(results, workdir):
     """The updater runs cleanly when installed at the canonical location."""
-    updater_path = build_canonical_consumer(workdir / "accepted")
+    updater_path, _, _ = make_consumer(workdir / "accepted")
 
     code, output = run_updater(updater_path, ["--verify"])
 
@@ -106,7 +140,7 @@ def invocation_is_cwd_independent(results, workdir):
     read_adoption() would then crash on a missing ADOPTION.md, so success
     here is direct proof the normalization ran.
     """
-    updater_path = build_canonical_consumer(workdir / "cwd-independence")
+    updater_path, _, _ = make_consumer(workdir / "cwd-independence")
 
     code, output = run_updater(updater_path, ["--verify"], cwd=str(workdir))
 
@@ -164,6 +198,74 @@ def wrong_locations_are_rejected(results, workdir):
         )
 
 
+def test_git(results, workdir):
+    """--verify accepts a canonical git checkout: right origin, right
+    detached HEAD, clean tree."""
+    updater, _, _ = make_consumer(workdir / "git")
+    code, out = run_updater(updater, ["--verify"])
+    results.check("git — verify exits zero", code == 0, out)
+    results.check(
+        "git — integrity check passes",
+        "OK — ADOPTION.md, vendor tree, and manifest agree" in out, out)
+
+
+BAD_GIT = [
+    ("missing-git", lambda v, u, c: shutil.rmtree(v / ".git"),
+     "not a git checkout"),
+    ("wrong-head", lambda v, u, c: run_git(["checkout", "-q", c[0]], v),
+     "HEAD mismatch"),
+    ("attached-head", lambda v, u, c: run_git(["checkout", "-q", "-b", "x"], v),
+     "detached"),
+    ("dirty-tree", lambda v, u, c: write(v / "README.md", "dirty\n"),
+     "dirty"),
+    ("wrong-origin", lambda v, u, c: run_git(
+        ["remote", "set-url", "origin", "https://example.invalid/x"], v),
+     "origin mismatch"),
+]
+
+
+def test_bad_git(results, workdir):
+    """--verify rejects a vendor checkout that fails any git check."""
+    for name, change, want in BAD_GIT:
+        updater, _, _ = make_consumer(workdir / f"bad-git-{name}", change)
+        code, out = run_updater(updater, ["--verify"])
+        results.check(f"bad git ({name}) — non-zero exit", code != 0, out)
+        results.check(f"bad git ({name}) — reports {want!r}", want in out, out)
+
+
+def test_apply(results, workdir):
+    """--apply replaces a disposable old vendor tree with a fresh checkout."""
+    root = workdir / "apply"
+    upstream, commits = make_repo(root / "upstream")
+    sha = commits[-1]
+    vendor_name_dir = root / "consumer" / ".agents" / "vendor" / "example"
+    vendor = vendor_name_dir / "infurnet-skills"
+    updater = vendor / "tools" / "update-skills.py"
+    write(updater, UPDATER.read_text())
+    write(vendor / "README.md", "stale\n")
+    write(vendor_name_dir / "infurnet-skills.manifest.json",
+          json.dumps(manifest(vendor, commits[0]), indent=2) + "\n")
+    write(root / "consumer" / "ADOPTION.md",
+          f"| Pinned commit             | `{sha}` |\n"
+          f"| Source repository         | `{upstream}` |\n")
+
+    code, out = run_updater(updater, ["--apply", "--candidate", "main"])
+    results.check("apply — exits zero", code == 0, out)
+    results.check("apply — .git present", (vendor / ".git").is_dir(), out)
+    results.check("apply — HEAD equals candidate",
+                  run_git(["rev-parse", "HEAD"], vendor) == sha, out)
+    results.check(
+        "apply — HEAD detached",
+        subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=str(vendor),
+                        capture_output=True).returncode != 0,
+        out)
+    results.check("apply — origin matches source",
+                  run_git(["remote", "get-url", "origin"], vendor) == str(upstream),
+                  out)
+    results.check("apply — working tree clean",
+                  run_git(["status", "--porcelain"], vendor) == "", out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -175,6 +277,9 @@ def main():
         canonical_location_is_accepted(results, workdir)
         invocation_is_cwd_independent(results, workdir)
         wrong_locations_are_rejected(results, workdir)
+        test_git(results, workdir)
+        test_bad_git(results, workdir)
+        test_apply(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

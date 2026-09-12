@@ -1,192 +1,359 @@
 ---
 name: api-docs
-description: "Form conventions for API reference documents. Use when creating, editing, restructuring, or reviewing a service API document — its operations, request/response/error tables, type notation, routes, anchors, or conventions section. Governs form only; routes, fields, and semantics are content owned elsewhere."
+description: "Author and structure API and interface documentation for HTTP APIs, internal RPC surfaces, and inbound webhooks. Use when creating, editing, restructuring, or reviewing interface documents, operation/message contracts, transport-facing authorization, request/response shapes, delivery semantics, or interface-specific failure rules."
 license: MIT
 metadata:
-  skill-type: deliverable
-  prose-setting: end-user
-  skill-dependency: vocabulary-control,prose-discipline
+skill-type: deliverable
+prose-setting: design
+skill-dependency: vocabulary-control,prose-discipline
 ---
 
-# API documentation conventions
+# API documentation
 
-When adopted, this skill governs API **form**; every `<service>-api.md`
-conforms, and form deviations are corrected rather than cited. Routes,
-fields, headers, vocabulary, and semantics are content; authority remains
-in repository bindings, architecture documents, and API documents. Values
-below are placeholders, not norms; API prose follows `prose-discipline`.
+API documents define interfaces between actors or components. They record
+decided interface contracts; they do not decide component responsibilities,
+workflow sequencing, durable state, or implementation.
 
-## Document shape
+Prose quality follows `prose-discipline`. Vocabulary and information ownership
+follow `vocabulary-control`. A fact is normative in exactly one document;
+dependent documents reference it instead of restating or weakening it.
 
-The canonical structure is in [`assets/api-template.md`](assets/api-template.md).
-Copy it when creating a new API document; fill every placeholder before
-committing.
+## Document types
 
-## Conventions section
+One file, one interface type.
 
-Each API document is standalone and does not require this skill beside it.
-Its `## Conventions` section briefly restates the conventions needed to read
-that API. Include transport-header behaviour, type notation, optionality
-markers, success-code placement, and shared document-specific shapes.
+| Type     | Governs                                                 |
+| :------- | :------------------------------------------------------ |
+| HTTP API | request/response operations exposed over HTTP           |
+| RPC      | operations exposed by one component to internal callers |
+| webhook  | inbound messages delivered to one component over HTTP   |
 
-The section restates; it does not redefine. A conflict between a Conventions
-section and this skill is a defect in the API document.
+Use the corresponding template from `## Assets`.
 
-## Operation shape
+The transport does not determine the document type by itself. A webhook remains
+a webhook because its contract is inbound message delivery, even though it uses
+HTTP. An RPC surface remains RPC when its contract is component-to-component
+invocation, even when the underlying transport uses HTTP.
 
-Every operation uses exactly five headings:
+## Scope
 
-1. `### <API route>` (functions as the title)
-2. `#### <Human-friendly operation name>` (functions as the description)
+An API document defines only facts intrinsic to the interface it governs.
+
+Typical interface facts include:
+
+* permitted callers or senders;
+* exposed operations or accepted messages;
+* routes or operation names;
+* request and response shapes;
+* authentication requirements at the interface;
+* operation or message authorization;
+* validation performed at the interface;
+* acknowledgement or response semantics;
+* retry, replay, and idempotency requirements;
+* failures visible at the interface.
+
+An API document does not redefine:
+
+* component boundaries;
+* caller or sender responsibilities outside the interface;
+* workflow sequencing beyond one operation or delivery;
+* durable state models;
+* implementation frameworks;
+* deployment topology;
+* internal behaviour that is not observable through the interface.
+
+Those facts remain in their owning documents.
+
+## Authority
+
+Authentication establishes identity. It does not by itself authorize an
+operation or message.
+
+Where authorization exists at an interface, state what authenticated identity
+is authorized to perform. Do not infer authorization from transport security,
+network placement, or successful authentication.
+
+Do not invent callers, senders, operations, messages, identifiers, fields,
+acknowledgements, or error classes to make an interface appear complete.
+
+Record decided contract only.
+
+## Message and field discipline
+
+Request, response, and message shapes contain only information required by the
+interface contract.
+
+Do not add generic metadata merely because a framework commonly supplies it.
+Examples include:
+
+* request identifiers;
+* correlation identifiers;
+* event identifiers;
+* delivery identifiers;
+* retry counters;
+* timestamps;
+* version fields.
+
+Include such values only when the decided interface requires them.
+
+A field carries one established meaning. API documents use canonical vocabulary
+and do not introduce aliases for terms owned elsewhere.
+
+## Validation
+
+State validation performed at the documented interface.
+
+Separate:
+
+* malformed input;
+* failed authentication;
+* failed authorization;
+* contract validation;
+* application or state conflict;
+* dependency or service failure;
+
+only where those distinctions exist in the decided contract.
+
+An interface must not repair malformed authority-bearing input unless that
+behaviour is explicitly part of the contract.
+
+Validation performed later in a workflow belongs to that workflow or its
+owning component, not to the API document.
+
+## Failure semantics
+
+Failures describe what the interface can establish.
+
+Do not:
+
+* convert dependency failure into an authoritative negative result;
+* expose internal storage or workflow details without contract need;
+* invent a universal error vocabulary;
+* imply downstream completion from successful receipt or acceptance;
+* treat transport failure as proof that an operation did not execute.
+
+Keep distinctions only when callers or senders can act on them.
+
+## Retry and idempotency
+
+Document retry, replay, or idempotency only where the interface requires it.
+
+Prefer an existing domain or operation reference when one already identifies
+equivalent work. Do not invent an idempotency key solely because retries are
+possible.
+
+When a response or acknowledgement can be lost, state what the caller or sender
+may conclude and how an unconfirmed result is resolved.
+
+## HTTP API documents
+
+Use an HTTP API document for request/response operations exposed as an HTTP API.
+
+HTTP API documents may define:
+
+* versioned routes;
+* HTTP methods;
+* request and response fields;
+* HTTP status semantics;
+* transport headers;
+* operation-specific authority;
+* asynchronous acceptance where applicable.
+
+Every operation uses this heading shape:
+
+1. `### <API route>`
+2. `#### <Human-friendly operation name>`
 3. `#### Request`
 4. `#### Response`
 5. `#### Errors`
 
-Operations nest under the `## Operations` container; an operation heading
-at the container's own level is a hierarchy defect.
+Operations nest under `## Operations`.
 
-Do not add `Purpose`, `Idempotency`, or `Caller and Authority` headings
-inside an operation. Put all prose under the human-friendly name heading;
-prose elsewhere is a defect. Cover purpose, caller and authority,
-asynchronous behaviour, idempotency rules, integrity gates, and the
-workflow link.
+Put operation prose under the human-friendly operation name. Cover only the
+contract facts needed to understand that operation, including caller and
+authority, asynchronous behaviour, idempotency, integrity gates, and workflow
+references where applicable.
 
-`Request`, `Response`, and `Errors` contain only their tables and the
-mutators of those tables. A mutator is a shape selector such as:
+`Request`, `Response`, and `Errors` contain only their tables and shape
+selectors.
 
-```text
-> When `<field>` = `<value>`
-```
+### HTTP field tables
 
-An operation with no fields states `*None*`.
-
-Wrap the route title in backticks. Put a matching `<span id="...">`
-immediately under the name heading for the Operations List link. Anchor ids
-use the lowercase HTTP method plus operation slug, stay stable, and never
-renumber when operations are inserted.
-
-End the description with its workflow reference when one exists. Link to the
-workflow Markdown file and, when useful, an anchor within it:
-
-```text
-This operation is illustrated in [<workflow name>](<path-to-workflow>.md#<anchor>).
-```
-
-Embed workflow diagrams in their workflow documents; do not create or newly
-reference standalone diagram files. Existing legacy files remain
-grandfathered debt. Migrate one only when a workorder explicitly authorizes
-it.
-
-## Tables
-
-Field tables use three columns:
+Request and response field tables use:
 
 ```text
 | Field | Type | Description |
 ```
 
-Error tables use two columns:
+The complete type vocabulary and optionality rules are in
+[`references/type-notation.md`](references/type-notation.md).
+
+The `Type` column contains only the scalar or structural type. The `Field`
+column contains only the field name.
+
+`JSON` is not a type.
+
+### HTTP errors
+
+HTTP error tables use:
 
 ```text
 | Code | Message |
 ```
 
-Each error row puts the HTTP code in backticks. Its `Message` cell uses
-`` `Reason Phrase`<br/>One bounded sentence. `` Success codes stay in the
-Errors table with failures.
+A row identifies the HTTP status and one bounded statement of what that result
+establishes.
 
-Error messages are bounded. They identify the failure class and never
-disclose state, material, or detail beyond the operation's contract. What
-counts as sensitive is content; the API document states it.
+Success status may remain in the same table where the document convention uses
+that form.
 
-## Type notation
+Do not make an HTTP status imply domain meaning not established by the
+operation contract.
 
-The complete type vocabulary is in
-[`references/type-notation.md`](references/type-notation.md). The
-governing rules:
+### HTTP routes
 
-* The `Type` column carries only the scalar or structural type.
-* The `Field` column carries only the field name — never a type, never
-  brackets.
-* `JSON` is not a type. Use `object`, `T[]`, or a named schema reference.
-* Optionality is not encoded in the type — see the reference for
-  optionality markers.
+A route convention belongs to the HTTP API form, not to RPC or webhook
+documents.
 
-## Cross-cutting fields
-
-Define cross-cutting fields and headers once at document level; never repeat
-them in Request or Response tables. Transport metadata is not payload. Its
-optionality, echo, forwarding, authority, and durability are content stated
-in the document's Conventions section.
-
-A name retired by ruling is dead vocabulary: it is not reintroduced as a
-field or header. Retirements are recorded by the vocabulary authority, not
-per API document (see `vocabulary-control`).
-
-## Routes
-
-Every route is versioned: `/<version>/<system>/<surface>/…`. The surface
-segment names the API. A route the system owns but a consumer implements is
-still a system route and keeps the prefix.
-
-The reference is the last segment; an action or status segment precedes it.
-Route patterns in use:
-
-* resource reference: `/<surface>/<type>/{reference}`;
-* action-in-path: `/<surface>/<action>/{reference}`;
-* status-in-path: `/<surface>/{status}/{reference}`.
-
-The set of HTTP methods in use is content. A method outside the established
-set is not introduced without an explicit ruling by the convention owner.
-
-## Statement discipline
-
-* A response code states acceptance or failure of the operation as
-  contracted; domain meaning beyond that is stated in the description, never
-  implied by a table.
-* Operations do not invent identifiers. They reference values the content
-  authority defines.
-* Idempotency is stated in the description as a rule, using the arrow form
-  where it clarifies:
+Where the adopted convention uses versioned routes, use:
 
 ```text
-same <reference> + same <parameters>
-    -> same <result>
+/<version>/<system>/<surface>/...
 ```
 
-* Vocabulary is canonical per the vocabulary authority. Drift terms are
-  defects. A new term clears the term-introduction protocol before it
-  appears in an API document (see `vocabulary-control`).
-* State an undecided value plainly as not yet defined. Track the decision in the issue tracker; keep markers and issue references out of the durable document. Issue numbers are mutable external state; do not resolve, work around, or silently remove the value.
+The surface segment names the API.
+
+Keep resource references at the end of the route. Action or status segments
+precede the reference where those forms are established.
+
+Do not introduce a new route shape or HTTP method without an explicit ruling
+from the interface authority.
+
+## RPC documents
+
+Use an RPC document for operations exposed by one component to internal
+callers.
+
+Organize the document around the component exposing the RPC surface, not around
+component pairs.
+
+An RPC document defines:
+
+* permitted callers;
+* operations exposed to each caller;
+* request and response contracts;
+* transport requirements intrinsic to the interface;
+* authentication and operation authorization;
+* operation validation;
+* RPC-visible failure semantics;
+* retry and idempotency where applicable.
+
+Do not force every RPC operation into request/response form. A one-way
+operation documents delivery semantics instead of inventing an acknowledgement
+or response.
+
+Transport authentication does not authorize every RPC operation.
+
+RPC documents do not define external HTTP mappings unless that HTTP behaviour
+is itself the documented interface.
+
+## Webhook documents
+
+Use a webhook document for inbound message delivery to one component.
+
+Organize the document around the receiving component.
+
+A webhook document defines:
+
+* permitted senders;
+* messages each sender may deliver;
+* endpoint and HTTP method for each message;
+* request body or message contract;
+* sender authentication;
+* message authorization;
+* receiver validation;
+* acknowledgement semantics;
+* replay and idempotency where applicable;
+* delivery failure visible to the sender.
+
+A webhook is not modeled as a general REST API merely because it uses HTTP.
+
+Do not introduce resource collections, CRUD operations, status resources, or
+resource representations unless those concepts independently exist.
+
+A successful webhook acknowledgement states exactly what the receiver has
+established. Acceptance does not imply completion of asynchronous downstream
+work unless that work actually completed before acknowledgement.
+
+A lost HTTP response does not by itself establish that the receiver rejected or
+failed to accept the delivery.
+
+## Cross-cutting transport data
+
+Define transport metadata once at the document level when it applies across the
+interface. Do not duplicate it in every request or response shape.
+
+Transport metadata is not payload unless the contract explicitly makes it part
+of the message.
+
+Its optionality, forwarding, echo, authority, and durability are interface
+content and must be stated where relevant.
+
+## Linking
+
+Link to the documents that own adjacent facts instead of restating them.
+
+Typical links include:
+
+* component boundaries;
+* state documents;
+* workflows;
+* authority or contract documents;
+* counterpart interfaces where a direct relationship matters.
+
+Workflow diagrams remain in workflow documents. API documents reference them;
+they do not create duplicate workflow diagrams.
+
+## Pending decisions
+
+State an undecided value plainly as not yet defined and track the decision in
+the issue tracker.
+
+Durable API documents contain no decision markers or issue references. Do not
+resolve, work around, or silently remove an undecided value.
 
 ## Change discipline
 
-Superseded conventions include container-level operation headings,
-sequential numbered anchors, and the unslashed resource-reference pattern.
-Migrate them only when a workorder explicitly authorizes the migration.
-Treat convention migration as its own named scope, never a silent companion
-to semantic change.
+Edits are surgical.
 
-Edits are surgical. A convention restructure preserves every field, code,
-and rule unless a separate authorization changes it. A convention pass that
-silently alters semantics is two changes in one commit.
+A form change preserves operations, messages, fields, status codes, authority
+rules, and semantics unless separate authorization changes them.
 
-When adding an operation, update its Operations List entry, semantic anchor,
-and workflow reference in the same change. Also update affected Conventions
-text and any counterpart operation in a paired API document.
+Do not combine interface-semantic change with format migration without naming
+both scopes explicitly.
+
+When adding or changing an operation or message, update every index, anchor,
+cross-reference, and directly paired interface representation affected by that
+change.
 
 ## References
 
 * [`references/type-notation.md`](references/type-notation.md) — canonical
-  API field type vocabulary, optionality markers, and usage examples
+  field type vocabulary, optionality markers, and usage examples for HTTP API
+  field tables
 
 ## Assets
 
-* [`assets/api-template.md`](assets/api-template.md) — blank API document
-  scaffold including the complete type notation table. Copy when creating a
-  new API document; fill every placeholder before committing.
+Copy the template matching the interface being documented:
+
+* [`assets/http-api-template.md`](assets/http-api-template.md) — HTTP API
+  document
+* [`assets/rpc-template.md`](assets/rpc-template.md) — internal RPC interface
+  document
+* [`assets/webhook-template.md`](assets/webhook-template.md) — inbound webhook
+  interface document
 
 ## Final rule
 
-Form is fixed here; content is owned elsewhere. A document that deviates in
-form is corrected, not cited.
+Document the interface that exists. Transport does not redefine the interface,
+and the interface does not redefine the system around it.

@@ -144,6 +144,8 @@ python3 <vendor-path>/skills/schema-design/scripts/validate-strata.py \
 
 * [`references/strata.md`](references/strata.md) — per-stratum boundary
   detail, placement litmus tests, SQL privilege rules, and stop conditions
+* [`references/normalization.md`](references/normalization.md) — guidance on normalization, trade-offs, and contstraints
+
 
 ## Assets
 

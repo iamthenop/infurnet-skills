@@ -5,6 +5,10 @@ This file records the consuming repository's adoption of
 keep it at the location the consuming repository's governance declares.
 An unfilled field is not an implied default.
 
+This Markdown adoption manifest remains transitional input for the current
+`update-skills.py`. The durable adoption contract is moving to
+`.agents/adoption.yml`. Keep this file until updater migration is complete.
+
 | Field | Value |
 | --- | --- |
 | Source repository | `<url>` |

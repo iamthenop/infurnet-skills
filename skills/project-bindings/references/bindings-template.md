@@ -133,5 +133,5 @@ project imports.)
 | Work item | Home |
 | :--- | :--- |
 | System architecture and boundaries | *not yet defined* (e.g. docs/arch/) |
-| Adoption manifest | *not yet defined* (e.g. repository root ADOPTION.md) |
+| Adoption manifest | *not yet defined* (e.g. `.agents/adoption.yml`) |
 | Profile assignment | *not yet defined* (repository governance entry point) |

@@ -162,6 +162,114 @@ the consuming repository before approval. This follows the update procedure in
 [`ADOPTION.md`](ADOPTION.md); without that run, the obligation report omits
 every moved file.
 
+## Adoption and installation (planned)
+
+The adoption declaration is a consuming repository's durable statement of
+intent, planned to live at `.agents/adoption.yml`. That file does not exist
+yet: the current updater, `tools/update-skills.py`, continues to read
+`ADOPTION.md` until a later implementation phase changes it.
+
+Nothing else in this section describes live behavior.
+
+### Adoption declaration
+
+`.agents/adoption.yml` records:
+
+```yaml
+source: https://github.com/iamthenop/infurnet-skills
+commit: 0123456789abcdef0123456789abcdef01234567
+release: ""
+skills:
+  - designer
+  - design-docs
+  - prose-discipline
+```
+
+| Field | Meaning |
+| --- | --- |
+| `source` | Canonical repository URL for the adopted root skill library. |
+| `commit` | Immutable machine reference and the authoritative revision. |
+| `release` | Optional human-friendly release identity. May be blank. |
+| `skills` | Skills the consumer intends to install. |
+
+### Installation state
+
+`.agents/` is a shared integration surface and is not owned by
+`infurnet-skills`.
+
+The adoption declaration at `.agents/adoption.yml` is durable,
+consumer-owned configuration. Content installed by `infurnet-skills` beneath
+`.agents/` is reconstructable installation state. Generated installation
+state is not durable consumer project state.
+
+### Installation surfaces
+
+Content that `infurnet-skills` installs beneath `.agents/` divides into two
+surfaces:
+
+```text
+.agents/vendor/<owner>/<repository>/
+.agents/skills/<skill-name>/
+```
+
+`vendor/` records acquired repository sources; each `<owner>/<repository>`
+directory is a vendor. `skills/` exposes installed Agent Skills to clients;
+each `<skill-name>` directory is a materialized skill — an installed
+discovery copy or link.
+
+A canonical repository URL maps mechanically to the vendor namespace:
+
+```text
+https://github.com/SpillwaveSolutions/design-doc-mermaid
+    ->
+.agents/vendor/SpillwaveSolutions/design-doc-mermaid/
+```
+
+### External adapters
+
+A local skill that declares a dependency on an external skill is an external
+adapter. It records the dependency in frontmatter `metadata`:
+
+```yaml
+metadata:
+  skill-type: standard
+  external-source: "https://github.com/SpillwaveSolutions/design-doc-mermaid"
+  external-commit: "<full-sha>"
+  external-release: ""
+  external-path: "."
+```
+
+| Field | Meaning |
+| --- | --- |
+| `external-source` | Canonical repository URL of the external skill source. |
+| `external-commit` | Immutable machine reference for the external source; the authoritative external revision. |
+| `external-release` | Optional human-friendly external version identity. May be blank. |
+| `external-path` | Repository-relative path to the skill; `.` is the repository root. |
+
+External adapter metadata creates installation closure only, the same way
+`skill-dependency` does (see Installation semantics). It grants no authority
+to the external skill and does not change profile, deliverable, or
+governance authority.
+
+### Generated state and consumer boundaries
+
+* `.agents/.updateskillignore` is a consumer-local boundary. It lists paths
+  beneath `.agents/` that `update-skills.py` must not manage, and its scope
+  does not extend outside `.agents/`. This document does not define its
+  pattern syntax.
+* An installer-created materialized skill is generated state. A consumer
+  does not edit it as durable source.
+* `.agents/infurnet-skills.manifest.json` is generated installation state
+  that `update-skills.py` owns. It records the last successfully installed
+  state, not the declaration of desired adoption. It is not an authority
+  source, and this document does not finalize its schema.
+* A consuming repository owns its own Git tracking policy for `.agents/`.
+  `infurnet-skills` does not add `/.agents/` to a consumer `.gitignore`.
+* A consumer may ignore reconstructable Agent Skills installation state
+  beneath `.agents/` when that state can be reproduced from durable
+  configuration. `infurnet-skills` does not claim unrelated `.agents/`
+  content or add `/.agents/` wholesale to a consumer `.gitignore`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

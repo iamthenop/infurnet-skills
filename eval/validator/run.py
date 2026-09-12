@@ -36,6 +36,22 @@ metadata:
 Fixture skill body.
 """
 
+# Like SKILL, but with room to inject extra metadata lines into one skill —
+# shared by every fixture builder that varies a single skill's metadata.
+SKILL_WITH_METADATA = """\
+---
+name: {name}
+description: "{description}"
+license: MIT
+metadata:
+  skill-type: {skill_type}
+{extra}---
+
+# {name}
+
+Fixture skill body.
+"""
+
 # Every profile states both composition sections. The validator distinguishes
 # three dispositions, and the fixtures below exercise all three: the section
 # absent, present and explicitly empty, and present carrying table rows.
@@ -88,12 +104,13 @@ def write(path, text):
     path.write_text(text)
 
 
-def build_repo(root, alpha_description, profile_description):
-    """Create a minimal repository the validator accepts, then vary descriptions."""
+def build_repo(root, alpha_description, profile_description, alpha_extra=""):
+    """Create a minimal repository the validator accepts, then vary
+    descriptions and (optionally) alpha's extra metadata lines."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     write(root / "skills" / "alpha" / "SKILL.md",
-          SKILL.format(name="alpha", description=alpha_description,
-                         skill_type="deliverable"))
+          SKILL_WITH_METADATA.format(name="alpha", description=alpha_description,
+                                     skill_type="deliverable", extra=alpha_extra))
     write(root / "skills" / "beta" / "SKILL.md",
           SKILL.format(name="beta", description=BETA,
                          skill_type="deliverable"))
@@ -156,6 +173,144 @@ def distinct_descriptions_are_accepted(results, workdir):
         code == 0,
         f"expected a zero exit, got {code}. Output:\n{output}",
     )
+
+
+# --- external skill metadata fixtures -------------------------------------
+# A skill becomes external when it declares external-source; external-commit,
+# external-release and external-path are meaningless without it. Every case
+# below is expressed as alpha's extra frontmatter metadata lines, reusing
+# build_repo rather than a second fixture-repository concept.
+EXTERNAL_SOURCE = "https://github.com/owner/repository"
+EXTERNAL_COMMIT = "a" * 40
+SOURCE_LINE = f"  external-source: '{EXTERNAL_SOURCE}'\n"
+COMMIT_LINE = f"  external-commit: '{EXTERNAL_COMMIT}'\n"
+SOURCE_AND_COMMIT = SOURCE_LINE + COMMIT_LINE
+
+CANONICAL_SOURCE_MSG = "external-source must be a canonical GitHub repository URL"
+HEX_COMMIT_MSG = "external-commit must be exactly 40 hexadecimal characters"
+NORMALIZED_PATH_MSG = "external-path must be '.' or a normalized POSIX"
+
+# Each non-canonical source form the contract explicitly rejects.
+NON_CANONICAL_SOURCES = [
+    ("ssh form", "git@github.com:owner/repository"),
+    ("http scheme", "http://github.com/owner/repository"),
+    (".git suffix", "https://github.com/owner/repository.git"),
+    ("trailing slash", "https://github.com/owner/repository/"),
+    ("query string", "https://github.com/owner/repository?ref=main"),
+    ("fragment", "https://github.com/owner/repository#readme"),
+    ("extra path segment", "https://github.com/owner/repository/extra"),
+]
+
+# Each malformed commit form: too short, empty, non-hex, or branch/tag text.
+MALFORMED_COMMITS = [
+    ("short commit", "abc123"),
+    ("empty commit", ""),
+    ("non-hex commit", "g" * 40),
+    ("branch/tag text", "main"),
+]
+
+# Every malformed external-path form the contract lists by name.
+MALFORMED_PATHS = [
+    ("empty path", ""),
+    ("absolute path", "/skills/example"),
+    ("leading ./", "./skills/example"),
+    ("embedded .", "skills/./example"),
+    ("..", "../example"),
+    ("double separator", "skills//example"),
+    ("trailing separator", "skills/example/"),
+    ("backslash separator", "skills\\example"),
+]
+
+# Each entry: label, alpha's extra metadata lines, whether it must validate,
+# and (for rejections) every substring the output must contain.
+EXTERNAL_CASES = [
+    # accepted
+    ("no external metadata", "", True, ()),
+    ("source + valid commit", SOURCE_AND_COMMIT, True, ()),
+    ("external-path '.'", SOURCE_AND_COMMIT + "  external-path: '.'\n", True, ()),
+    ("one-level external-path",
+     SOURCE_AND_COMMIT + "  external-path: 'example'\n", True, ()),
+    ("nested external-path",
+     SOURCE_AND_COMMIT + "  external-path: 'skills/example'\n",
+     True, ()),
+    ("blank external-release",
+     SOURCE_AND_COMMIT + "  external-release: ''\n", True, ()),
+    ("uppercase hexadecimal commit",
+     SOURCE_LINE + f"  external-commit: '{EXTERNAL_COMMIT.upper()}'\n", True, ()),
+
+    # rejected: orphan fields (meaningless without external-source)
+    ("source without commit", SOURCE_LINE, False,
+     ("external-commit is required when external-source is present",)),
+    ("commit without source", COMMIT_LINE, False,
+     ("external-commit present without external-source",)),
+    ("release without source", "  external-release: ''\n", False,
+     ("external-release present without external-source",)),
+    ("path without source", "  external-path: '.'\n", False,
+     ("external-path present without external-source",)),
+
+    # rejected: wrong type
+    ("non-string source", "  external-source: 123\n", False,
+     ("external-source must be a string",)),
+    ("non-string commit", SOURCE_LINE + "  external-commit: 123\n", False,
+     ("external-commit must be a string",)),
+    ("non-string release", SOURCE_AND_COMMIT + "  external-release: 123\n", False,
+     ("external-release must be a string",)),
+    ("non-string path", SOURCE_AND_COMMIT + "  external-path: 123\n", False,
+     ("external-path must be a string",)),
+
+    # rejected: one declaration, two independent findings
+    ("orphan external-commit that is also non-string", "  external-commit: 123\n",
+     False, ("external-commit must be a string",
+             "external-commit present without external-source")),
+]
+EXTERNAL_CASES += [
+    (f"non-canonical source — {label}",
+     f"  external-source: '{value}'\n" + COMMIT_LINE, False,
+     (CANONICAL_SOURCE_MSG,))
+    for label, value in NON_CANONICAL_SOURCES
+]
+EXTERNAL_CASES += [
+    (f"malformed commit — {label}",
+     SOURCE_LINE + f"  external-commit: '{value}'\n", False, (HEX_COMMIT_MSG,))
+    for label, value in MALFORMED_COMMITS
+]
+EXTERNAL_CASES += [
+    (f"malformed path — {label}",
+     SOURCE_AND_COMMIT + f"  external-path: '{value}'\n", False,
+     (NORMALIZED_PATH_MSG,))
+    for label, value in MALFORMED_PATHS
+]
+EXTERNAL_CASES.append(
+    ("malformed path — embedded NUL byte",
+     SOURCE_AND_COMMIT + '  external-path: "skills/\\0example"\n', False,
+     (NORMALIZED_PATH_MSG,)))
+
+
+def external_declarations_behave_per_table(results, workdir):
+    """Every external-metadata declaration must validate or fail exactly as
+    the table says, naming every defect a rejection carries."""
+    for index, (label, extra, accept, needles) in enumerate(EXTERNAL_CASES):
+        root = build_repo(workdir / f"external-{index}", ALPHA_ONLY, PROFILE_ONLY,
+                          alpha_extra=extra)
+        code, output = run_validator(root)
+        if accept:
+            results.check(
+                f"{label} — validator exits zero",
+                code == 0,
+                f"expected a zero exit, got {code}. Output:\n{output}",
+            )
+            continue
+        results.check(
+            f"{label} — validator exits non-zero",
+            code != 0,
+            f"expected a non-zero exit, got {code}. Output:\n{output}",
+        )
+        for needle in needles:
+            results.check(
+                f"{label} — output names {needle!r}",
+                needle in output,
+                f"{needle!r} absent from validator output:\n{output}",
+            )
 
 
 # --- skill-type and README inventory fixtures ----------------------------
@@ -566,20 +721,6 @@ def cycle_rejected(results, workdir):
 # A deliverable names one prose setting, and the canonical settings table owns
 # the names. The fixtures below vary the declaring skill, the declared value,
 # and the table itself.
-SKILL_WITH_METADATA = """\
----
-name: {name}
-description: "{description}"
-license: MIT
-metadata:
-  skill-type: {skill_type}
-{extra}---
-
-# {name}
-
-Fixture skill body.
-"""
-
 PROSE_OWNER = "A description belonging to exactly one settings owner."
 
 PROSE_SKILL = """\
@@ -793,6 +934,7 @@ def main():
         workdir = pathlib.Path(tmp)
         duplicate_descriptions_are_rejected(results, workdir)
         distinct_descriptions_are_accepted(results, workdir)
+        external_declarations_behave_per_table(results, workdir)
         inventory_accepted(results, workdir)
         legacy_type_rejected(results, workdir)
         row_type_rejected(results, workdir)

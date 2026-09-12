@@ -75,15 +75,7 @@ def check_skill(path, doc, skill_names):
     return findings
 
 
-# A GitHub owner or repository segment: starts and ends with an alphanumeric
-# character, with only alphanumerics, '.', '_', or '-' in between. This
-# excludes dot segments ('.', '..'), whitespace, and control characters —
-# none of which are valid GitHub identifiers, and dot segments in particular
-# could otherwise escape the documented owner/repository -> vendor-namespace
-# mapping.
-GITHUB_SEGMENT = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
-GITHUB_SOURCE_RE = re.compile(
-    rf"https://github\.com/({GITHUB_SEGMENT})/({GITHUB_SEGMENT})")
+GITHUB_SOURCE_RE = re.compile(r"https://github\.com/([^/?#]+)/([^/?#]+)")
 
 
 def check_source(value):

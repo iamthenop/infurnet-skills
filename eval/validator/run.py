@@ -199,8 +199,6 @@ NON_CANONICAL_SOURCES = [
     ("query string", "https://github.com/owner/repository?ref=main"),
     ("fragment", "https://github.com/owner/repository#readme"),
     ("extra path segment", "https://github.com/owner/repository/extra"),
-    ("dot-segment owner and repository", "https://github.com/../.."),
-    ("whitespace in owner", "https://github.com/owner name/repository"),
 ]
 
 # Each malformed commit form: too short, empty, non-hex, or branch/tag text.

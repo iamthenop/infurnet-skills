@@ -199,6 +199,8 @@ NON_CANONICAL_SOURCES = [
     ("query string", "https://github.com/owner/repository?ref=main"),
     ("fragment", "https://github.com/owner/repository#readme"),
     ("extra path segment", "https://github.com/owner/repository/extra"),
+    ("dot-segment owner and repository", "https://github.com/../.."),
+    ("whitespace in owner", "https://github.com/owner name/repository"),
 ]
 
 # Each malformed commit form: too short, empty, non-hex, or branch/tag text.
@@ -280,6 +282,10 @@ EXTERNAL_CASES += [
      (NORMALIZED_PATH_MSG,))
     for label, value in MALFORMED_PATHS
 ]
+EXTERNAL_CASES.append(
+    ("malformed path — embedded NUL byte",
+     SOURCE_AND_COMMIT + '  external-path: "skills/\\0example"\n', False,
+     (NORMALIZED_PATH_MSG,)))
 
 
 def external_declarations_behave_per_table(results, workdir):

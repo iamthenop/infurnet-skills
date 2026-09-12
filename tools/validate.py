@@ -75,7 +75,15 @@ def check_skill(path, doc, skill_names):
     return findings
 
 
-GITHUB_SOURCE_RE = re.compile(r"https://github\.com/([^/?#]+)/([^/?#]+)")
+# A GitHub owner or repository segment: starts and ends with an alphanumeric
+# character, with only alphanumerics, '.', '_', or '-' in between. This
+# excludes dot segments ('.', '..'), whitespace, and control characters —
+# none of which are valid GitHub identifiers, and dot segments in particular
+# could otherwise escape the documented owner/repository -> vendor-namespace
+# mapping.
+GITHUB_SEGMENT = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+GITHUB_SOURCE_RE = re.compile(
+    rf"https://github\.com/({GITHUB_SEGMENT})/({GITHUB_SEGMENT})")
 
 
 def check_source(value):
@@ -124,6 +132,7 @@ def check_path(value):
         or value.endswith("/")
         or "//" in value
         or any(seg in (".", "..") for seg in value.split("/"))
+        or any(ord(c) < 0x20 or ord(c) == 0x7f for c in value)
     )
     if malformed:
         return ["external-path must be '.' or a normalized POSIX "

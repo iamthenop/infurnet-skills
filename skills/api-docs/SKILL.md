@@ -3,9 +3,9 @@ name: api-docs
 description: "Author and structure API and interface documentation for HTTP APIs, internal RPC surfaces, and inbound webhooks. Use when creating, editing, restructuring, or reviewing interface documents, operation/message contracts, transport-facing authorization, request/response shapes, delivery semantics, or interface-specific failure rules."
 license: MIT
 metadata:
-skill-type: deliverable
-prose-setting: design
-skill-dependency: vocabulary-control,prose-discipline
+  skill-type: deliverable
+  prose-setting: end-user
+  skill-dependency: vocabulary-control,prose-discipline
 ---
 
 # API documentation

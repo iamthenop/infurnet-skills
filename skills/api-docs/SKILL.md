@@ -346,7 +346,7 @@ change.
 
 Copy the template matching the interface being documented:
 
-* [`assets/http-api-template.md`](assets/http-api-template.md) — HTTP API
+* [`assets/api-template.md`](assets/api-template.md) — REST API
   document
 * [`assets/rpc-template.md`](assets/rpc-template.md) — internal RPC interface
   document

@@ -135,6 +135,12 @@ WRONG_LOCATIONS = {
                                         / "vendor" / "example"
                                         / "infurnet-skills"
                                         / "update-skills.py"),
+    # Same depth as the canonical layout, so a check on the derived
+    # `.agents` name alone would accept it; the `vendor` segment is wrong.
+    "wrong-vendor-segment": lambda root: (root / "consumer" / ".agents"
+                                           / "not-vendor" / "example"
+                                           / "infurnet-skills" / "tools"
+                                           / "update-skills.py"),
 }
 
 

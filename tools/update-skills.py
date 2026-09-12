@@ -34,12 +34,23 @@ def check_working_directory():
     from anywhere else behaves identically.
     """
     agents_dir = SOURCE_ROOT.parent.parent.parent
-    if agents_dir.name != ".agents":
+    problem = None
+    if SELF_PATH.name != "update-skills.py":
+        problem = f"script name is {SELF_PATH.name!r}, not 'update-skills.py'"
+    elif SELF_PATH.parent.name != "tools":
+        problem = f"parent directory is {SELF_PATH.parent.name!r}, not 'tools'"
+    elif SOURCE_ROOT.name != "infurnet-skills":
+        problem = f"source checkout is {SOURCE_ROOT.name!r}, not 'infurnet-skills'"
+    elif SOURCE_ROOT.parent.parent.name != "vendor":
+        problem = (f"vendor directory is {SOURCE_ROOT.parent.parent.name!r}, "
+                    "not 'vendor'")
+    elif agents_dir.name != ".agents":
+        problem = f"agents directory is {agents_dir.name!r}, not '.agents'"
+    if problem:
         sys.exit(
             "update-skills.py must be installed at "
             "<consumer-root>/.agents/vendor/<vendor-name>/infurnet-skills/"
-            f"tools/update-skills.py; derived directory is {agents_dir}, "
-            "not a '.agents' directory"
+            f"tools/update-skills.py ({problem}); running from {SELF_PATH}"
         )
     os.chdir(agents_dir)
 
@@ -178,7 +189,7 @@ def differing_candidate_updater(candidate_tree):
 def collect_governed(tree):
     """Read the governed files of a tree, keyed by repository-relative path."""
     patterns = ["skills/*/SKILL.md", "skills/*/references/*.md",
-                "skills/*/scripts/*", "skills/*/assets/*"]
+                "skills/*/scripts/*"]
     files = {}
     for pattern in patterns:
         for p in sorted(tree.glob(pattern)):

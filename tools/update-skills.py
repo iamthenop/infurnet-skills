@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Update the vendored infurnet-skills tree.
 
+Must run from its installed location:
+<consumer-root>/.agents/vendor/<vendor-name>/infurnet-skills/tools/update-skills.py
+
 Run with no option to report and verify; use `--apply` to apply changes or
 `--verify` for verification only. Use `--candidate REF` to compare a commit or
-tag, and `--use-candidate-updater` to report with the candidate updater.
+tag.
 """
 import argparse
-import difflib
 import hashlib
 import json
 import os
@@ -18,17 +20,39 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-ADOPTION = ROOT / "ADOPTION.md"
-VENDOR = ROOT / ".agents" / "vendor" / "infurnet-skills"
-MANIFEST = ROOT / ".agents" / "vendor" / "infurnet-skills.manifest.json"
+SELF_PATH = Path(__file__).resolve()
+SOURCE_ROOT = SELF_PATH.parent.parent
 
-# Set while the candidate's own updater runs, so it does not hop again.
-BOOTSTRAP_ENV = "INFURNET_SKILLS_CANDIDATE_UPDATER"
 
-# The pre-migration profile representation, paired with its replacement
-# profile by profile_migration_pairs.
-ROLE_PATH_RE = re.compile(r"^roles/([a-z0-9-]+)/ROLE\.md$")
+def check_working_directory():
+    """
+    Normalize execution to the one valid working directory: the `.agents`
+    directory containing this updater's own vendored installation
+    (<consumer-root>/.agents/vendor/<vendor-name>/infurnet-skills/tools/
+    update-skills.py). The caller's original cwd carries no authority —
+    invoking this script from the consumer root, from inside `.agents`, or
+    from anywhere else behaves identically.
+    """
+    agents_dir = SOURCE_ROOT.parent.parent.parent
+    if agents_dir.name != ".agents":
+        sys.exit(
+            "update-skills.py must be installed at "
+            "<consumer-root>/.agents/vendor/<vendor-name>/infurnet-skills/"
+            f"tools/update-skills.py; derived directory is {agents_dir}, "
+            "not a '.agents' directory"
+        )
+    os.chdir(agents_dir)
+
+
+check_working_directory()
+
+AGENTS_ROOT = Path.cwd()
+CONSUMER_ROOT = AGENTS_ROOT.parent
+VENDOR_NAME_DIR = SOURCE_ROOT.parent
+
+ADOPTION = CONSUMER_ROOT / "ADOPTION.md"
+VENDOR = SOURCE_ROOT
+MANIFEST = VENDOR_NAME_DIR / "infurnet-skills.manifest.json"
 
 OBLIGATION_HEADERS = {
     "must not",
@@ -146,94 +170,21 @@ def differing_candidate_updater(candidate_tree):
     path = candidate_tree / "tools" / "update-skills.py"
     if not path.is_file():
         return None
-    if path.read_bytes() == Path(__file__).resolve().read_bytes():
+    if path.read_bytes() == SELF_PATH.read_bytes():
         return None
     return path
 
 
-def run_candidate_updater(candidate_script, argv):
-    """
-    Report under the candidate's updater against this repository, then exit.
-
-    Stage the candidate beside the installed updater so repository resolution
-    still points to this consumer. `BOOTSTRAP_ENV` prevents a second hop when a
-    moving candidate ref resolves to a newer updater.
-    """
-    own = Path(__file__).resolve()
-    staged = own.parent / ".update-skills-candidate.py"
-    env = dict(os.environ)
-    env[BOOTSTRAP_ENV] = "1"
-    try:
-        shutil.copy2(str(candidate_script), str(staged))
-        completed = subprocess.run([sys.executable, str(staged), *argv], env=env)
-    finally:
-        staged.unlink(missing_ok=True)
-    sys.exit(completed.returncode)
-
-
-def collect_governed(tree, allow_roles=False):
-    """
-    Read the governed files of a tree, keyed by repository-relative path.
-
-    allow_roles admits `roles/*/ROLE.md`, the pre-migration profile
-    representation, and is set only for the currently pinned vendor tree
-    so a consumer can update across the R3 migration boundary. A
-    candidate is never read that way: `roles/` is not a valid
-    representation after the migration.
-    """
+def collect_governed(tree):
+    """Read the governed files of a tree, keyed by repository-relative path."""
     patterns = ["skills/*/SKILL.md", "skills/*/references/*.md",
-                "skills/*/scripts/*"]
-    if allow_roles:
-        patterns.append("roles/*/ROLE.md")
+                "skills/*/scripts/*", "skills/*/assets/*"]
     files = {}
     for pattern in patterns:
         for p in sorted(tree.glob(pattern)):
             if p.is_file():
                 files[str(p.relative_to(tree))] = p.read_text()
     return files
-
-
-def declared_skill_type(text):
-    """
-    metadata.skill-type declared in a skill's frontmatter, or None.
-
-    Read with regular expressions rather than a YAML parser: this script
-    is vendored into consuming repositories and carries no dependency
-    beyond the standard library.
-    """
-    front = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
-    if not front:
-        return None
-    metadata = re.search(r"(?ms)^metadata:\n((?:[ \t]+\S.*\n?)+)",
-                         front.group(1) + "\n")
-    if not metadata:
-        return None
-    found = re.search(r"(?m)^[ \t]+skill-type:[ \t]*([a-z-]+)[ \t]*$",
-                      metadata.group(1))
-    return found.group(1) if found else None
-
-
-def profile_migration_pairs(current_files, candidate_files):
-    """
-    Pair each pre-migration role path with its candidate profile.
-
-    R3 moved `roles/<name>/ROLE.md` to `skills/<name>/SKILL.md`; a path-only
-    comparison hides obligation changes behind an unrelated remove and add. This
-    explicit one-time mapping accepts a counterpart only when it declares
-    `skill-type: profile`.
-    """
-    pairs = {}
-    for old_path in current_files:
-        match = ROLE_PATH_RE.match(old_path)
-        if not match:
-            continue
-        new_path = f"skills/{match.group(1)}/SKILL.md"
-        if new_path not in candidate_files:
-            continue
-        if declared_skill_type(candidate_files[new_path]) != "profile":
-            continue
-        pairs[old_path] = new_path
-    return pairs
 
 
 def extract_obligations(text):
@@ -271,21 +222,6 @@ def diff_obligations(old_text, new_text):
     return findings
 
 
-def diff_migrated_profile(old_text, new_text, old_path, new_path):
-    """
-    Return a deterministic line diff for one migrated profile body.
-
-    The obligation extractor reads list items under fixed headings, so moved
-    authority can otherwise appear changed without showing its text. This
-    one-time path makes the role-to-profile representation change reviewable
-    without redesigning obligation parsing.
-    """
-    return list(difflib.unified_diff(
-        old_text.splitlines(), new_text.splitlines(),
-        fromfile=old_path, tofile=new_path, lineterm="", n=2,
-    ))
-
-
 def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
                          skill_names):
     text = re.sub(
@@ -304,8 +240,8 @@ def update_adoption_text(text, candidate_sha, candidate_ref, adoption,
         f"| Installed skills          | {', '.join(skill_names)} |",
         text,
     )
-    # The library no longer carries a role inventory. Drop a legacy row
-    # rather than rewriting it, so the migration leaves no empty field.
+    # ADOPTION.md may carry an `Installed roles` row; skills carry no role
+    # inventory, so this drops the row instead of leaving it empty.
     text = re.sub(r"(?m)^\| Installed roles\s*\|[^\n]*\n", "", text)
     text = re.sub(
         r"\| Last update\s*\|[^\n]*",
@@ -320,20 +256,7 @@ def main():
     parser.add_argument("--candidate", default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--verify", action="store_true")
-    parser.add_argument(
-        "--use-candidate-updater", action="store_true",
-        help="produce the report using the candidate's updater, not the "
-             "installed one",
-    )
     args = parser.parse_args()
-
-    if args.use_candidate_updater and args.apply:
-        sys.exit(
-            "--use-candidate-updater reports only: the candidate updater is "
-            "unreviewed until the pin is approved, and applying under it "
-            "would leave the installed updater stale. Re-run without --apply, "
-            "then apply with the installed updater once the pin is approved."
-        )
 
     adoption = read_adoption()
     current_pin = adoption["pin"]
@@ -364,44 +287,35 @@ def main():
     print("\nFetching candidate tree...")
     candidate_tree = fetch_tree(repo_url, candidate_sha)
 
-    # The installed updater writes this whole report, and the candidate's own
-    # updater replaces it only during --apply. A candidate that moves governed
-    # files therefore reports them as an unrelated add and remove unless the
-    # reviewer asks for the candidate's report first.
+    # The installed updater always writes this report; the candidate's own
+    # updater only takes effect after --apply. A candidate whose updater
+    # moves governed files can therefore report them as an unrelated add
+    # and remove here.
     newer_updater = differing_candidate_updater(candidate_tree)
-    if newer_updater is not None and not os.environ.get(BOOTSTRAP_ENV):
-        if args.use_candidate_updater:
-            print("Reporting under the candidate updater...")
-            run_candidate_updater(newer_updater, sys.argv[1:])
+    if newer_updater is not None:
         print(
             "\n  NOTE: the candidate ships a different update-skills.py, and\n"
             "  this report comes from the installed one. It may omit changes\n"
             "  only the candidate updater can see, a path migration among\n"
-            "  them. Read that script's diff, then re-run with\n"
-            "  --use-candidate-updater for the candidate's own report."
+            "  them. Read that script's diff before approving the pin — it\n"
+            "  takes effect once the candidate becomes the installed updater\n"
+            "  after --apply."
         )
 
-    current_files = collect_governed(VENDOR, allow_roles=True)
+    current_files = collect_governed(VENDOR)
     candidate_files = collect_governed(candidate_tree)
-
-    migrated = profile_migration_pairs(current_files, candidate_files)
 
     current_set = set(current_files)
     candidate_set = set(candidate_files)
-    new_files = candidate_set - current_set - set(migrated.values())
-    removed_files = current_set - candidate_set - set(migrated)
+    new_files = candidate_set - current_set
+    removed_files = current_set - candidate_set
     changed_files = {
         f for f in current_set & candidate_set
         if current_files[f] != candidate_files[f]
     }
 
-    # Every pair compared for obligations: same-path changes, plus each
-    # profile whose path moved in the migration.
     comparisons = [
         (f, current_files[f], candidate_files[f]) for f in sorted(changed_files)
-    ] + [
-        (f"{old} -> {new}", current_files[old], candidate_files[new])
-        for old, new in sorted(migrated.items())
     ]
 
     print("\n--- Inventory changes ---")
@@ -413,11 +327,7 @@ def main():
         print("Removed:")
         for f in sorted(removed_files):
             print(f"  - {f}")
-    if migrated:
-        print("Moved:")
-        for old, new in sorted(migrated.items()):
-            print(f"  > {old} -> {new}")
-    if not new_files and not removed_files and not migrated:
+    if not new_files and not removed_files:
         print("  None")
 
     print("\n--- Obligation changes ---")
@@ -432,23 +342,6 @@ def main():
     if not found_obligations:
         print("  None detected")
 
-    if migrated:
-        print("\n--- Migrated profile contract changes ---")
-        shown = False
-        for old, new in sorted(migrated.items()):
-            if current_files[old] == candidate_files[new]:
-                continue
-            shown = True
-            print()
-            for line in diff_migrated_profile(
-                current_files[old], candidate_files[new], old, new
-            ):
-                print(f"  {line}")
-        if not shown:
-            print("  None")
-
-    # Migrated profiles carry their own section above, so this lists only
-    # same-path files whose change produced no obligation finding.
     print("\n--- Other changed files ---")
     other_changed = [f for f in changed_files
                      if not diff_obligations(current_files[f],
@@ -485,17 +378,7 @@ def main():
         )
         ADOPTION.write_text(text)
 
-        # step 4: update self if a newer version exists in vendor tree
-        new_self = VENDOR / "tools" / "update-skills.py"
-        own = Path(__file__).resolve()
-        if new_self.exists():
-            if new_self.read_bytes() != own.read_bytes():
-                shutil.copy2(str(new_self), str(own))
-                print("  update-skills.py updated — re-run to use the new version")
-            else:
-                print("  update-skills.py: already current")
-
-        # step 5: verify all three agree
+        # step 4: verify all three agree
         print("5. Verifying integrity...")
         adoption_updated = read_adoption()
         errors = verify_state(adoption_updated)

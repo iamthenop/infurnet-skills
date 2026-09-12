@@ -455,7 +455,9 @@ Typical relationships:
 State what each referenced document owns.
 -->
 
-* [`<component>.md`](<component>.md) — `<component>` component boundary.
-* [`<component>-build.md`](<component>-build.md) — physical HTTPS server and runtime requirements.
-* [`<document>.md`](<document>.md) — <fact owned by that document>.
-* [`<document>.md`](<document>.md) — <fact owned by that document>.
+| Document | Role |
+| :--- | :--- |
+| [`<component>.md`](<component>.md) | `<component>` component boundary. |
+| [`<component>-build.md`](<component>-build.md) | physical HTTPS server and runtime requirements. |
+| [`<document>.md`](<document>.md) | <fact owned by that document>. |
+| [`<document>.md`](<document>.md) | <fact owned by that document>. |

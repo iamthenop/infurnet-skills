@@ -354,7 +354,8 @@ Typical relationships:
 
 State what each referenced document owns.
 -->
-
-* [`<component>.md`](<component>.md) — `<component>` component boundary.
-* [`<caller>.md`](<caller>.md) — `<caller>` component boundary.
-* [`<document>.md`](<document>.md) — <fact owned by that document>.
+| Document | Role |
+| :--- | :--- |
+| [`<component>.md`](<component>.md) | `<component>` component boundary. |
+| [`<caller>.md`](<caller>.md) | `<caller>` component boundary. |
+| [`<document>.md`](<document>.md) | <fact owned by that document>. |

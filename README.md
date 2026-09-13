@@ -167,11 +167,13 @@ intent, at `.agents/adoption.yml`. `update-skills.py` reads it and never
 writes to it — moving the pin means editing this file directly, in the
 consumer's own commit, before running `--apply`.
 
-Skill materialization under `.agents/skills/<skill-name>/` and the
-installation manifest at `.agents/infurnet-skills.manifest.json` are live.
-External repository acquisition, the two-segment
-`.agents/vendor/<owner>/<repository>/` vendor path described below, and
-symlink materialization remain planned, not yet implemented.
+Skill materialization under `.agents/skills/<skill-name>/`, external
+repository acquisition for adopted adapters, and the installation manifest
+at `.agents/infurnet-skills.manifest.json` are live. External repositories
+are acquired under `.agents/vendor/<owner>/<repository>/` and external
+skills use copy materialization. The existing root Infurnet vendor checkout
+has not yet migrated to the two-segment owner/repository path. Symlink
+materialization remains planned and is not implemented.
 
 ### Adoption declaration
 

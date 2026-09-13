@@ -135,14 +135,13 @@ dependencies; see Installation semantics.
 
 ## Adoption contract
 
-A consuming repository records its adoption in an `ADOPTION.md` at its
-governance-declared location, copied from this repository's
-[`ADOPTION.md`](ADOPTION.md) template. The manifest pins a cryptographically
-exact source commit; a governance dependency must not follow a mutable
-checkout or floating `main`.
+A consuming repository records its adoption in `.agents/adoption.yml`,
+copied from this repository's [`adoption.yml`](adoption.yml) template. The
+declaration pins a cryptographically exact source commit; a governance
+dependency must not follow a mutable checkout or floating `main`.
 
-During R3, the adoption manifest records installed skills of any skill type in
-its installed-skills field.
+The adoption declaration records installed skills of any skill type in its
+`skills` field.
 
 Updating the pin follows six steps:
 
@@ -158,18 +157,21 @@ repository from its own file location. Install head's updater only after
 approval.
 
 When head moves governed files between paths, run head's updater from inside
-the consuming repository before approval. This follows the update procedure in
-[`ADOPTION.md`](ADOPTION.md); without that run, the obligation report omits
-every moved file.
+the consuming repository before approval; without that run, the obligation
+report omits every moved file.
 
-## Adoption and installation (planned)
+## Adoption and installation
 
 The adoption declaration is a consuming repository's durable statement of
-intent, planned to live at `.agents/adoption.yml`. That file does not exist
-yet: the current updater, `tools/update-skills.py`, continues to read
-`ADOPTION.md` until a later implementation phase changes it.
+intent, at `.agents/adoption.yml`. `update-skills.py` reads it and never
+writes to it — moving the pin means editing this file directly, in the
+consumer's own commit, before running `--apply`.
 
-Nothing else in this section describes live behavior.
+Skill materialization under `.agents/skills/<skill-name>/` and the
+installation manifest at `.agents/infurnet-skills.manifest.json` are live.
+External repository acquisition, the two-segment
+`.agents/vendor/<owner>/<repository>/` vendor path described below, and
+symlink materialization remain planned, not yet implemented.
 
 ### Adoption declaration
 
@@ -189,7 +191,7 @@ skills:
 | --- | --- |
 | `source` | Canonical repository URL for the adopted root skill library. |
 | `commit` | Immutable machine reference and the authoritative revision. |
-| `release` | Optional human-friendly release identity. May be blank. |
+| `release` | Optional human-friendly release identity. May be blank; when present, it must resolve to `commit`. |
 | `skills` | Skills the consumer intends to install. |
 
 ### Installation state
@@ -253,10 +255,6 @@ governance authority.
 
 ### Generated state and consumer boundaries
 
-* `.agents/.updateskillignore` is a consumer-local boundary. It lists paths
-  beneath `.agents/` that `update-skills.py` must not manage, and its scope
-  does not extend outside `.agents/`. This document does not define its
-  pattern syntax.
 * An installer-created materialized skill is generated state. A consumer
   does not edit it as durable source.
 * `.agents/infurnet-skills.manifest.json` is generated installation state

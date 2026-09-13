@@ -845,8 +845,8 @@ def test_external_skill_installs(results, workdir):
     base = workdir / "external-install"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     agents = consumer_root / ".agents"
     (consumer_root / ".git" / "info").mkdir(parents=True, exist_ok=True)
 
@@ -874,6 +874,17 @@ def test_external_skill_installs(results, workdir):
         "external install — skill directory materialized",
         (skill_dir / "SKILL.md").read_text() == (vendor / "SKILL.md").read_text(), out)
 
+    root_vendor = agents / "vendor" / "example" / "infurnet-skills"
+    local_descriptor = (root_vendor / "skills" / "widget" / "SKILL.md").read_text()
+    results.check(
+        "external install — the local descriptor itself was not materialized",
+        (skill_dir / "SKILL.md").read_text() != local_descriptor
+        and "external-source" not in (skill_dir / "SKILL.md").read_text(),
+        out)
+    results.check(
+        "external install — no second alias directory exists",
+        {p.name for p in (agents / "skills").iterdir()} == {"widget"}, out)
+
     manifest = json.loads((agents / "infurnet-skills.manifest.json").read_text())
     results.check(
         "external install — repository manifest entry",
@@ -897,17 +908,41 @@ def test_external_skill_installs(results, workdir):
     results.check("external install — verify passes offline", code == 0, out)
 
 
+def make_external_monorepo(root, skills):
+    """A local git repo standing in for an upstream monorepo carrying
+    several skills, each at its own sub-path. `skills` is a list of
+    (skill_name, sub_path) pairs. Returns (root, [first_sha, second_sha])."""
+    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
+    run_git(["init", "-q"], root)
+    for skill_name, sub_path in skills:
+        write(root / sub_path / "SKILL.md",
+              f"---\nname: {skill_name}\ndescription: Upstream.\nlicense: MIT\n"
+              f"---\nUpstream.\n")
+    run_git(["add", "-A"], root)
+    run_git(["commit", "-q", "-m", "first"], root)
+    first = run_git(["rev-parse", "HEAD"], root)
+    write(root / "CHANGELOG.md", "v2\n")
+    run_git(["add", "-A"], root)
+    run_git(["commit", "-q", "-m", "second"], root)
+    second = run_git(["rev-parse", "HEAD"], root)
+    return root, [first, second]
+
+
 def test_external_requirement_dedup(results, workdir):
-    """Two adapters requiring the identical external repository (and the
-    identical source+commit+path skill) share one vendor checkout and one
-    exposed skill — no duplicate fetch, no spurious collision."""
+    """Two different, self-consistently-named adapters requiring the same
+    external repository (at different sub-paths, since a local external
+    descriptor's own name must equal what it resolves to — two adapters
+    can no longer share one exposed name) share one vendor checkout: one
+    fetch, one repository manifest entry, two distinct skill entries."""
     base = workdir / "external-dedup"
-    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    ext_repo, ext_commits = make_external_monorepo(
+        base / "ext", [("widget", "skills/widget"), ("gadget", "skills/gadget")])
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter-one", "widget-adapter-two"],
+        base, adopted=["widget", "gadget"],
         adapters=[
-            ("widget-adapter-one", EXTERNAL_SOURCE, ext_commits[-1], "", "."),
-            ("widget-adapter-two", EXTERNAL_SOURCE, ext_commits[-1], "", "."),
+            ("widget", EXTERNAL_SOURCE, ext_commits[-1], "", "skills/widget"),
+            ("gadget", EXTERNAL_SOURCE, ext_commits[-1], "", "skills/gadget"),
         ])
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
@@ -916,25 +951,28 @@ def test_external_requirement_dedup(results, workdir):
     manifest = json.loads((agents / "infurnet-skills.manifest.json").read_text())
     root_key_ = repo_key(str(upstream))
     results.check(
-        "external dedup — one external repository entry",
+        "external dedup — one shared repository entry",
         set(manifest["repositories"]) - {root_key_} == {"example-owner/widget"}, out)
     results.check(
-        "external dedup — one external skill entry",
-        set(manifest["skills"]) - {"widget-adapter-one", "widget-adapter-two"}
-        == {"widget"}, out)
+        "external dedup — two distinct skill entries",
+        {"widget", "gadget"} <= set(manifest["skills"]), out)
+    results.check(
+        "external dedup — one vendor checkout serves both",
+        (agents / "vendor" / "example-owner" / "widget" / ".git").is_dir(), out)
 
 
 def test_external_revision_conflict_blocks(results, workdir):
     """The same external repository required at two different commits by
-    two different adapters is a blocking requirement collision, detected
-    before any mutation."""
+    two different (self-consistently-named, different-sub-path) adapters
+    is a blocking requirement collision, detected before any mutation."""
     base = workdir / "external-revision-conflict"
-    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    ext_repo, ext_commits = make_external_monorepo(
+        base / "ext", [("widget", "skills/widget"), ("gadget", "skills/gadget")])
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter-one", "widget-adapter-two"],
+        base, adopted=["widget", "gadget"],
         adapters=[
-            ("widget-adapter-one", EXTERNAL_SOURCE, ext_commits[0], "", "."),
-            ("widget-adapter-two", EXTERNAL_SOURCE, ext_commits[-1], "", "."),
+            ("widget", EXTERNAL_SOURCE, ext_commits[0], "", "skills/widget"),
+            ("gadget", EXTERNAL_SOURCE, ext_commits[-1], "", "skills/gadget"),
         ])
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
@@ -947,25 +985,36 @@ def test_external_revision_conflict_blocks(results, workdir):
 
 
 def test_external_skill_cross_unit_collision_blocks(results, workdir):
-    """Two different external installation units (different source
-    repositories) resolving to the identical exposed skill name is a hard
-    collision, distinct from same-unit deduplication."""
+    """A local external descriptor's own name must equal what it resolves
+    to, so two currently-declared adapters can no longer collide on a
+    shared exposed name directly (that would require two same-named
+    directories). The equivalent hard collision now arises when a current
+    declaration's own name is already proven-owned, in the manifest, by a
+    *different* external repository — a name may not silently change which
+    repository owns it."""
     base = workdir / "external-cross-unit-collision"
     ext_repo_a, commits_a = make_external_repo(base / "ext-a", skill_name="widget")
     ext_repo_b, commits_b = make_external_repo(base / "ext-b", skill_name="widget")
-    other_source = "https://github.com/other-owner/widget"
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter-one", "widget-adapter-two"],
-        adapters=[
-            ("widget-adapter-one", EXTERNAL_SOURCE, commits_a[-1], "", "."),
-            ("widget-adapter-two", other_source, commits_b[-1], "", "."),
-        ])
-    code, out = run_updater(
-        updater, ["--apply"],
-        git_rewrites={EXTERNAL_SOURCE: str(ext_repo_a), other_source: str(ext_repo_b)})
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, commits_a[-1], "", ".")])
+    repo_entry, skill_entry = seed_external_repo(
+        consumer_root, "other-owner/widget", "https://github.com/other-owner/widget",
+        ext_repo_b, commits_b[-1], "widget")
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    manifest_data = json.loads(manifest_path.read_text())
+    manifest_data["repositories"]["other-owner/widget"] = repo_entry
+    manifest_data["skills"]["widget"] = skill_entry
+    write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+    before = manifest_path.read_text()
+
+    code, out = run_updater(updater, ["--apply"],
+                             git_rewrites={EXTERNAL_SOURCE: str(ext_repo_a)})
     results.check("external cross-unit collision — apply fails", code != 0, out)
     results.check("external cross-unit collision — reports a collision",
                   "collision" in out.lower() and "widget" in out, out)
+    results.check("external cross-unit collision — manifest unchanged",
+                  manifest_path.read_text() == before, out)
 
 
 def test_external_unmanaged_collision_blocks(results, workdir):
@@ -974,8 +1023,8 @@ def test_external_unmanaged_collision_blocks(results, workdir):
     base = workdir / "external-unmanaged-collision"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     write(consumer_root / ".agents" / "skills" / "widget" / "SKILL.md", "unmanaged\n")
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
@@ -991,8 +1040,8 @@ def test_external_release_mismatch_blocks(results, workdir):
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     run_git(["tag", "-a", "v1", "-m", "v1", ext_commits[0]], ext_repo)
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "v1", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "v1", ".")])
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
     results.check("external release mismatch — apply fails", code != 0, out)
@@ -1009,10 +1058,10 @@ def test_external_missing_skill_md_blocks(results, workdir):
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget",
                                                 nested_path="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
+        base, adopted=["widget"],
         # external-path points at the repo root, but SKILL.md actually
         # lives under widget/ — so root has no SKILL.md at all.
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
     results.check("external missing SKILL.md — apply fails", code != 0, out)
@@ -1026,13 +1075,51 @@ def test_external_name_mismatch_blocks(results, workdir):
     base = workdir / "external-name-mismatch"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="not-widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     code, out = run_updater(updater, ["--apply"],
                              git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
     results.check("external name mismatch — apply fails", code != 0, out)
     results.check("external name mismatch — reports it",
                   "does not match" in out, out)
+
+
+def test_external_descriptor_name_must_match_resolved_identity(results, workdir):
+    """A local external descriptor's own name must equal the external
+    skill name it resolves to — it is not a differently-named alias. This
+    fails closed at declaration-discovery time, in every mode (no network
+    or persistent mutation needed to detect it), distinct from the
+    upstream-side name check above."""
+    base = workdir / "external-descriptor-alias-blocked"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["mermaid-architect"],
+        adapters=[("mermaid-architect", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external descriptor alias — verify fails closed", code != 0, out)
+    results.check("external descriptor alias — names both identities",
+                  "mermaid-architect" in out and "widget" in out, out)
+    results.check("external descriptor alias — explains it is not an alias",
+                  "alias" in out, out)
+
+
+def test_external_descriptor_frontmatter_must_match_own_directory(results, workdir):
+    """A local external descriptor's own frontmatter `name` must match its
+    own directory — independent of, and checked before, whether it
+    resolves to a valid external identity at all."""
+    base = workdir / "external-descriptor-frontmatter-mismatch"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "skills" / "widget" / "SKILL.md",
+          adapter_skill_md("something-else", EXTERNAL_SOURCE, ext_commits[-1], "", "."))
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external descriptor frontmatter mismatch — verify fails closed",
+                  code != 0, out)
+    results.check("external descriptor frontmatter mismatch — names the directory",
+                  "widget" in out, out)
 
 
 def test_external_path_escape_blocks(results, workdir):
@@ -1041,8 +1128,8 @@ def test_external_path_escape_blocks(results, workdir):
     base = workdir / "external-path-escape"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", "../escape")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", "../escape")])
     code, out = run_updater(updater, ["--verify"])
     results.check("external path escape — verify fails closed", code != 0, out)
     results.check("external path escape — names the problem",
@@ -1058,8 +1145,8 @@ def test_proven_external_retained(results, workdir):
     base = workdir / "proven-retained"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     repo_entry, skill_entry = seed_external_repo(
         consumer_root, "example-owner/widget", EXTERNAL_SOURCE, ext_repo,
         ext_commits[-1], "widget")
@@ -1171,8 +1258,8 @@ def test_external_verify_offline_checks(results, workdir):
         base = workdir / f"external-verify-{case_name}"
         ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
         updater, upstream, commits, consumer_root = make_consumer(
-            base, adopted=["widget-adapter"],
-            adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+            base, adopted=["widget"],
+            adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
         repo_entry, skill_entry = seed_external_repo(
             consumer_root, "example-owner/widget", EXTERNAL_SOURCE, ext_repo,
             ext_commits[-1] if case_name != "wrong-head" else ext_commits[0],
@@ -1203,8 +1290,8 @@ def test_report_only_external_leaves_no_persistent_changes(results, workdir):
     base = workdir / "external-report-only"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     agents = consumer_root / ".agents"
     manifest_before = (agents / "infurnet-skills.manifest.json").read_text()
 
@@ -1367,8 +1454,8 @@ def test_stub_replaced_by_later_real_install(results, workdir):
     base = workdir / "stub-replaced"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
-        base, adopted=["widget-adapter"],
-        adapters=[("widget-adapter", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
     agents = consumer_root / ".agents"
     manifest_path = agents / "infurnet-skills.manifest.json"
     manifest_data = json.loads(manifest_path.read_text())
@@ -1438,6 +1525,8 @@ def main():
         test_external_release_mismatch_blocks(results, workdir)
         test_external_missing_skill_md_blocks(results, workdir)
         test_external_name_mismatch_blocks(results, workdir)
+        test_external_descriptor_name_must_match_resolved_identity(results, workdir)
+        test_external_descriptor_frontmatter_must_match_own_directory(results, workdir)
         test_external_path_escape_blocks(results, workdir)
         test_proven_external_retained(results, workdir)
         test_proven_external_removed_when_dropped(results, workdir)

@@ -289,7 +289,15 @@ def validate_external_declaration(skill_md, metadata):
 def discover_external_requirements(desired_names, source_root):
     """One requirement per currently-desired root skill that declares an
     external-source. Skills with no source in source_root are skipped —
-    missing_skill_sources() reports those separately."""
+    missing_skill_sources() reports those separately.
+
+    A local external descriptor installs the external skill of the same
+    name in its place — it is not a second, differently-named runtime
+    skill. Its own directory name, its own frontmatter `name`, and the
+    name its declaration resolves to must all identify the same skill;
+    any mismatch fails closed here, before the requirement is used for
+    anything, since it is a purely local, already-known-at-parse-time
+    inconsistency."""
     requirements = []
     for name in sorted(desired_names):
         skill_md = source_root / "skills" / name / "SKILL.md"
@@ -298,7 +306,19 @@ def discover_external_requirements(desired_names, source_root):
         metadata = read_external_metadata(skill_md)
         if metadata is None:
             continue
+        local_name = read_upstream_name(skill_md)
+        if local_name != name:
+            sys.exit(f"{skill_md}: frontmatter name {local_name!r} does not "
+                      f"match its directory {name!r}")
         decl = validate_external_declaration(skill_md, metadata)
+        exposed = exposed_name_for(decl["source"], decl["path"])
+        if exposed != name:
+            sys.exit(
+                f"{skill_md}: external descriptor {name!r} resolves to a "
+                f"different external skill name {exposed!r} — a local "
+                "external descriptor installs the external skill of the "
+                "same name, never a differently-named alias"
+            )
         requirements.append({"adapter": name, **decl})
     return requirements
 
@@ -875,14 +895,18 @@ def compute_external_state(adoption, manifest, source_root):
     ext_repos, repo_conflicts = dedupe_external_repos(requirements)
     ext_skills, skill_conflicts = dedupe_external_skills(requirements)
 
-    name_collisions = set(adoption["skills"]) & set(ext_skills)
-
     repo_status, skill_status = classify_prior_external(manifest, root_key_)
 
-    desired = {name: root_key_ for name in adoption["skills"]}
+    # A local external descriptor installs the external skill of the same
+    # name in its place — discover_external_requirements() already enforces
+    # that a requirement's exposed name equals its own declaring adapter's
+    # name, so ext_skills' keys are always a subset of adoption["skills"]
+    # naming their own declarer. This is never a root-vs-external
+    # collision: the external install simply supersedes the local
+    # descriptor's ownership of that one name.
+    desired = {name: root_key_ for name in adoption["skills"] if name not in ext_skills}
     for name, info in ext_skills.items():
-        if name not in name_collisions:
-            desired[name] = info["repo_key"]
+        desired[name] = info["repo_key"]
     # A name with prior unprovable/malformed status is pulled out of normal
     # reconciliation entirely, regardless of current desire — never silently
     # added/removed/retained. Only --resolve (apply) or the dedicated report
@@ -921,7 +945,7 @@ def compute_external_state(adoption, manifest, source_root):
 
     # For report splitting only: which names belong to the root section vs
     # the external section, independent of add/remove/unchanged/collision.
-    root_names = set(adoption["skills"]) | {
+    root_names = (set(adoption["skills"]) - set(ext_skills)) | {
         n for n, k in owned_for_categorize.items() if k == root_key_
     }
     ext_names = set(ext_skills) | {
@@ -943,7 +967,6 @@ def compute_external_state(adoption, manifest, source_root):
         "requirements": requirements,
         "ext_repos": ext_repos, "repo_conflicts": repo_conflicts,
         "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
-        "name_collisions": name_collisions,
         "repo_status": repo_status, "skill_status": skill_status,
         "added": added, "removed": removed, "unchanged": unchanged, "collision": collision,
         "root_names": root_names, "ext_names": ext_names,
@@ -995,11 +1018,6 @@ def verify_state(adoption, manifest):
         errors.append(f"skill installed but no longer declared: {name}")
     for name in sorted(state["collision"]):
         errors.append(f"skill collision: {name}")
-    for name in sorted(state["name_collisions"]):
-        errors.append(
-            f"skill collision: {name!r} desired by both the root library "
-            "and an external adapter"
-        )
     errors.extend(state["repo_conflicts"])
     errors.extend(state["skill_conflicts"])
     for name in missing_skill_sources(adoption["skills"], VENDOR):
@@ -1338,17 +1356,14 @@ def main():
             print("Retained:")
             for name in sorted(ext_unchanged):
                 print(f"  = {name}")
-        if ext_collision or state["name_collisions"] or state["skill_conflicts"]:
+        if ext_collision or state["skill_conflicts"]:
             print("Collisions (blocking):")
             for name in sorted(ext_collision):
                 print(f"  ! {name}")
-            for name in sorted(state["name_collisions"]):
-                print(f"  ! {name} (desired by both the root library and "
-                      "an external adapter)")
             for c in state["skill_conflicts"]:
                 print(f"  ! {c}")
         if not (ext_added or ext_removed or ext_unchanged or ext_collision
-                or state["name_collisions"] or state["skill_conflicts"]):
+                or state["skill_conflicts"]):
             print("  None")
 
         if state["malformed"] or state["orphan_malformed_repos"]:
@@ -1402,8 +1417,6 @@ def main():
             blocking = (
                 list(missing_sources)
                 + [f"skill collision: {n}" for n in sorted(root_collision | ext_collision)]
-                + [f"skill collision: {n!r} desired by both the root library "
-                   "and an external adapter" for n in sorted(state["name_collisions"])]
                 + list(state["repo_conflicts"])
                 + list(state["skill_conflicts"])
                 + [f"{n}: {r}" for n, r in sorted(upstream_findings.items())]

@@ -41,6 +41,7 @@ permit a deliverable, or change the assigned profile.
 | [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation |
 | [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline |
 | [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline |
+| [`design-doc-mermaid`](skills/design-doc-mermaid/SKILL.md) | External-skill descriptor for the pinned Mermaid construction skill |
 | [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) |
 | [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries |
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests |
@@ -132,6 +133,13 @@ dependencies; see Installation semantics.
   governance adopts it; installation alone confers none.
 * The repository's governance entry point declares where its bindings file
   lives; skills dereference bindings through it.
+* A skill with `external-*` metadata is an installation descriptor for the
+  external skill of the same name. Its `skills/<name>/` directory and
+  frontmatter `name` identify the runtime destination. The updater does not
+  materialize the local descriptor into `.agents/skills/<name>/`; it
+  installs the pinned upstream skill there instead. The resolved upstream
+  `SKILL.md` must declare the same name. External installation does not
+  create a second alias skill.
 
 ## Adoption contract
 

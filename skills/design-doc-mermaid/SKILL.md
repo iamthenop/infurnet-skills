@@ -1,6 +1,6 @@
 ---
 name: design-doc-mermaid
-description: "Infurnet Mermaid architecture standard. Governs Mermaid-specific diagram policy and installs the pinned external design-doc-mermaid construction skill."
+description: "Install the pinned external design-doc-mermaid skill."
 license: MIT
 metadata:
   skill-type: standard

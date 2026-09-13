@@ -221,6 +221,8 @@ BAD_GIT = [
     ("wrong-origin", lambda v, u, c: run_git(
         ["remote", "set-url", "origin", "https://example.invalid/x"], v),
      "origin mismatch"),
+    ("broken-index", lambda v, u, c: write(v / ".git" / "index", "garbage"),
+     "git status failed"),
 ]
 
 
@@ -266,6 +268,32 @@ def test_apply(results, workdir):
                   run_git(["status", "--porcelain"], vendor) == "", out)
 
 
+def test_tag(results, workdir):
+    """--apply pins an annotated tag to the commit it peels to, not the
+    tag object's own sha."""
+    root = workdir / "tag"
+    upstream, commits = make_repo(root / "upstream")
+    run_git(["tag", "-a", "v1", "-m", "v1", commits[-1]], upstream)
+
+    vendor_name_dir = root / "consumer" / ".agents" / "vendor" / "example"
+    vendor = vendor_name_dir / "infurnet-skills"
+    updater = vendor / "tools" / "update-skills.py"
+    write(updater, UPDATER.read_text())
+    write(vendor_name_dir / "infurnet-skills.manifest.json",
+          json.dumps(manifest(vendor, commits[0]), indent=2) + "\n")
+    write(root / "consumer" / "ADOPTION.md",
+          f"| Pinned commit             | `{commits[0]}` |\n"
+          f"| Source repository         | `{upstream}` |\n")
+
+    code, out = run_updater(updater, ["--apply", "--candidate", "v1"])
+    results.check("tag — apply exits zero", code == 0, out)
+    results.check("tag — HEAD equals the peeled commit",
+                  run_git(["rev-parse", "HEAD"], vendor) == commits[-1], out)
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check("tag — re-verify passes", code == 0, out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -280,6 +308,7 @@ def main():
         test_git(results, workdir)
         test_bad_git(results, workdir)
         test_apply(results, workdir)
+        test_tag(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

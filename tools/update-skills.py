@@ -128,7 +128,9 @@ def check_git(adoption):
         ["git", "-C", str(VENDOR), "status", "--porcelain"],
         capture_output=True, text=True,
     )
-    if status.stdout.strip():
+    if status.returncode != 0:
+        findings.append(f"git status failed: {status.stderr.strip()}")
+    elif status.stdout.strip():
         findings.append("vendor working tree is dirty")
 
     origin = subprocess.run(
@@ -202,13 +204,19 @@ def generate_manifest(tree_path, sha):
 
 def resolve_sha(repo_url, ref):
     result = subprocess.run(
-        ["git", "ls-remote", repo_url, ref, f"refs/tags/{ref}", f"refs/heads/{ref}"],
+        ["git", "ls-remote", repo_url, ref, f"refs/tags/{ref}",
+         f"refs/tags/{ref}^{{}}", f"refs/heads/{ref}"],
         capture_output=True, text=True,
     )
-    for line in result.stdout.splitlines():
-        sha, name = line.split("\t")
-        if not name.endswith("^{}"):
+    pairs = [line.split("\t") for line in result.stdout.splitlines()]
+    # An annotated tag resolves to its own object sha unless peeled; a
+    # `^{}` match is the commit that tag points at, which is what
+    # `git checkout <sha>` actually lands on, so prefer it when present.
+    for sha, name in pairs:
+        if name.endswith("^{}"):
             return sha
+    for sha, name in pairs:
+        return sha
     sys.exit(f"Could not resolve {ref!r} from {repo_url}")
 
 

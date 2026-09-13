@@ -352,13 +352,25 @@ def test_missing_adopted_source_fails(results, workdir):
 
 def test_materialize_adopted_skills(results, workdir):
     """--apply copies every adopted skill completely, exposes only adopted
-    skills, removes dropped ones, and preserves unrelated content."""
+    skills, removes dropped ones, preserves unrelated content, and leaves a
+    foreign-owned skill — plus its skill and repository manifest entries —
+    completely untouched, since root reconciliation owns only the current
+    repository's own entries."""
     updater, upstream, commits, consumer_root = make_consumer(
         workdir / "materialize", adopted=["alpha", "beta"],
-        previously_owned={"gamma": None})
+        previously_owned={"gamma": None, "delta": "someone-else/other-repo"})
     agents = consumer_root / ".agents"
     write(agents / "skills" / "scratch" / "README.md", "unrelated\n")
     scratch_before = (agents / "skills" / "scratch" / "README.md").read_text()
+
+    manifest_path = agents / "infurnet-skills.manifest.json"
+    manifest_data = json.loads(manifest_path.read_text())
+    manifest_data["repositories"]["someone-else/other-repo"] = {
+        "source": "https://example.invalid/other", "commit": "f" * 40,
+    }
+    write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+    delta_before = (agents / "skills" / "delta" / "SKILL.md").read_text()
+    delta_manifest_entry = manifest_data["skills"]["delta"]
 
     code, out = run_updater(updater, ["--apply"])
     results.check("materialize — apply exits zero", code == 0, out)
@@ -375,14 +387,29 @@ def test_materialize_adopted_skills(results, workdir):
         == (vendor / "skills" / "beta" / "references" / "notes.md").read_text(),
         out)
     results.check(
-        "materialize — only adopted (+ unrelated) skills exposed",
-        set(p.name for p in (agents / "skills").iterdir()) == {"alpha", "beta", "scratch"},
+        "materialize — only adopted (+ unrelated + foreign) skills exposed",
+        set(p.name for p in (agents / "skills").iterdir())
+        == {"alpha", "beta", "scratch", "delta"},
         out)
     results.check("materialize — dropped skill removed",
                   not (agents / "skills" / "gamma").exists(), out)
     results.check("materialize — unrelated content preserved",
                   (agents / "skills" / "scratch" / "README.md").read_text() == scratch_before,
                   out)
+    results.check("materialize — foreign skill content untouched",
+                  (agents / "skills" / "delta" / "SKILL.md").read_text() == delta_before,
+                  out)
+
+    new_manifest = json.loads(manifest_path.read_text())
+    results.check(
+        "materialize — foreign skill manifest entry preserved",
+        new_manifest.get("skills", {}).get("delta") == delta_manifest_entry, out)
+    results.check(
+        "materialize — foreign repository manifest entry preserved",
+        new_manifest.get("repositories", {}).get("someone-else/other-repo")
+        == {"source": "https://example.invalid/other", "commit": "f" * 40},
+        out)
+
     leftovers = [p.name for p in (agents / "skills").iterdir() if p.name.startswith(".")]
     results.check("materialize — no leftover tmp/backup dirs", not leftovers, out)
 
@@ -530,7 +557,8 @@ def test_release_must_resolve_to_commit(results, workdir):
 def test_candidate_report_is_read_only(results, workdir):
     """--candidate previews an unadopted ref's obligation diff but never
     mutates adoption.yml, the manifest, or installed state, and never
-    changes what a subsequent --apply installs."""
+    changes what a subsequent --apply installs; a candidate whose own
+    updater differs from the installed one warns before its diff."""
     updater, upstream, commits, consumer_root = make_consumer(
         workdir / "candidate", declared_commit_index=0)
     agents = consumer_root / ".agents"
@@ -557,6 +585,20 @@ def test_candidate_report_is_read_only(results, workdir):
     results.check(
         "candidate — installed HEAD equals declared commit, not the candidate ref",
         run_git(["rev-parse", "HEAD"], vendor) == commits[0], out)
+
+    # A candidate whose own update-skills.py differs from the installed one
+    # must warn before its diff is shown — checked regardless of whether the
+    # vendor tree itself already matches the declared pin.
+    updater2, upstream2, commits2, _ = make_consumer(workdir / "candidate-differing-updater")
+    write(upstream2 / "tools" / "update-skills.py",
+          UPDATER.read_text() + "\n# modified for test\n")
+    run_git(["add", "-A"], upstream2)
+    run_git(["commit", "-q", "-m", "modified updater"], upstream2)
+
+    code, out = run_updater(updater2, ["--candidate", "main"])
+    results.check("candidate — differing-updater run exits zero", code == 0, out)
+    results.check("candidate — differing-updater warning appears",
+                  "candidate ref ships a different" in out, out)
 
 
 def test_git_exclude_block(results, workdir):
@@ -640,12 +682,17 @@ UNSUPPORTED_ADOPTION_YAML = [
      + "\nbogus: value\nskills:\n"),
     ("block-scalar",
      "source: |\n  https://example.invalid/x\ncommit: " + "0" * 40 + "\nskills:\n"),
+    ("missing-skills-key",
+     "source: https://example.invalid/x\ncommit: " + "0" * 40 + "\n"),
 ]
 
 
 def test_adoption_yaml_rejects_unsupported_syntax(results, workdir):
     """read_adoption() fails closed on YAML constructs it doesn't support,
-    rather than partially interpreting them."""
+    rather than partially interpreting them — including an omitted
+    `skills:` key, which must fail rather than silently mean "adopt
+    nothing" (an explicit empty `skills:` block, exercised by every other
+    test's default fixture, stays valid)."""
     for name, text in UNSUPPORTED_ADOPTION_YAML:
         updater, _, _, consumer_root = make_consumer(workdir / f"adoption-yaml-{name}")
         write(consumer_root / ".agents" / "adoption.yml", text)

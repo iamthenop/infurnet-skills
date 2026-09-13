@@ -141,7 +141,7 @@ def read_adoption():
                       f"in value: {value!r}")
         fields[key] = _unquote(value)
 
-    for required in ("source", "commit"):
+    for required in ("source", "commit", "skills"):
         if required not in fields:
             sys.exit(f"{ADOPTION_YAML}: missing required field {required!r}")
 
@@ -311,7 +311,9 @@ def owned_from_manifest(manifest):
 def categorize_skills(desired, owned, current_repo_key):
     """One pass over desired | owned, classifying each name. A name in
     neither set is never visited, so unrelated .agents/skills/ content is
-    preserved by construction."""
+    preserved by construction. A name owned by a different repository and
+    no longer desired is not this root adoption's to remove — it's left in
+    none of the four buckets, so materialize/remove loops never touch it."""
     added, removed, unchanged, collision = set(), set(), set(), set()
     for name in desired | owned.keys():
         if name in desired and name in owned:
@@ -324,7 +326,7 @@ def categorize_skills(desired, owned, current_repo_key):
                 collision.add(name)
             else:
                 added.add(name)
-        else:
+        elif owned[name] == current_repo_key:
             removed.add(name)
     return added, removed, unchanged, collision
 
@@ -414,9 +416,29 @@ def swap_vendor_tree(fetched_tree):
     atomic_replace_dir(fetched_tree, VENDOR)
 
 
-def generate_manifest(adoption, candidate_sha, materialized_names):
+def generate_manifest(adoption, candidate_sha, materialized_names, previous_manifest):
+    """Root reconciliation regenerates only the current repository's own
+    entries. Every repository or skill entry recorded under a different
+    repository is carried forward unchanged, opaque, from the previous
+    manifest — this is what makes a foreign entry survive a root apply
+    alongside the deletion categorize_skills() already declines to do."""
     key = repo_key(adoption["repo"])
+
+    repositories = {}
     skills = {}
+    if previous_manifest:
+        prev_repositories = previous_manifest.get("repositories")
+        if isinstance(prev_repositories, dict):
+            for rkey, rinfo in prev_repositories.items():
+                if rkey != key:
+                    repositories[rkey] = rinfo
+        prev_skills = previous_manifest.get("skills")
+        if isinstance(prev_skills, dict):
+            for name, info in prev_skills.items():
+                if isinstance(info, dict) and info.get("repository") != key:
+                    skills[name] = info
+
+    repositories[key] = {"source": adoption["repo"], "commit": candidate_sha}
     for name in sorted(materialized_names):
         skills[name] = {
             "repository": key,
@@ -424,12 +446,7 @@ def generate_manifest(adoption, candidate_sha, materialized_names):
             "mode": "copy",
             "tree_hash": tree_hash(SKILLS_ROOT / name),
         }
-    return {
-        "repositories": {
-            key: {"source": adoption["repo"], "commit": candidate_sha},
-        },
-        "skills": skills,
-    }
+    return {"repositories": repositories, "skills": skills}
 
 
 def generated_paths(materialized_names):
@@ -672,6 +689,16 @@ def main():
             print(f"Resolves to: {candidate_sha[:12]}")
             candidate_tree = fetch_tree(adoption["repo"], candidate_sha, VENDOR)
             try:
+                newer_updater = differing_candidate_updater(candidate_tree)
+                if newer_updater is not None:
+                    print(
+                        "\n  NOTE: the candidate ref ships a different\n"
+                        "  update-skills.py, and this preview comes from the\n"
+                        "  installed one. It may omit changes only the candidate\n"
+                        "  updater can see. Read that script's diff before\n"
+                        "  deciding whether to adopt this candidate."
+                    )
+
                 print_tree_diff(collect_governed(effective_vendor),
                                  collect_governed(candidate_tree))
             finally:
@@ -743,7 +770,7 @@ def main():
 
             materialized_names = added | unchanged
             candidate_manifest = generate_manifest(
-                adoption, adoption["pin"], materialized_names
+                adoption, adoption["pin"], materialized_names, manifest
             )
 
             print("6. Verifying resulting state...")

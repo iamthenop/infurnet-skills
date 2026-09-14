@@ -201,17 +201,17 @@ def valid_skill_name(name):
     return bool(name) and len(name) <= 64 and SKILL_NAME_RE.fullmatch(name) is not None
 
 
-def read_external_metadata(skill_md):
-    """Narrow, fail-closed extraction of the external-* keys from a
-    SKILL.md's frontmatter `metadata:` block. Returns None when the skill
-    declares no external-source at all. An external-* key present with
-    unsupported YAML syntax, or duplicated, is a hard error — this
-    declaration is never partially interpreted. Other metadata keys and
-    their values are not inspected; validating the full skill frontmatter
-    is validate.py's job, not the runtime installer's."""
+def read_metadata_keys(skill_md, keys):
+    """Narrow, fail-closed extraction of specific keys from a SKILL.md's
+    frontmatter `metadata:` block. Returns {key: value} for whichever of
+    `keys` are actually present. A requested key present with unsupported
+    YAML syntax, or duplicated, is a hard error — never partially
+    interpreted. Other metadata keys and their values are not inspected;
+    validating the full skill frontmatter is validate.py's job, not the
+    runtime installer's."""
     fm = frontmatter_block(skill_md.read_text())
     if fm is None:
-        return None
+        return {}
 
     metadata = {}
     in_metadata = False
@@ -224,7 +224,7 @@ def read_external_metadata(skill_md):
                 if not m:
                     sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
                 key, value = m.group(1), m.group(2).strip()
-                if key in EXTERNAL_KEYS:
+                if key in keys:
                     if value and value[0] in "&*|>{[":
                         sys.exit(f"{skill_md}:{lineno}: unsupported YAML syntax "
                                   f"in {key!r}: {value!r}")
@@ -236,12 +236,65 @@ def read_external_metadata(skill_md):
         if re.match(r"^metadata:\s*$", raw):
             in_metadata = True
 
+    return metadata
+
+
+def read_external_metadata(skill_md):
+    """Narrow, fail-closed extraction of the external-* keys. Returns None
+    when the skill declares no external-source at all."""
+    metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS)
     if not any(k in metadata for k in EXTERNAL_KEYS):
         return None
     if "external-source" not in metadata:
         sys.exit(f"{skill_md}: external-commit/-release/-path present "
                   "without external-source")
     return metadata
+
+
+def read_skill_dependencies(skill_md):
+    """Sibling skill names from the skill-dependency metadata field,
+    comma-separated — mirrors tools/validate.py's own check_dependencies
+    parsing exactly. Returns an empty list when absent."""
+    metadata = read_metadata_keys(skill_md, ("skill-dependency",))
+    raw = metadata.get("skill-dependency") or ""
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def resolve_installation_closure(direct_names, source_root):
+    """Recursively expands skill-dependency from the consumer's directly
+    adopted names, reading from source_root — the pinned Infurnet source
+    tree the caller is already using, never a previously materialized
+    consumer directory. Returns the full installation closure as a set;
+    adoption.yml itself is never touched, and closure is never written
+    back to it. Fails closed (before any persistent mutation, in every
+    mode) on a dependency whose sibling skill source does not exist, or on
+    a skill-dependency cycle — both purely local, discoverable-by-
+    inspection problems, matching the same fail-closed philosophy as
+    validate_external_declaration(). A directly adopted name with no
+    source is not an error here — missing_skill_sources() reports that
+    separately, exactly as before dependency closure existed."""
+    closure = set()
+
+    def visit(name, chain):
+        if name in chain:
+            cycle = chain[chain.index(name):] + [name]
+            sys.exit(f"skill-dependency cycle: {' -> '.join(cycle)}")
+        if name in closure:
+            return
+        closure.add(name)
+        skill_md = source_root / "skills" / name / "SKILL.md"
+        if not skill_md.is_file():
+            return
+        for dep in read_skill_dependencies(skill_md):
+            dep_md = source_root / "skills" / dep / "SKILL.md"
+            if not dep_md.is_file():
+                sys.exit(f"{skill_md}: skill-dependency names missing skill {dep!r}")
+            visit(dep, chain + [name])
+
+    for name in sorted(direct_names):
+        visit(name, [])
+
+    return closure
 
 
 def validate_external_declaration(skill_md, metadata):
@@ -883,15 +936,17 @@ def update_git_exclude(paths):
 
 def compute_external_state(adoption, manifest, source_root):
     """Everything report/apply/verify need to reconcile external state:
-    discovered requirements, deduped repository/skill requirements (with
-    blocking conflict findings), prior non-root manifest classification
-    (proven/unprovable/malformed), and the unified add/remove/unchanged/
-    collision sets across root and external names together. Fully local
-    and offline when source_root is the currently-installed VENDOR;
-    reads a freshly fetched tree during report/apply when the root vendor
-    itself doesn't yet match its declared pin."""
+    the resolved skill-dependency installation closure, discovered
+    requirements, deduped repository/skill requirements (with blocking
+    conflict findings), prior non-root manifest classification (proven/
+    unprovable/malformed), and the unified add/remove/unchanged/collision
+    sets across root and external names together. Fully local and offline
+    when source_root is the currently-installed VENDOR; reads a freshly
+    fetched tree during report/apply when the root vendor itself doesn't
+    yet match its declared pin."""
     root_key_ = repo_key(adoption["repo"])
-    requirements = discover_external_requirements(adoption["skills"], source_root)
+    closure = resolve_installation_closure(adoption["skills"], source_root)
+    requirements = discover_external_requirements(closure, source_root)
     ext_repos, repo_conflicts = dedupe_external_repos(requirements)
     ext_skills, skill_conflicts = dedupe_external_skills(requirements)
 
@@ -900,11 +955,11 @@ def compute_external_state(adoption, manifest, source_root):
     # A local external descriptor installs the external skill of the same
     # name in its place — discover_external_requirements() already enforces
     # that a requirement's exposed name equals its own declaring adapter's
-    # name, so ext_skills' keys are always a subset of adoption["skills"]
+    # name, so ext_skills' keys are always a subset of the resolved closure
     # naming their own declarer. This is never a root-vs-external
     # collision: the external install simply supersedes the local
     # descriptor's ownership of that one name.
-    desired = {name: root_key_ for name in adoption["skills"] if name not in ext_skills}
+    desired = {name: root_key_ for name in closure if name not in ext_skills}
     for name, info in ext_skills.items():
         desired[name] = info["repo_key"]
     # A name with prior unprovable/malformed status is pulled out of normal
@@ -945,7 +1000,7 @@ def compute_external_state(adoption, manifest, source_root):
 
     # For report splitting only: which names belong to the root section vs
     # the external section, independent of add/remove/unchanged/collision.
-    root_names = (set(adoption["skills"]) - set(ext_skills)) | {
+    root_names = (closure - set(ext_skills)) | {
         n for n, k in owned_for_categorize.items() if k == root_key_
     }
     ext_names = set(ext_skills) | {
@@ -964,6 +1019,7 @@ def compute_external_state(adoption, manifest, source_root):
 
     return {
         "root_key": root_key_,
+        "closure": closure,
         "requirements": requirements,
         "ext_repos": ext_repos, "repo_conflicts": repo_conflicts,
         "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
@@ -1020,7 +1076,7 @@ def verify_state(adoption, manifest):
         errors.append(f"skill collision: {name}")
     errors.extend(state["repo_conflicts"])
     errors.extend(state["skill_conflicts"])
-    for name in missing_skill_sources(adoption["skills"], VENDOR):
+    for name in missing_skill_sources(state["closure"], VENDOR):
         errors.append(f"declared skill has no source: {name}")
     for name in sorted(state["unresolved"]):
         errors.append(f"unresolved external state for {name!r}: "
@@ -1284,7 +1340,7 @@ def main():
             print(f"\n  FAIL: {release_error}")
 
         state = compute_external_state(adoption, manifest, effective_vendor)
-        missing_sources = missing_skill_sources(adoption["skills"], effective_vendor)
+        missing_sources = missing_skill_sources(state["closure"], effective_vendor)
         ext_release_errors = check_external_releases(state["requirements"])
 
         root_added = state["added"] & state["root_names"]

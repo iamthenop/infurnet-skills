@@ -83,12 +83,30 @@ def adapter_skill_md(name, source, commit, release="", path="."):
     )
 
 
-def make_repo(root, adapters=()):
+def dependent_skill_md(name, dep_names):
+    """A plain root-library skill declaring skill-dependency on siblings —
+    no external-* metadata of its own."""
+    return (
+        "---\n"
+        f"name: {name}\n"
+        "description: Dependent.\n"
+        "license: MIT\n"
+        "metadata:\n"
+        "  skill-type: standard\n"
+        f"  skill-dependency: {','.join(dep_names)}\n"
+        "---\n"
+        "Dependent.\n"
+    )
+
+
+def make_repo(root, adapters=(), dependents=()):
     """A local git repo carrying the real update-skills.py, two fixture
     skills (alpha, beta — beta with a references/ subdir), an optional set
-    of external-adapter skills, and a README, across two commits on
-    `main`. `adapters` is an iterable of (name, source, commit, release,
-    path) tuples. Returns (root, [first_sha, second_sha])."""
+    of external-adapter skills, an optional set of plain skills declaring
+    skill-dependency, and a README, across two commits on `main`.
+    `adapters` is an iterable of (name, source, commit, release, path)
+    tuples. `dependents` is an iterable of (name, [dep_names]) pairs.
+    Returns (root, [first_sha, second_sha])."""
     root.mkdir(parents=True, exist_ok=True)
     root = root.resolve()
     run_git(["init", "-q"], root)
@@ -100,6 +118,8 @@ def make_repo(root, adapters=()):
     for name, source, commit, release, path in adapters:
         write(root / "skills" / name / "SKILL.md",
               adapter_skill_md(name, source, commit, release, path))
+    for name, dep_names in dependents:
+        write(root / "skills" / name / "SKILL.md", dependent_skill_md(name, dep_names))
     run_git(["add", "-A"], root)
     run_git(["commit", "-q", "-m", "first"], root)
     first = run_git(["rev-parse", "HEAD"], root)
@@ -167,7 +187,8 @@ def checkout(upstream, dest, sha):
 
 
 def make_consumer(root, adopted=(), previously_owned=None, release=None,
-                   declared_commit_index=-1, change=None, adapters=()):
+                   declared_commit_index=-1, change=None, adapters=(),
+                   dependents=()):
     """A consumer whose vendor tree is a real git checkout. `adopted` is the
     list of skill names declared in adoption.yml. `previously_owned` is a
     {name: repository} map seeded into the manifest, independent of
@@ -178,12 +199,11 @@ def make_consumer(root, adopted=(), previously_owned=None, release=None,
     fixture commits adoption.yml declares (and the vendor is checked out
     at) — -1 the tip, 0 the first commit. `change(vendor, upstream, commits)`,
     if given, disturbs the checkout afterward (e.g. to build a stale vendor
-    tree for apply/swap tests). `adapters` is passed through to make_repo
-    for root-library skills declaring external-* metadata.
-    `external_manifest`, if given, is a (repositories: dict, skills: dict)
-    pair merged into the seeded manifest — e.g. from seed_external_repo().
+    tree for apply/swap tests). `adapters` and `dependents` are passed
+    through to make_repo for root-library skills declaring external-*
+    metadata or skill-dependency, respectively.
     Returns (updater_path, upstream, commits, consumer_root)."""
-    upstream, commits = make_repo(root / "upstream", adapters=adapters)
+    upstream, commits = make_repo(root / "upstream", adapters=adapters, dependents=dependents)
     sha = commits[declared_commit_index]
     consumer_root = root / "consumer"
     agents_root = consumer_root / ".agents"
@@ -1487,6 +1507,116 @@ def test_stub_replaced_by_later_real_install(results, workdir):
                   (vendor / ".git").is_dir(), out)
 
 
+# --- skill-dependency installation closure --------------------------------
+
+
+def test_skill_dependency_resolves_external_descriptor(results, workdir):
+    """End-to-end: adoption.yml names only 'design-docs'; its
+    skill-dependency on 'design-doc-mermaid' — itself a same-name external
+    descriptor — is resolved through closure and installs the pinned
+    upstream skill, without design-doc-mermaid ever needing to be listed
+    directly in adoption.yml. Report-only reflects the same closure without
+    mutating anything; --apply then installs it for real."""
+    base = workdir / "skill-dependency-external"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="design-doc-mermaid")
+    mermaid_source = "https://github.com/example-owner/design-doc-mermaid"
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["design-docs"],
+        adapters=[("design-doc-mermaid", mermaid_source, ext_commits[-1], "", ".")],
+        dependents=[("design-docs", ["design-doc-mermaid"])])
+    agents = consumer_root / ".agents"
+    adoption_before = (agents / "adoption.yml").read_text()
+
+    code, out = run_updater(updater, [], git_rewrites={mermaid_source: str(ext_repo)})
+    results.check("skill-dependency external — report exits zero", code == 0, out)
+    results.check("skill-dependency external — report names the dependency",
+                  "design-doc-mermaid" in out, out)
+    results.check("skill-dependency external — report mutates nothing",
+                  not (agents / "skills" / "design-docs").exists()
+                  and not (agents / "skills" / "design-doc-mermaid").exists()
+                  and (agents / "adoption.yml").read_text() == adoption_before,
+                  out)
+
+    code, out = run_updater(updater, ["--apply"], git_rewrites={mermaid_source: str(ext_repo)})
+    results.check("skill-dependency external — apply exits zero", code == 0, out)
+    results.check("skill-dependency external — design-docs installed",
+                  (agents / "skills" / "design-docs" / "SKILL.md").is_file(), out)
+
+    installed = (agents / "skills" / "design-doc-mermaid" / "SKILL.md").read_text()
+    results.check("skill-dependency external — design-doc-mermaid is upstream content",
+                  installed == (ext_repo / "SKILL.md").read_text(), out)
+    root_vendor = agents / "vendor" / "example" / "infurnet-skills"
+    local_descriptor = (root_vendor / "skills" / "design-doc-mermaid" / "SKILL.md").read_text()
+    results.check(
+        "skill-dependency external — not the local descriptor",
+        installed != local_descriptor and "external-source" not in installed, out)
+
+    results.check("skill-dependency external — adoption.yml still names only design-docs",
+                  (agents / "adoption.yml").read_text() == adoption_before, out)
+
+    manifest = json.loads((agents / "infurnet-skills.manifest.json").read_text())
+    root_key_ = repo_key(str(upstream))
+    results.check(
+        "skill-dependency external — design-docs owned by root",
+        manifest["skills"].get("design-docs", {}).get("repository") == root_key_, out)
+    results.check(
+        "skill-dependency external — design-doc-mermaid owned by external repository",
+        manifest["skills"].get("design-doc-mermaid", {}).get("repository")
+        == "example-owner/design-doc-mermaid", out)
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "skill-dependency external — verify passes without a direct adoption.yml entry",
+        code == 0, out)
+
+
+def test_skill_dependency_transitive_chain(results, workdir):
+    """A -> B -> C: adopting only the root installs the full chain, each
+    name appearing once."""
+    updater, upstream, commits, consumer_root = make_consumer(
+        workdir / "dependency-chain", adopted=["chain-a"],
+        dependents=[("chain-a", ["chain-b"]), ("chain-b", ["chain-c"]), ("chain-c", [])])
+    code, out = run_updater(updater, ["--apply"])
+    results.check("dependency chain — apply exits zero", code == 0, out)
+    agents = consumer_root / ".agents"
+    for name in ("chain-a", "chain-b", "chain-c"):
+        results.check(f"dependency chain — {name} installed",
+                      (agents / "skills" / name / "SKILL.md").is_file(), out)
+
+
+def test_skill_dependency_missing_blocks(results, workdir):
+    """A dependency whose sibling skill source does not exist blocks
+    before any mutation, naming both the depending skill and the missing
+    dependency."""
+    updater, upstream, commits, consumer_root = make_consumer(
+        workdir / "dependency-missing", adopted=["chain-a"],
+        dependents=[("chain-a", ["nonexistent-dep"])])
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    before = manifest_path.read_text() if manifest_path.exists() else None
+    code, out = run_updater(updater, ["--apply"])
+    results.check("dependency missing — apply fails", code != 0, out)
+    results.check("dependency missing — names the depending skill",
+                  "chain-a" in out, out)
+    results.check("dependency missing — names the missing dependency",
+                  "nonexistent-dep" in out, out)
+    after = manifest_path.read_text() if manifest_path.exists() else None
+    results.check("dependency missing — manifest unchanged", after == before, out)
+
+
+def test_skill_dependency_cycle_blocks(results, workdir):
+    """A skill-dependency cycle blocks before mutation and reports the
+    cycle path rather than hanging or silently truncating the graph."""
+    updater, upstream, commits, consumer_root = make_consumer(
+        workdir / "dependency-cycle", adopted=["chain-a"],
+        dependents=[("chain-a", ["chain-b"]), ("chain-b", ["chain-a"])])
+    code, out = run_updater(updater, ["--apply"])
+    results.check("dependency cycle — apply fails", code != 0, out)
+    results.check("dependency cycle — reports the cycle",
+                  "cycle" in out.lower() and "chain-a" in out and "chain-b" in out, out)
+    results.check("dependency cycle — nothing materialized",
+                  not (consumer_root / ".agents" / "skills" / "chain-a").exists(), out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -1539,6 +1669,10 @@ def main():
         test_stub_hand_edit_fails_verify(results, workdir)
         test_stub_survives_unrelated_apply(results, workdir)
         test_stub_replaced_by_later_real_install(results, workdir)
+        test_skill_dependency_resolves_external_descriptor(results, workdir)
+        test_skill_dependency_transitive_chain(results, workdir)
+        test_skill_dependency_missing_blocks(results, workdir)
+        test_skill_dependency_cycle_blocks(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

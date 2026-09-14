@@ -67,6 +67,7 @@ assigned profile and the accepted work.
 | [`plan-review`](skills/plan-review/SKILL.md) | Work plan verdict before execution begins |
 | [`project-bindings`](skills/project-bindings/SKILL.md) | Repository bindings file authoring |
 | [`schema-design`](skills/schema-design/SKILL.md) | Initialization ordering, strata, destructive changes |
+| [`skill-installer`](skills/skill-installer/SKILL.md) | Bootstrap, install, and reconcile adopted Agent Skills |
 | [`tester-report`](skills/tester-report/SKILL.md) | Tester validation evidence and findings |
 | [`user-docs`](skills/user-docs/SKILL.md) | Task-oriented user documentation |
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary |

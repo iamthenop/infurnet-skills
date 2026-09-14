@@ -4,8 +4,8 @@
 for coding-agent governance. The library supplies agent profiles, conformance
 standards, and deliverable procedures. It is project-neutral and MIT-licensed.
 
-Every governed skill belongs to one of three skill types: `profile`,
-`standard`, or `deliverable`. Skill content acquires authority only when
+Every Infurnet skill belongs to exactly one skill type: `profile`, `standard`,
+`deliverable`, or `external`. Skill content acquires authority only when
 adopted by consuming repository governance. Installation or native triggering
 does not independently authorize work or mutation.
 
@@ -72,13 +72,24 @@ assigned profile and the accepted work.
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary |
 | [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents |
 
+## Externals
+
+An `external` declares an independently maintained Agent Skill that
+installation must make available. It carries acquisition and provenance
+only. It does not grant authority, constrain work as a standard, define a
+deliverable, or define how a consuming skill uses it.
+
+| External | Governs |
+| --- | --- |
+| [`design-doc-mermaid`](skills/design-doc-mermaid/SKILL.md) | Pinned external Mermaid construction skill |
+
 ## Layout
 
 Every skill uses one Agent Skills format, whatever its skill type:
 
 | Template | Description |
 | --- | --- |
-| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
+| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode, or an external provenance declaration |
 | `skills/<name>/references` | optional bundled templates and reference material |
 
 ## Skill metadata
@@ -89,7 +100,7 @@ select a profile.
 
 | Field | Meaning |
 | --- | --- |
-| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, or `deliverable`. |
+| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, `deliverable`, or `external`. |
 | `skill-dependency` | Comma-separated sibling skills that must be installed with this skill. Dependencies do not grant authority and must not introduce a profile. |
 | `infurnet-compat` | Comma-separated compatibility tags for the requirements stated by the top-level `compatibility` field. It does not select or load a skill. |
 | `prose-setting` | For a deliverable, names the prose complexity setting for prose produced under that deliverable. It does not classify the `SKILL.md` instruction text itself. |
@@ -99,9 +110,11 @@ in the canonical table at
 [`skills/prose-discipline/references/complexity-settings.md`](skills/prose-discipline/references/complexity-settings.md).
 Numeric limits and allowed names live in that reference.
 
-`skill-dependency` describes installation closure, not standard applicability.
-Applicable standards still come from the assigned profile, selected
-deliverable, accepted work, or consuming repository governance.
+`skill-dependency` describes installation closure only. The consuming skill's
+body defines how a dependency is used. For a required standard, applicable
+standards still come from the assigned profile, selected deliverable,
+accepted work, or consuming repository governance — never from another
+skill's `skill-dependency` alone.
 
 ## Consuming
 
@@ -132,17 +145,23 @@ dependencies; see Installation semantics.
   governance adopts it; installation alone confers none.
 * The repository's governance entry point declares where its bindings file
   lives; skills dereference bindings through it.
+* A skill with `external-*` metadata is an installation descriptor for the
+  external skill of the same name. Its `skills/<name>/` directory and
+  frontmatter `name` identify the runtime destination. The updater does not
+  materialize the local descriptor into `.agents/skills/<name>/`; it
+  installs the pinned upstream skill there instead. The resolved upstream
+  `SKILL.md` must declare the same name. External installation does not
+  create a second alias skill.
 
 ## Adoption contract
 
-A consuming repository records its adoption in an `ADOPTION.md` at its
-governance-declared location, copied from this repository's
-[`ADOPTION.md`](ADOPTION.md) template. The manifest pins a cryptographically
-exact source commit; a governance dependency must not follow a mutable
-checkout or floating `main`.
+A consuming repository records its adoption in `.agents/adoption.yml`,
+copied from this repository's [`adoption.yml`](adoption.yml) template. The
+declaration pins a cryptographically exact source commit; a governance
+dependency must not follow a mutable checkout or floating `main`.
 
-During R3, the adoption manifest records installed skills of any skill type in
-its installed-skills field.
+The adoption declaration records installed skills of any skill type in its
+`skills` field.
 
 Updating the pin follows six steps:
 
@@ -158,9 +177,121 @@ repository from its own file location. Install head's updater only after
 approval.
 
 When head moves governed files between paths, run head's updater from inside
-the consuming repository before approval. This follows the update procedure in
-[`ADOPTION.md`](ADOPTION.md); without that run, the obligation report omits
-every moved file.
+the consuming repository before approval; without that run, the obligation
+report omits every moved file.
+
+## Adoption and installation
+
+The adoption declaration is a consuming repository's durable statement of
+intent, at `.agents/adoption.yml`. `update-skills.py` reads it and never
+writes to it — moving the pin means editing this file directly, in the
+consumer's own commit, before running `--apply`.
+
+Skill materialization under `.agents/skills/<skill-name>/`, external
+repository acquisition for adopted external descriptors, and the
+installation manifest at `.agents/infurnet-skills.manifest.json` are live.
+External repositories are acquired under
+`.agents/vendor/<owner>/<repository>/` and external skills use copy
+materialization. The existing root Infurnet vendor checkout
+has not yet migrated to the two-segment owner/repository path. Symlink
+materialization remains planned and is not implemented.
+
+### Adoption declaration
+
+`.agents/adoption.yml` records:
+
+```yaml
+source: https://github.com/iamthenop/infurnet-skills
+commit: 0123456789abcdef0123456789abcdef01234567
+release: ""
+skills:
+  - designer
+  - design-docs
+  - prose-discipline
+```
+
+| Field | Meaning |
+| --- | --- |
+| `source` | Canonical repository URL for the adopted root skill library. |
+| `commit` | Immutable machine reference and the authoritative revision. |
+| `release` | Optional human-friendly release identity. May be blank; when present, it must resolve to `commit`. |
+| `skills` | Skills the consumer intends to install. |
+
+### Installation state
+
+`.agents/` is a shared integration surface and is not owned by
+`infurnet-skills`.
+
+The adoption declaration at `.agents/adoption.yml` is durable,
+consumer-owned configuration. Content installed by `infurnet-skills` beneath
+`.agents/` is reconstructable installation state. Generated installation
+state is not durable consumer project state.
+
+### Installation surfaces
+
+Content that `infurnet-skills` installs beneath `.agents/` divides into two
+surfaces:
+
+```text
+.agents/vendor/<owner>/<repository>/
+.agents/skills/<skill-name>/
+```
+
+`vendor/` records acquired repository sources; each `<owner>/<repository>`
+directory is a vendor. `skills/` exposes installed Agent Skills to clients;
+each `<skill-name>` directory is a materialized skill — an installed
+discovery copy or link.
+
+A canonical repository URL maps mechanically to the vendor namespace:
+
+```text
+https://github.com/SpillwaveSolutions/design-doc-mermaid
+    ->
+.agents/vendor/SpillwaveSolutions/design-doc-mermaid/
+```
+
+### External descriptors
+
+A local skill declaring `skill-type: external` is the acquisition and
+provenance declaration for the upstream skill of the same name — not a
+dependency relationship, and not the upstream skill's own content. It
+records that declaration in frontmatter `metadata`:
+
+```yaml
+metadata:
+  skill-type: external
+  external-source: "https://github.com/SpillwaveSolutions/design-doc-mermaid"
+  external-commit: "<full-sha>"
+  external-release: ""
+  external-path: "."
+```
+
+| Field | Meaning |
+| --- | --- |
+| `external-source` | Canonical repository URL of the external skill source. |
+| `external-commit` | Immutable machine reference for the external source; the authoritative external revision. |
+| `external-release` | Optional human-friendly external version identity. May be blank. |
+| `external-path` | Repository-relative path to the skill; `.` is the repository root. |
+
+An external descriptor does not itself expand installation closure; that is
+`skill-dependency`'s role (see Installation semantics). It grants no
+authority to the external skill and does not change profile, deliverable, or
+governance authority.
+
+### Generated state and consumer boundaries
+
+* An installer-created materialized skill is generated state. A consumer
+  does not edit it as durable source.
+* `.agents/infurnet-skills.manifest.json` is generated installation state
+  that `update-skills.py` owns. It records the last successfully installed
+  state, not the declaration of desired adoption. It is not an authority
+  source, and this document does not finalize its schema.
+* A consuming repository owns its own Git tracking policy for `.agents/`.
+  `infurnet-skills` does not add `/.agents/` to a consumer `.gitignore`.
+* A consumer may ignore reconstructable Agent Skills installation state
+  beneath `.agents/` when that state can be reproduced from durable
+  configuration. `infurnet-skills` does not claim unrelated `.agents/`
+  content or add `/.agents/` wholesale to a consumer `.gitignore`.
 
 ## License
 

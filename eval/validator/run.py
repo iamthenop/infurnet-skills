@@ -36,6 +36,22 @@ metadata:
 Fixture skill body.
 """
 
+# Like SKILL, but with room to inject extra metadata lines into one skill —
+# shared by every fixture builder that varies a single skill's metadata.
+SKILL_WITH_METADATA = """\
+---
+name: {name}
+description: "{description}"
+license: MIT
+metadata:
+  skill-type: {skill_type}
+{extra}---
+
+# {name}
+
+Fixture skill body.
+"""
+
 # Every profile states both composition sections. The validator distinguishes
 # three dispositions, and the fixtures below exercise all three: the section
 # absent, present and explicitly empty, and present carrying table rows.
@@ -60,6 +76,8 @@ EMPTY_COMPOSITION = (
 
 # The validator reads a row's skill type from the section it sits under, so
 # the fixture carries all three sections even though it declares no standard.
+# Alpha's row sits under Deliverables or Externals depending on its declared
+# skill-type, so the row itself is a format slot rather than a fixed line.
 README = """\
 # Fixture repository
 
@@ -78,9 +96,16 @@ README = """\
 
 | Deliverable | Governs |
 | --- | --- |
-| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
-| [`beta`](skills/beta/SKILL.md) | Fixture deliverable |
-"""
+{alpha_deliverable_row}| [`beta`](skills/beta/SKILL.md) | Fixture deliverable |
+
+## Externals
+
+| External | Governs |
+| --- | --- |
+{alpha_external_row}"""
+
+ALPHA_DELIVERABLE_ROW = "| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |\n"
+ALPHA_EXTERNAL_ROW = "| [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |\n"
 
 
 def write(path, text):
@@ -88,12 +113,15 @@ def write(path, text):
     path.write_text(text)
 
 
-def build_repo(root, alpha_description, profile_description):
-    """Create a minimal repository the validator accepts, then vary descriptions."""
+def build_repo(root, alpha_description, profile_description, alpha_extra="",
+               alpha_skill_type="deliverable"):
+    """Create a minimal repository the validator accepts, then vary
+    descriptions, alpha's skill-type, and (optionally) alpha's extra
+    metadata lines. Alpha's README row follows its skill-type."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
     write(root / "skills" / "alpha" / "SKILL.md",
-          SKILL.format(name="alpha", description=alpha_description,
-                         skill_type="deliverable"))
+          SKILL_WITH_METADATA.format(name="alpha", description=alpha_description,
+                                     skill_type=alpha_skill_type, extra=alpha_extra))
     write(root / "skills" / "beta" / "SKILL.md",
           SKILL.format(name="beta", description=BETA,
                          skill_type="deliverable"))
@@ -101,7 +129,9 @@ def build_repo(root, alpha_description, profile_description):
           SKILL.format(name="fixture-profile",
                          description=profile_description,
                          skill_type="profile") + EMPTY_COMPOSITION)
-    write(root / "README.md", README)
+    write(root / "README.md", README.format(
+        alpha_deliverable_row=ALPHA_DELIVERABLE_ROW if alpha_skill_type != "external" else "",
+        alpha_external_row=ALPHA_EXTERNAL_ROW if alpha_skill_type == "external" else ""))
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
     write(root / "eval" / "triggers.md", "# Fixture triggers\n")
@@ -158,6 +188,148 @@ def distinct_descriptions_are_accepted(results, workdir):
     )
 
 
+# --- external skill metadata fixtures -------------------------------------
+# A skill becomes external when it declares external-source; external-commit,
+# external-release and external-path are meaningless without it. Every case
+# below is expressed as alpha's extra frontmatter metadata lines, reusing
+# build_repo rather than a second fixture-repository concept.
+EXTERNAL_SOURCE = "https://github.com/owner/repository"
+EXTERNAL_COMMIT = "a" * 40
+SOURCE_LINE = f"  external-source: '{EXTERNAL_SOURCE}'\n"
+COMMIT_LINE = f"  external-commit: '{EXTERNAL_COMMIT}'\n"
+SOURCE_AND_COMMIT = SOURCE_LINE + COMMIT_LINE
+
+CANONICAL_SOURCE_MSG = "external-source must be a canonical GitHub repository URL"
+HEX_COMMIT_MSG = "external-commit must be exactly 40 hexadecimal characters"
+NORMALIZED_PATH_MSG = "external-path must be '.' or a normalized POSIX"
+
+# Each non-canonical source form the contract explicitly rejects.
+NON_CANONICAL_SOURCES = [
+    ("ssh form", "git@github.com:owner/repository"),
+    ("http scheme", "http://github.com/owner/repository"),
+    (".git suffix", "https://github.com/owner/repository.git"),
+    ("trailing slash", "https://github.com/owner/repository/"),
+    ("query string", "https://github.com/owner/repository?ref=main"),
+    ("fragment", "https://github.com/owner/repository#readme"),
+    ("extra path segment", "https://github.com/owner/repository/extra"),
+]
+
+# Each malformed commit form: too short, empty, non-hex, or branch/tag text.
+MALFORMED_COMMITS = [
+    ("short commit", "abc123"),
+    ("empty commit", ""),
+    ("non-hex commit", "g" * 40),
+    ("branch/tag text", "main"),
+]
+
+# Every malformed external-path form the contract lists by name.
+MALFORMED_PATHS = [
+    ("empty path", ""),
+    ("absolute path", "/skills/example"),
+    ("leading ./", "./skills/example"),
+    ("embedded .", "skills/./example"),
+    ("..", "../example"),
+    ("double separator", "skills//example"),
+    ("trailing separator", "skills/example/"),
+    ("backslash separator", "skills\\example"),
+]
+
+# Each entry: label, alpha's extra metadata lines, whether it must validate,
+# and (for rejections) every substring the output must contain.
+EXTERNAL_CASES = [
+    # accepted
+    ("no external metadata", "", True, ()),
+    ("source + valid commit", SOURCE_AND_COMMIT, True, ()),
+    ("external-path '.'", SOURCE_AND_COMMIT + "  external-path: '.'\n", True, ()),
+    ("one-level external-path",
+     SOURCE_AND_COMMIT + "  external-path: 'example'\n", True, ()),
+    ("nested external-path",
+     SOURCE_AND_COMMIT + "  external-path: 'skills/example'\n",
+     True, ()),
+    ("blank external-release",
+     SOURCE_AND_COMMIT + "  external-release: ''\n", True, ()),
+    ("uppercase hexadecimal commit",
+     SOURCE_LINE + f"  external-commit: '{EXTERNAL_COMMIT.upper()}'\n", True, ()),
+
+    # rejected: orphan fields (meaningless without external-source)
+    ("source without commit", SOURCE_LINE, False,
+     ("external-commit is required when external-source is present",)),
+    ("commit without source", COMMIT_LINE, False,
+     ("external-commit present without external-source",)),
+    ("release without source", "  external-release: ''\n", False,
+     ("external-release present without external-source",)),
+    ("path without source", "  external-path: '.'\n", False,
+     ("external-path present without external-source",)),
+
+    # rejected: wrong type
+    ("non-string source", "  external-source: 123\n", False,
+     ("external-source must be a string",)),
+    ("non-string commit", SOURCE_LINE + "  external-commit: 123\n", False,
+     ("external-commit must be a string",)),
+    ("non-string release", SOURCE_AND_COMMIT + "  external-release: 123\n", False,
+     ("external-release must be a string",)),
+    ("non-string path", SOURCE_AND_COMMIT + "  external-path: 123\n", False,
+     ("external-path must be a string",)),
+
+    # rejected: one declaration, two independent findings
+    ("orphan external-commit that is also non-string", "  external-commit: 123\n",
+     False, ("external-commit must be a string",
+             "external-commit present without external-source")),
+]
+EXTERNAL_CASES += [
+    (f"non-canonical source — {label}",
+     f"  external-source: '{value}'\n" + COMMIT_LINE, False,
+     (CANONICAL_SOURCE_MSG,))
+    for label, value in NON_CANONICAL_SOURCES
+]
+EXTERNAL_CASES += [
+    (f"malformed commit — {label}",
+     SOURCE_LINE + f"  external-commit: '{value}'\n", False, (HEX_COMMIT_MSG,))
+    for label, value in MALFORMED_COMMITS
+]
+EXTERNAL_CASES += [
+    (f"malformed path — {label}",
+     SOURCE_AND_COMMIT + f"  external-path: '{value}'\n", False,
+     (NORMALIZED_PATH_MSG,))
+    for label, value in MALFORMED_PATHS
+]
+EXTERNAL_CASES.append(
+    ("malformed path — embedded NUL byte",
+     SOURCE_AND_COMMIT + '  external-path: "skills/\\0example"\n', False,
+     (NORMALIZED_PATH_MSG,)))
+
+
+def external_declarations_behave_per_table(results, workdir):
+    """Every external-metadata declaration must validate or fail exactly as
+    the table says, naming every defect a rejection carries. Every case
+    except "no external metadata" carries at least one external-* line, so
+    alpha's skill-type follows that directly — skill-type: external is
+    itself required for an external-* declaration to cohere."""
+    for index, (label, extra, accept, needles) in enumerate(EXTERNAL_CASES):
+        alpha_skill_type = "external" if extra.strip() else "deliverable"
+        root = build_repo(workdir / f"external-{index}", ALPHA_ONLY, PROFILE_ONLY,
+                          alpha_extra=extra, alpha_skill_type=alpha_skill_type)
+        code, output = run_validator(root)
+        if accept:
+            results.check(
+                f"{label} — validator exits zero",
+                code == 0,
+                f"expected a zero exit, got {code}. Output:\n{output}",
+            )
+            continue
+        results.check(
+            f"{label} — validator exits non-zero",
+            code != 0,
+            f"expected a non-zero exit, got {code}. Output:\n{output}",
+        )
+        for needle in needles:
+            results.check(
+                f"{label} — output names {needle!r}",
+                needle in output,
+                f"{needle!r} absent from validator output:\n{output}",
+            )
+
+
 # --- skill-type and README inventory fixtures ----------------------------
 # Two fixtures share one builder because both vary the same pair of facts:
 # the skill type alpha declares, and the README section its inventory row
@@ -181,20 +353,35 @@ INVENTORY_README = """\
 | Deliverable | Governs |
 | --- | --- |
 {deliverables}
+
+## Externals
+
+| External | Governs |
+| --- | --- |
+{externals}
 """
 
 ALPHA_ROW = "| [`alpha`](skills/alpha/SKILL.md) | Fixture skill |"
 
 
-def build_inventory_repo(root, declared, section):
-    """Create a repository varying alpha's declared type and README section."""
+def build_inventory_repo(root, declared, section, external_metadata=False):
+    """Create a repository varying alpha's declared type, its README section,
+    and — independently of both — whether it also carries an external-source/
+    -commit declaration. Independence lets a caller construct either half of
+    a coherence violation directly: a non-'external' declared type carrying
+    external-* metadata, or a declared type of 'external' carrying none."""
     write(root / "tools" / "validate.py", VALIDATOR.read_text())
-    write(root / "skills" / "alpha" / "SKILL.md",
-          SKILL.format(name="alpha", description=ALPHA_ONLY,
-                       skill_type=declared))
+    if external_metadata:
+        skill_md = SKILL_WITH_METADATA.format(
+            name="alpha", description=ALPHA_ONLY, skill_type=declared,
+            extra=SOURCE_AND_COMMIT)
+    else:
+        skill_md = SKILL.format(name="alpha", description=ALPHA_ONLY, skill_type=declared)
+    write(root / "skills" / "alpha" / "SKILL.md", skill_md)
     write(root / "README.md", INVENTORY_README.format(
         standards=ALPHA_ROW if section == "Standards" else "",
-        deliverables=ALPHA_ROW if section == "Deliverables" else ""))
+        deliverables=ALPHA_ROW if section == "Deliverables" else "",
+        externals=ALPHA_ROW if section == "Externals" else ""))
     write(root / "AGENTS.md", "# Fixture governance\n")
     write(root / "ADOPTION.md", "# Fixture adoption\n")
     write(root / "eval" / "triggers.md", "# Fixture triggers\n")
@@ -213,7 +400,7 @@ def legacy_type_rejected(results, workdir):
         f"expected a non-zero exit, got {code}. Output:\n{output}",
     )
     needle = ("skills/alpha/SKILL.md: skill-type 'skill' not in "
-              "['deliverable', 'profile', 'standard']")
+              "['deliverable', 'external', 'profile', 'standard']")
     results.check(
         f"{label} — output names the invalid value",
         needle in output,
@@ -250,6 +437,85 @@ def inventory_accepted(results, workdir):
         "matching README section and skill-type — validator exits zero",
         code == 0,
         f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+# --- external skill-type coherence and inventory fixtures ----------------
+# A coherent external descriptor — skill-type: external, external-source
+# present, inventoried under Externals — is the exact shape design-doc-mermaid
+# now uses; the three rejections below are its three ways to come apart.
+
+
+def external_type_and_section_accepted(results, workdir):
+    """A coherent external descriptor, inventoried under Externals — the
+    shape design-doc-mermaid itself now uses — validates cleanly."""
+    root = build_inventory_repo(workdir / "external-ok", "external",
+                                "Externals", external_metadata=True)
+    code, output = run_validator(root)
+    results.check(
+        "valid external descriptor under Externals — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def external_under_standards_rejected(results, workdir):
+    """An external skill inventoried under Standards breaks row-type parity,
+    the same way any other type/section mismatch does."""
+    root = build_inventory_repo(workdir / "external-wrong-section", "external",
+                                "Standards", external_metadata=True)
+    code, output = run_validator(root)
+    label = "external skill inventoried under Standards"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = ("README.md: skill row 'alpha' sits under the 'standard' section "
+              "but frontmatter declares 'external'")
+    results.check(
+        f"{label} — output names the mismatch",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def external_metadata_on_wrong_type_rejected(results, workdir):
+    """external-* metadata is only coherent on skill-type: external."""
+    root = build_inventory_repo(workdir / "external-wrong-type", "standard",
+                                "Standards", external_metadata=True)
+    code, output = run_validator(root)
+    label = "external-* metadata on skill-type: standard"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "external-* metadata present but skill-type is 'standard', not 'external'"
+    results.check(
+        f"{label} — output names the coherence defect",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def external_type_without_source_rejected(results, workdir):
+    """skill-type: external with no external-source is an incomplete
+    descriptor, not a coherent one."""
+    root = build_inventory_repo(workdir / "external-no-source", "external",
+                                "Externals", external_metadata=False)
+    code, output = run_validator(root)
+    label = "skill-type: external without external-source"
+    results.check(
+        f"{label} — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skill-type is 'external' but external-source is missing"
+    results.check(
+        f"{label} — output names the coherence defect",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
     )
 
 
@@ -307,6 +573,11 @@ COMPOSITION_README = """\
 | --- | --- |
 | [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
 | [`beta`](skills/beta/SKILL.md) | Fixture deliverable |
+
+## Externals
+
+| External | Governs |
+| --- | --- |
 """
 
 GOOD_MCP = [("read_thing", "Allowed"), ("ask_thing", "Ask"),
@@ -471,6 +742,11 @@ DEPENDENCY_README = """\
 | Deliverable | Governs |
 | --- | --- |
 | [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
+
+## Externals
+
+| External | Governs |
+| --- | --- |
 """
 
 FIXTURE_TYPES = {
@@ -566,20 +842,6 @@ def cycle_rejected(results, workdir):
 # A deliverable names one prose setting, and the canonical settings table owns
 # the names. The fixtures below vary the declaring skill, the declared value,
 # and the table itself.
-SKILL_WITH_METADATA = """\
----
-name: {name}
-description: "{description}"
-license: MIT
-metadata:
-  skill-type: {skill_type}
-{extra}---
-
-# {name}
-
-Fixture skill body.
-"""
-
 PROSE_OWNER = "A description belonging to exactly one settings owner."
 
 PROSE_SKILL = """\
@@ -650,6 +912,11 @@ PROSE_README = """\
 | Deliverable | Governs |
 | --- | --- |
 | [`alpha`](skills/alpha/SKILL.md) | Fixture deliverable |
+
+## Externals
+
+| External | Governs |
+| --- | --- |
 """
 
 PROSE_FIXTURE_TYPES = {
@@ -793,9 +1060,14 @@ def main():
         workdir = pathlib.Path(tmp)
         duplicate_descriptions_are_rejected(results, workdir)
         distinct_descriptions_are_accepted(results, workdir)
+        external_declarations_behave_per_table(results, workdir)
         inventory_accepted(results, workdir)
         legacy_type_rejected(results, workdir)
         row_type_rejected(results, workdir)
+        external_type_and_section_accepted(results, workdir)
+        external_under_standards_rejected(results, workdir)
+        external_metadata_on_wrong_type_rejected(results, workdir)
+        external_type_without_source_rejected(results, workdir)
         well_formed_composition_is_accepted(results, workdir)
         empty_composition_is_accepted(results, workdir)
         composition_defects_are_rejected(results, workdir)

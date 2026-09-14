@@ -5,7 +5,7 @@ license: MIT
 metadata:
   skill-type: deliverable
   prose-setting: design
-  skill-dependency: vocabulary-control,prose-discipline
+  skill-dependency: vocabulary-control,prose-discipline,design-doc-mermaid
 ---
 
 # Design documentation
@@ -90,6 +90,15 @@ A diagram or table restating one sentence is a defect.
   create new ones, and migrate existing files only when a workorder explicitly
   authorizes it. If semantic correction and representation migration share a
   pull request, name them as separate scopes and preferably separate commits.
+
+### Mermaid construction
+
+When Mermaid is selected under Representation selection, use the
+`design-doc-mermaid` dependency for Mermaid-specific construction guidance.
+`design-docs` remains authoritative for whether Mermaid is appropriate,
+diagram scope, placement, information ownership, and the meaning represented.
+The external skill does not change the rule that obligations remain in prose
+and diagrams define nothing independently.
 
 ## Workflow documents
 

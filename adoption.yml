@@ -1,0 +1,42 @@
+# Adoption declaration — <consuming repository>
+#
+# This is the durable, consumer-owned root adoption declaration read by
+# `update-skills.py`. Copy this template to `.agents/adoption.yml` in the
+# consuming repository, fill every field, and commit it there. The
+# installer reads this file; it never writes to it — moving the pin means
+# editing this file yourself, in your own commit, before running --apply.
+#
+# Supported syntax is deliberately narrow: the top-level keys below plus
+# one block list. Nested mappings, flow-style lists ([a, b]), multi-line
+# strings, and YAML anchors/aliases are not supported and are rejected.
+
+# Canonical repository URL for the adopted root skill library.
+source: https://github.com/iamthenop/infurnet-skills
+
+# The immutable, authoritative revision. Must be a full 40-character SHA —
+# not a branch or tag name. This is the integrity identity of the install.
+commit: <full 40-character SHA>
+
+# Optional human-friendly release identity. Leave blank (or omit the value
+# after the colon) if none. When present, it must resolve to `commit` —
+# --apply refuses to install if it doesn't.
+release: ""
+
+# Skills this consumer intends to expose under .agents/skills/. Only
+# these are materialized; vendoring the library does not expose every
+# skill in it. One skill name per line, any skill type.
+skills:
+  - designer
+  - design-docs
+
+# Update procedure:
+# 1. Edit this file's commit/release/skills to the desired state, in its
+#    own commit.
+# 2. Run update-skills.py (no flags) to review the inventory, obligation,
+#    and skill-adoption differences it would apply.
+# 3. Identify affected consumer bindings and governance text.
+# 4. Obtain approval from the consuming repository's deciding authority.
+# 5. Run update-skills.py --apply to reconcile installed state to match.
+# 6. Validate the consumer.
+#
+# A pin update that skips a step is drift with a version number.

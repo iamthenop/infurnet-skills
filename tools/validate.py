@@ -16,7 +16,7 @@ METADATA_KEYS = {
 }
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
-PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
+PORTABILITY = ("Infurnet", "docs/agents", "founder")
 GUARDS = [
     ("authorized by TICKET", "authorization reference in @temporary example"),
     ("get1", "sequential api-docs anchors"),
@@ -540,7 +540,10 @@ def check_text(paths):
         if p.suffix == ".md" and GLYPHS.search(t):
             findings.append(f"{rel}: character-drawn diagram glyphs present")
         if str(rel).startswith("skills/"):
+            in_skill_installer = str(rel).startswith("skills/skill-installer/")
             for needle in PORTABILITY:
+                if needle == "Infurnet" and in_skill_installer:
+                    continue
                 if needle in t:
                     findings.append(f"{rel}: project-specific reference {needle!r}")
             for needle, label in GUARDS:

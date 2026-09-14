@@ -1050,6 +1050,207 @@ def table_owned_setting_is_accepted(results, workdir):
     )
 
 
+# --- WO-99-02: portability/glyph/reference regressions for skill-installer -
+# WO-99-01 exposed two Phase-1 validator assumptions that conflicted with the
+# skill-installer architecture: the global PORTABILITY literal 'PROJECT.md'
+# (now the canonical portable bindings filename) and the unconditional
+# 'Infurnet' portability guard (skill-installer is intentionally
+# Infurnet-specific). WO-99-02 narrows both. The fixtures below prove the
+# narrowing is exact: nothing broader than what was decided.
+INSTALLER_SKILL = """\
+---
+name: skill-installer
+description: "A fixture installer skill."
+license: MIT
+metadata:
+  skill-type: deliverable
+---
+
+# skill-installer
+
+Fixture installer body.
+{extra}"""
+
+OTHER_SKILL = """\
+---
+name: other-skill
+description: "A second fixture skill."
+license: MIT
+metadata:
+  skill-type: deliverable
+---
+
+# other-skill
+
+Fixture body.
+{extra}"""
+
+INFRA_README = """\
+# Fixture repository
+
+## Profiles
+
+| Profile | Governs |
+| --- | --- |
+
+## Standards
+
+| Standard | Governs |
+| --- | --- |
+
+## Deliverables
+
+| Deliverable | Governs |
+| --- | --- |
+| [`skill-installer`](skills/skill-installer/SKILL.md) | Fixture installer |
+| [`other-skill`](skills/other-skill/SKILL.md) | Fixture deliverable |
+
+## Externals
+
+| External | Governs |
+| --- | --- |
+"""
+
+
+def build_infra_repo(root, installer_extra="", other_extra="", installer_scripts=()):
+    """A minimal repository carrying exactly two skills — one named
+    skill-installer, one an ordinary portable skill — so the
+    skill-installer-scoped Infurnet exemption can be exercised against a
+    skill it does and does not apply to. installer_scripts names files
+    created under skill-installer's scripts/ without referencing them from
+    its SKILL.md, for the unlinked-reference case."""
+    write(root / "tools" / "validate.py", VALIDATOR.read_text())
+    write(root / "skills" / "skill-installer" / "SKILL.md",
+          INSTALLER_SKILL.format(extra=installer_extra))
+    for name in installer_scripts:
+        write(root / "skills" / "skill-installer" / "scripts" / name, "#!/bin/sh\necho hi\n")
+    write(root / "skills" / "other-skill" / "SKILL.md",
+          OTHER_SKILL.format(extra=other_extra))
+    write(root / "README.md", INFRA_README)
+    write(root / "AGENTS.md", "# Fixture governance\n")
+    write(root / "ADOPTION.md", "# Fixture adoption\n")
+    write(root / "eval" / "triggers.md", "# Fixture triggers\n")
+    return root
+
+
+def project_md_reference_is_not_a_portability_finding(results, workdir):
+    """PROJECT.md is the canonical portable bindings filename; a reference
+    to it anywhere under skills/ must not trip the portability guard."""
+    root = build_infra_repo(workdir / "project-md",
+                            other_extra="See root PROJECT.md for bindings.\n")
+    code, output = run_validator(root)
+    results.check(
+        "PROJECT.md reference under skills/ — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def infurnet_under_skill_installer_is_accepted(results, workdir):
+    """skill-installer is intentionally Infurnet-specific; the literal must
+    not trip a portability finding there."""
+    root = build_infra_repo(workdir / "infurnet-installer",
+                            installer_extra="This is Infurnet-specific.\n")
+    code, output = run_validator(root)
+    results.check(
+        "Infurnet under skills/skill-installer/ — validator exits zero",
+        code == 0,
+        f"expected a zero exit, got {code}. Output:\n{output}",
+    )
+
+
+def infurnet_under_other_skill_is_rejected(results, workdir):
+    """The Infurnet exemption is scoped to skill-installer only; every other
+    portable skill keeps the guard."""
+    root = build_infra_repo(workdir / "infurnet-other",
+                            other_extra="This is Infurnet-specific.\n")
+    code, output = run_validator(root)
+    results.check(
+        "Infurnet under another portable skill — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skills/other-skill/SKILL.md: project-specific reference 'Infurnet'"
+    results.check(
+        "Infurnet under another portable skill — output names it",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def docs_agents_under_skill_installer_is_rejected(results, workdir):
+    """The Infurnet exemption is narrow: the remaining portability guards
+    still apply inside skill-installer."""
+    root = build_infra_repo(workdir / "docs-agents-installer",
+                            installer_extra="See docs/agents for more.\n")
+    code, output = run_validator(root)
+    results.check(
+        "docs/agents under skills/skill-installer/ — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skills/skill-installer/SKILL.md: project-specific reference 'docs/agents'"
+    results.check(
+        "docs/agents under skills/skill-installer/ — output names it",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def founder_under_skill_installer_is_rejected(results, workdir):
+    """The remaining portability guards still apply inside skill-installer."""
+    root = build_infra_repo(workdir / "founder-installer",
+                            installer_extra="the founder decided this.\n")
+    code, output = run_validator(root)
+    results.check(
+        "founder under skills/skill-installer/ — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skills/skill-installer/SKILL.md: project-specific reference 'founder'"
+    results.check(
+        "founder under skills/skill-installer/ — output names it",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def glyph_in_skill_installer_markdown_is_rejected(results, workdir):
+    """The diagram-glyph guard is not weakened by the Infurnet exemption."""
+    root = build_infra_repo(workdir / "glyph-installer",
+                            installer_extra="\n└ a character-drawn line\n")
+    code, output = run_validator(root)
+    results.check(
+        "glyph in skill-installer Markdown — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skills/skill-installer/SKILL.md: character-drawn diagram glyphs present"
+    results.check(
+        "glyph in skill-installer Markdown — output names it",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
+def unlinked_scripts_file_is_rejected(results, workdir):
+    """check_references is not weakened by the Infurnet exemption."""
+    root = build_infra_repo(workdir / "unlinked-script",
+                            installer_scripts=("extra.sh",))
+    code, output = run_validator(root)
+    results.check(
+        "unlinked scripts file — validator exits non-zero",
+        code != 0,
+        f"expected a non-zero exit, got {code}. Output:\n{output}",
+    )
+    needle = "skills/skill-installer/scripts/extra.sh: not linked from its SKILL.md"
+    results.check(
+        "unlinked scripts file — output names it",
+        needle in output,
+        f"{needle!r} absent from validator output:\n{output}",
+    )
+
+
 def main():
     if not VALIDATOR.exists():
         print(f"FAIL  validator not found at {VALIDATOR}")
@@ -1078,6 +1279,13 @@ def main():
         absent_prose_setting_is_accepted(results, workdir)
         table_owned_setting_is_accepted(results, workdir)
         prose_setting_defects_are_rejected(results, workdir)
+        project_md_reference_is_not_a_portability_finding(results, workdir)
+        infurnet_under_skill_installer_is_accepted(results, workdir)
+        infurnet_under_other_skill_is_rejected(results, workdir)
+        docs_agents_under_skill_installer_is_rejected(results, workdir)
+        founder_under_skill_installer_is_rejected(results, workdir)
+        glyph_in_skill_installer_markdown_is_rejected(results, workdir)
+        unlinked_scripts_file_is_rejected(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

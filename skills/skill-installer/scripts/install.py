@@ -14,6 +14,11 @@ Run with no option to report and verify; use `--apply` to apply changes or
 `--verify` for verification only (fully offline). Use `--candidate REF` to
 preview an additional, unadopted ref's obligation differences — read-only,
 it never changes what --apply installs or writes to .agents/adoption.yml.
+
+Client integration is explicit and off by default. Pass `--client claude`
+to wire root `CLAUDE.md` to `AGENTS.md` and expose materialized skills under
+`.claude/skills/`; no repository content, environment variable, or installed
+application ever selects a client on its own.
 """
 import argparse
 import hashlib
@@ -32,6 +37,10 @@ ASSETS_ROOT = SELF_PATH.parent.parent / "assets"
 
 AGENTS_BEGIN = "<!-- BEGIN infurnet-skills -->"
 AGENTS_END = "<!-- END infurnet-skills -->"
+
+CLAUDE_IMPORT = "@AGENTS.md"
+CLAUDE_CLIENT = "claude"
+SUPPORTED_CLIENTS = (CLAUDE_CLIENT,)
 
 EXCLUDE_BEGIN = "# BEGIN infurnet-skills generated"
 EXCLUDE_END = "# END infurnet-skills generated"
@@ -111,6 +120,119 @@ def bootstrap_adoption_yaml():
     AGENTS_ROOT.mkdir(parents=True, exist_ok=True)
     ADOPTION_YAML.write_bytes((ASSETS_ROOT / "adoption-template.yml").read_bytes())
     return True
+
+
+# --- Claude client integration ------------------------------------------
+
+
+def claude_preflight():
+    """Environment-level conflict checks for explicit client `claude`,
+    independent of any particular skill name: directory-symlink capability
+    (probed and removed immediately, in an OS temp directory — never under
+    CONSUMER_ROOT), root CLAUDE.md is absent or a regular file, and
+    .claude/skills is absent or a real directory rather than a symlink.
+    Per-skill exposure collisions are checked later, by
+    reconcile_claude_skills() itself, once the desired skill set is known —
+    still strictly before any Claude filesystem mutation for this
+    invocation, since that check runs before any symlink is created."""
+    probe_root = Path(tempfile.mkdtemp(prefix="infurnet-skills-symlink-check-"))
+    try:
+        target = probe_root / "target"
+        target.mkdir()
+        try:
+            os.symlink(target, probe_root / "link", target_is_directory=True)
+        except OSError as e:
+            sys.exit(f"directory-symlink capability unavailable: {e}")
+    finally:
+        shutil.rmtree(probe_root, ignore_errors=True)
+
+    claude_md = CONSUMER_ROOT / "CLAUDE.md"
+    if claude_md.exists() and not claude_md.is_file():
+        sys.exit(f"{claude_md}: exists but is not a regular file")
+
+    claude_skills = CONSUMER_ROOT / ".claude" / "skills"
+    if claude_skills.is_symlink():
+        sys.exit(f"{claude_skills}: is a symlink; expected a real directory")
+    if claude_skills.exists() and not claude_skills.is_dir():
+        sys.exit(f"{claude_skills}: exists but is not a directory")
+
+
+def bootstrap_claude_md():
+    """Reconcile the required "@AGENTS.md" import line in root CLAUDE.md.
+    Absent: create it as the whole file. Present with that import as its
+    exact first line: preserve byte-for-byte (no write at all — this is
+    what keeps every call here a no-op on an already-wired consumer, in
+    every invocation mode). Present with the import on some other line:
+    stop rather than create a duplicate or move consumer content. Present
+    with no such line: prepend the import and one blank line, otherwise
+    unchanged."""
+    path = CONSUMER_ROOT / "CLAUDE.md"
+    if not path.exists():
+        path.write_text(CLAUDE_IMPORT + "\n")
+        return
+
+    text = path.read_text()
+    lines = text.split("\n")
+    if lines[0] == CLAUDE_IMPORT:
+        return
+    if CLAUDE_IMPORT in lines[1:]:
+        sys.exit(f"{path}: contains {CLAUDE_IMPORT!r} but not as the first "
+                  "line; refusing to create a duplicate import")
+    path.write_text(CLAUDE_IMPORT + "\n\n" + text)
+
+
+def owned_claude_links(claude_skills):
+    """{name: resolved_target} for every symlink directly under
+    claude_skills whose target names a path beneath SKILLS_ROOT — an
+    installer-owned Claude exposure, per its target alone, never its
+    filename. claude_skills need not exist."""
+    owned = {}
+    if not claude_skills.is_dir():
+        return owned
+    for entry in claude_skills.iterdir():
+        if not entry.is_symlink():
+            continue
+        raw_target = os.readlink(entry)
+        resolved = Path(os.path.normpath(str(entry.parent / raw_target)))
+        if resolved != SKILLS_ROOT and resolved.is_relative_to(SKILLS_ROOT):
+            owned[entry.name] = resolved
+    return owned
+
+
+def reconcile_claude_skills(desired_names):
+    """Reconcile .claude/skills/ to expose exactly desired_names, each as
+    its own repository-relative directory symlink to .agents/skills/<name>.
+    Never touches .claude/skills/ itself as a symlink, never copies, never
+    overwrites unrelated or non-owned content — a desired name colliding
+    with anything else there is a stop condition, checked for every desired
+    name before any symlink in this call is created, corrected, or
+    removed."""
+    claude_skills = CONSUMER_ROOT / ".claude" / "skills"
+    owned = owned_claude_links(claude_skills)
+
+    to_create, to_replace = [], []
+    for name in sorted(desired_names):
+        desired_target = SKILLS_ROOT / name
+        if name in owned:
+            if owned[name] != desired_target:
+                to_replace.append(name)
+            continue
+        link = claude_skills / name
+        if link.exists() or link.is_symlink():
+            sys.exit(f"{link}: exists and is not an installer-owned Claude "
+                      "exposure symlink; refusing to overwrite")
+        to_create.append(name)
+    to_remove = sorted(set(owned) - set(desired_names))
+
+    claude_skills.mkdir(parents=True, exist_ok=True)
+    for name in to_replace + to_create:
+        link = claude_skills / name
+        if link.is_symlink():
+            link.unlink()
+        target = os.path.join("..", "..", ".agents", "skills", name)
+        os.symlink(target, link, target_is_directory=True)
+    for name in to_remove:
+        (claude_skills / name).unlink()
 
 
 # --- adoption.yml ------------------------------------------------------
@@ -1405,6 +1527,11 @@ def main():
         help="NAME=keep|stub — resolve one currently-unresolved external "
              "skill; only valid together with --apply",
     )
+    parser.add_argument(
+        "--client", action="append", default=[], choices=SUPPORTED_CLIENTS,
+        help="request a supported client's discovery and governance wiring; "
+             "repeatable; no repository content ever selects a client",
+    )
     args = parser.parse_args()
 
     global CONSUMER_ROOT, AGENTS_ROOT, ADOPTION_YAML, SKILLS_ROOT, MANIFEST
@@ -1416,9 +1543,14 @@ def main():
     MANIFEST = AGENTS_ROOT / "infurnet-skills.manifest.json"
     GIT_EXCLUDE = CONSUMER_ROOT / ".git" / "info" / "exclude"
     VENDOR_ROOT = AGENTS_ROOT / "vendor"
+    want_claude = CLAUDE_CLIENT in args.client
 
     bootstrap_agents_md()
     bootstrap_project_md()
+    if want_claude:
+        claude_preflight()
+        bootstrap_claude_md()
+        (CONSUMER_ROOT / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
     if bootstrap_adoption_yaml():
         print(f"Created {ADOPTION_YAML} from the bundled template.")
         print("Complete the adoption declaration, then re-run the installer.")
@@ -1714,6 +1846,9 @@ def main():
                 for e in final_errors:
                     print(f"    {e}")
                 sys.exit(1)
+
+            if want_claude:
+                reconcile_claude_skills(root_final_names | set(ext_final) | to_stub)
 
             tmp_manifest = MANIFEST.with_name(
                 MANIFEST.name + f".tmp-{uuid.uuid4().hex[:12]}"

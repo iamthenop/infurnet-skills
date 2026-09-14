@@ -17,31 +17,29 @@ not assign a profile, authorize work, widen scope, or grant mutation authority.
 
 ## Lifecycle
 
-The installer has three states:
+The installer lifecycle is:
 
 ```text
 no managed installation
-    ↓
+    ->
 bootstrap
-    ↓
+    ->
 managed installation
-    ↓
+    ->
 reconcile approved adoption intent
 ```
 
-Bootstrap establishes the durable consumer files required by the installation
-contract. A missing durable file may be created from the bundled template.
-Existing consumer-owned durable files are not overwritten except for the
-installer-owned marked section of `AGENTS.md`.
+Bootstrap establishes durable consumer files and any explicitly selected client
+integration. A missing durable file may be created from its bundled template.
 
 A managed installation reads `.agents/adoption.yml`, acquires the declared
 pinned repositories, resolves installation closure, materializes installed
 skills under `.agents/skills/`, and records generated installation state in the
 installation manifest.
 
-Reconciliation uses the same installation procedure. The adoption declaration,
-not generated installation state, remains the durable statement of intended
-installation.
+Reconciliation uses the same installation implementation. The adoption
+declaration, not generated installation state, remains the durable statement of
+intended installation.
 
 ## Consumer-owned durable files
 
@@ -71,7 +69,7 @@ Repository acquisition uses:
 .agents/vendor/<owner>/<repository>/
 ```
 
-Runtime-visible skill materialization uses:
+Runtime materialization uses:
 
 ```text
 .agents/skills/<skill-name>/
@@ -81,9 +79,21 @@ The installation manifest records the last successfully installed generated
 state. It is not an authority source and does not replace the adoption
 declaration.
 
-## Installation and reconciliation
+Client-specific discovery surfaces are separate from runtime materialization.
+They do not determine installation state.
 
-Invoke the bundled installer with an explicit consuming repository root:
+## Entry points
+
+Platform entry points are:
+
+* [`scripts/install.sh`](scripts/install.sh) for POSIX environments;
+* [`scripts/install.ps1`](scripts/install.ps1) for PowerShell environments.
+
+Both accept an explicit consumer root as their first argument, run the matching
+runtime preflight, and delegate installation to
+[`scripts/install.py`](scripts/install.py).
+
+Direct Python invocation remains supported:
 
 ```text
 python scripts/install.py --root <consumer-root>
@@ -92,8 +102,38 @@ python scripts/install.py --root <consumer-root>
 The consumer root is explicit. The installer's physical location and the
 caller's working directory do not determine installation authority or target.
 
+## Runtime preflight
+
+Runtime checks are:
+
+* [`scripts/check-runtime.sh`](scripts/check-runtime.sh);
+* [`scripts/check-runtime.ps1`](scripts/check-runtime.ps1).
+
+They verify the supported Python runtime, Git availability, consuming repository
+root, and bootstrap-versus-managed classification.
+
+Runtime checks do not verify installation integrity.
+
+Manifest presence defines runtime state classification. Client discovery
+surfaces do not.
+
+## Runtime dependencies
+
+`skill-installer` requires Python 3.12 or later and Git.
+
+It has no third-party Python runtime dependencies.
+[`scripts/requirements.txt`](scripts/requirements.txt) records that contract.
+
+The installer does not provision Python, Git, a virtual environment, or system
+packages.
+
+## Installation and reconciliation
+
 The existing adoption, immutable-pin, dependency-closure, external acquisition,
 materialization, candidate-review, and approval semantics remain in force.
+
+`install.py` is the single implementation for first installation and later
+reconciliation. Platform wrappers must not duplicate those semantics.
 
 ## Bootstrap assets
 
@@ -116,14 +156,43 @@ section with the bundled template.
 Malformed, unmatched, nested, or duplicate Infurnet markers are a stop
 condition. Do not guess ownership.
 
-## Client references
+## Client integration
 
-Client-specific discovery and wiring live in `references/`.
+Client integration is explicit.
+
+Use:
+
+```text
+--client <client-name>
+```
+
+to request a supported client's discovery and governance wiring.
+
+Do not infer a client from repository contents, installed applications,
+environment variables, or current execution context.
+
+A client discovery surface does not establish installation state or authority.
+
+## Claude
+
+The supported Claude client identifier is:
+
+```text
+claude
+```
 
 [`references/CLAUDE.md`](references/CLAUDE.md) defines Claude-specific discovery
-and governance-entry-point mechanics. Client references do not redefine the
-shared authority model, installer lifecycle, loading sequence, or adoption
-semantics.
+and governance-entry-point mechanics.
+
+For explicit client `claude`, the installer wires root `CLAUDE.md` to
+`AGENTS.md` and exposes each materialized skill through an individual symlink
+under `.claude/skills/`.
+
+The installer owns only Claude integration it can identify from the defined
+import and symlink contracts. Unrelated Claude content remains consumer-owned.
+
+Claude permission settings remain consumer-owned and are not changed by the
+installer.
 
 ## Stop conditions
 
@@ -138,10 +207,13 @@ Stop without inferring a repair when:
 * installation closure cannot be resolved;
 * existing generated installation state cannot be reconciled safely under the
   declared adoption intent;
-* continuing would require deciding profile assignment, project bindings, or
-  other consumer-owned values.
+* a selected client integration collides with unrelated consumer content;
+* a selected client requires an unavailable runtime capability;
+* continuing would require deciding profile assignment, project bindings,
+  permission policy, or other consumer-owned values.
 
 ## Final rule
 
-Install declared skills. Reconcile generated state to approved adoption intent.
-Do not turn installation into authority.
+Install declared skills. Reconcile generated state and explicitly selected
+client integration to approved adoption intent. Do not turn installation into
+authority.

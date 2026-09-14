@@ -500,7 +500,7 @@ def test_materialize_adopted_skills(results, workdir):
     results.check("materialize — no leftover tmp/backup dirs", not leftovers, out)
 
 
-def test_unprovable_foreign_entry_blocks_everything(results, workdir):
+def test_unprovable_blocks(results, workdir):
     """A non-root manifest entry with no corresponding canonical vendor
     checkout is structurally valid but unprovable — it is not silently
     preserved while the rest of the apply proceeds (PR #97's original
@@ -649,7 +649,7 @@ def test_skill_collision_blocks_apply(results, workdir):
     results.check("collision (unmanaged-existing) — manifest unchanged", after == before, out)
 
 
-def test_root_external_name_collision_blocks_apply(results, workdir):
+def test_root_external_collision_blocks(results, workdir):
     """A name genuinely, provably owned by a different (external)
     repository collides with root's own desire for that same name — this
     requires a real proven external claim, not just a dangling manifest
@@ -1004,7 +1004,7 @@ def test_external_revision_conflict_blocks(results, workdir):
         not (consumer_root / ".agents" / "vendor" / "example-owner").exists(), out)
 
 
-def test_external_skill_cross_unit_collision_blocks(results, workdir):
+def test_external_cross_unit_collision_blocks(results, workdir):
     """A local external descriptor's own name must equal what it resolves
     to, so two currently-declared adapters can no longer collide on a
     shared exposed name directly (that would require two same-named
@@ -1104,7 +1104,7 @@ def test_external_name_mismatch_blocks(results, workdir):
                   "does not match" in out, out)
 
 
-def test_external_descriptor_name_must_match_resolved_identity(results, workdir):
+def test_external_alias_blocked(results, workdir):
     """A local external descriptor's own name must equal the external
     skill name it resolves to — it is not a differently-named alias. This
     fails closed at declaration-discovery time, in every mode (no network
@@ -1123,7 +1123,7 @@ def test_external_descriptor_name_must_match_resolved_identity(results, workdir)
                   "alias" in out, out)
 
 
-def test_external_descriptor_frontmatter_must_match_own_directory(results, workdir):
+def test_descriptor_dir_mismatch(results, workdir):
     """A local external descriptor's own frontmatter `name` must match its
     own directory — independent of, and checked before, whether it
     resolves to a valid external identity at all."""
@@ -1187,7 +1187,7 @@ def test_proven_external_retained(results, workdir):
                   (vendor / ".git").is_dir(), out)
 
 
-def test_proven_external_removed_when_dropped(results, workdir):
+def test_proven_external_dropped(results, workdir):
     """A previously proven external repository/skill no longer required by
     any current adapter is cleaned up: the exposed skill directory and the
     vendor checkout are both removed, and both manifest entries
@@ -1242,7 +1242,7 @@ MALFORMED_MANIFEST_CASES = {
 }
 
 
-def test_malformed_external_manifest_hard_fails(results, workdir):
+def test_malformed_external_manifest(results, workdir):
     """A structurally broken non-root manifest entry — not merely
     unprovable — hard-fails apply without inferring ownership, distinct
     from the unresolved/proof-failure path."""
@@ -1303,7 +1303,7 @@ def test_external_verify_offline_checks(results, workdir):
                       True, out)  # this call passed no git_rewrites at all
 
 
-def test_report_only_external_leaves_no_persistent_changes(results, workdir):
+def test_external_report_read_only(results, workdir):
     """Report-only inspection of an external requirement may fetch and
     validate, but never persists a vendor checkout, a skill directory, or
     a manifest change, and leaves no leftover temp directories."""
@@ -1336,7 +1336,7 @@ def test_report_only_external_leaves_no_persistent_changes(results, workdir):
 # --- stub resolution -------------------------------------------------------
 
 
-def test_resolve_keep_blocks_everything(results, workdir):
+def test_resolve_keep_no_mutation(results, workdir):
     """--resolve NAME=keep never mutates anything in that invocation, even
     unrelated pending root changes, and reports the deferral explicitly."""
     updater, upstream, commits, consumer_root = make_consumer(
@@ -1360,7 +1360,7 @@ def test_resolve_keep_blocks_everything(results, workdir):
                   not (agents / "skills" / "alpha").exists(), out)
 
 
-def test_resolve_unknown_name_is_usage_error(results, workdir):
+def test_resolve_unknown_name(results, workdir):
     """--resolve naming a skill that isn't currently unresolved is a usage
     error, not a silent no-op or a blanket override."""
     updater, upstream, commits, consumer_root = make_consumer(
@@ -1371,7 +1371,7 @@ def test_resolve_unknown_name_is_usage_error(results, workdir):
                   "not currently unresolved" in out, out)
 
 
-def test_resolve_stub_materializes_and_allows_apply(results, workdir):
+def test_resolve_stub_apply(results, workdir):
     """--resolve NAME=stub replaces the unresolved external skill with the
     minimal installer-owned stub, allows the rest of the apply to
     continue, and leaves the unprovable vendor checkout untouched."""
@@ -1414,7 +1414,7 @@ def test_resolve_stub_materializes_and_allows_apply(results, workdir):
     results.check("resolve stub — verify accepts the intact stub", code == 0, out)
 
 
-def test_stub_hand_edit_fails_verify(results, workdir):
+def test_stub_edit_fails_verify(results, workdir):
     """A hand-edited stub fails tree-hash verification, the same as any
     drifted copy-mode skill."""
     updater, upstream, commits, consumer_root = make_consumer(
@@ -1467,7 +1467,7 @@ def test_stub_survives_unrelated_apply(results, workdir):
     results.check("stub survives — verify still passes", code == 0, out)
 
 
-def test_stub_replaced_by_later_real_install(results, workdir):
+def test_stub_replace_real_install(results, workdir):
     """Once the adapter's external declaration can be fully validated, the
     normal install path replaces a stub with the real materialized copy —
     no separate unstub mechanism is required."""
@@ -1510,7 +1510,7 @@ def test_stub_replaced_by_later_real_install(results, workdir):
 # --- skill-dependency installation closure --------------------------------
 
 
-def test_skill_dependency_resolves_external_descriptor(results, workdir):
+def test_skill_dependency_external(results, workdir):
     """End-to-end: adoption.yml names only 'design-docs'; its
     skill-dependency on 'design-doc-mermaid' — itself a same-name external
     descriptor — is resolved through closure and installs the pinned
@@ -1634,12 +1634,12 @@ def main():
         test_vendor_swap_is_sibling_and_clean(results, workdir)
         test_missing_adopted_source_fails(results, workdir)
         test_materialize_adopted_skills(results, workdir)
-        test_unprovable_foreign_entry_blocks_everything(results, workdir)
+        test_unprovable_blocks(results, workdir)
         test_manifest_shape_and_location(results, workdir)
         test_verify_materialized_skills(results, workdir)
         test_verify_checks_declaration(results, workdir)
         test_skill_collision_blocks_apply(results, workdir)
-        test_root_external_name_collision_blocks_apply(results, workdir)
+        test_root_external_collision_blocks(results, workdir)
         test_release_must_resolve_to_commit(results, workdir)
         test_candidate_report_is_read_only(results, workdir)
         test_git_exclude_block(results, workdir)
@@ -1650,26 +1650,26 @@ def main():
         test_external_skill_installs(results, workdir)
         test_external_requirement_dedup(results, workdir)
         test_external_revision_conflict_blocks(results, workdir)
-        test_external_skill_cross_unit_collision_blocks(results, workdir)
+        test_external_cross_unit_collision_blocks(results, workdir)
         test_external_unmanaged_collision_blocks(results, workdir)
         test_external_release_mismatch_blocks(results, workdir)
         test_external_missing_skill_md_blocks(results, workdir)
         test_external_name_mismatch_blocks(results, workdir)
-        test_external_descriptor_name_must_match_resolved_identity(results, workdir)
-        test_external_descriptor_frontmatter_must_match_own_directory(results, workdir)
+        test_external_alias_blocked(results, workdir)
+        test_descriptor_dir_mismatch(results, workdir)
         test_external_path_escape_blocks(results, workdir)
         test_proven_external_retained(results, workdir)
-        test_proven_external_removed_when_dropped(results, workdir)
-        test_malformed_external_manifest_hard_fails(results, workdir)
+        test_proven_external_dropped(results, workdir)
+        test_malformed_external_manifest(results, workdir)
         test_external_verify_offline_checks(results, workdir)
-        test_report_only_external_leaves_no_persistent_changes(results, workdir)
-        test_resolve_keep_blocks_everything(results, workdir)
-        test_resolve_unknown_name_is_usage_error(results, workdir)
-        test_resolve_stub_materializes_and_allows_apply(results, workdir)
-        test_stub_hand_edit_fails_verify(results, workdir)
+        test_external_report_read_only(results, workdir)
+        test_resolve_keep_no_mutation(results, workdir)
+        test_resolve_unknown_name(results, workdir)
+        test_resolve_stub_apply(results, workdir)
+        test_stub_edit_fails_verify(results, workdir)
         test_stub_survives_unrelated_apply(results, workdir)
-        test_stub_replaced_by_later_real_install(results, workdir)
-        test_skill_dependency_resolves_external_descriptor(results, workdir)
+        test_stub_replace_real_install(results, workdir)
+        test_skill_dependency_external(results, workdir)
         test_skill_dependency_transitive_chain(results, workdir)
         test_skill_dependency_missing_blocks(results, workdir)
         test_skill_dependency_cycle_blocks(results, workdir)

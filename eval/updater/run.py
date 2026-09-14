@@ -1176,6 +1176,11 @@ def test_proven_external_retained(results, workdir):
     manifest_data["skills"]["widget"] = skill_entry
     write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
 
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "proven retained — verify passes when source/commit/path all match",
+        code == 0, out)
+
     shutil.rmtree(ext_repo)  # the only proof this doesn't re-fetch
 
     code, out = run_updater(updater, ["--apply"],
@@ -1617,6 +1622,112 @@ def test_skill_dependency_cycle_blocks(results, workdir):
                   not (consumer_root / ".agents" / "skills" / "chain-a").exists(), out)
 
 
+# --- repository-key path safety and declaration drift ---------------------
+
+
+BAD_REPO_KEYS = [
+    "../../../victim", "owner/../victim", "/absolute/path",
+    "owner/repo/extra", "owner/..", "../owner", ".", "..",
+]
+
+
+def test_repo_key_traversal_blocked(results, workdir):
+    """A manifest-recorded repository key that isn't a canonical
+    <owner>/<repository> two-segment shape is malformed manifest state,
+    rejected before any filesystem inspection, cleanup, or deletion —
+    never normalized, never resolved relative to the vendor root."""
+    for i, bad_key in enumerate(BAD_REPO_KEYS):
+        updater, upstream, commits, consumer_root = make_consumer(
+            workdir / f"repo-key-{i}", adopted=["alpha"])
+        agents = consumer_root / ".agents"
+        sentinel = agents.parent / "sentinel.txt"
+        sentinel.write_text("must survive\n")
+
+        manifest_path = agents / "infurnet-skills.manifest.json"
+        manifest_data = json.loads(manifest_path.read_text())
+        manifest_data["repositories"][bad_key] = {
+            "source": "https://github.com/x/y", "commit": "0" * 40,
+        }
+        manifest_data["skills"]["victim"] = {
+            "repository": bad_key, "source": ".", "mode": "copy",
+            "tree_hash": "0" * 64,
+        }
+        write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+        before = manifest_path.read_text()
+
+        code, out = run_updater(updater, ["--apply"])
+        results.check(f"repo key ({bad_key!r}) — apply exits nonzero", code != 0, out)
+        results.check(f"repo key ({bad_key!r}) — reports malformed state",
+                      "malformed" in out.lower(), out)
+        results.check(
+            f"repo key ({bad_key!r}) — sentinel outside vendor untouched",
+            sentinel.exists() and sentinel.read_text() == "must survive\n", out)
+        results.check(f"repo key ({bad_key!r}) — manifest unchanged",
+                      manifest_path.read_text() == before, out)
+
+
+def test_external_declaration_drift(results, workdir):
+    """Declaration satisfaction compares the full external identity —
+    source, commit, and external-path — not just repository ownership. A
+    same-repository commit change is reported as needing an update and
+    fails --verify until applied; --apply self-heals it, since it already
+    re-checks every unchanged name against the current declaration."""
+    base = workdir / "external-drift-commit"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+    repo_entry, skill_entry = seed_external_repo(
+        consumer_root, "example-owner/widget", EXTERNAL_SOURCE, ext_repo,
+        ext_commits[0], "widget")  # installed at the OLD commit
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    manifest_data = json.loads(manifest_path.read_text())
+    manifest_data["repositories"]["example-owner/widget"] = repo_entry
+    manifest_data["skills"]["widget"] = skill_entry
+    write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external drift (commit) — verify fails", code != 0, out)
+    results.check("external drift (commit) — reports it",
+                  "no longer matches installed state" in out, out)
+
+    code, out = run_updater(updater, ["--apply"],
+                             git_rewrites={EXTERNAL_SOURCE: str(ext_repo)})
+    results.check("external drift (commit) — apply self-heals", code == 0, out)
+    manifest = json.loads(manifest_path.read_text())
+    results.check(
+        "external drift (commit) — commit updated",
+        manifest["repositories"]["example-owner/widget"]["commit"] == ext_commits[-1],
+        out)
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external drift (commit) — verify now passes", code == 0, out)
+
+
+def test_external_path_drift(results, workdir):
+    """A same-repository external-path change is detected as declaration
+    drift too, independent of commit changes."""
+    base = workdir / "external-drift-path"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+    repo_entry, skill_entry = seed_external_repo(
+        consumer_root, "example-owner/widget", EXTERNAL_SOURCE, ext_repo,
+        ext_commits[-1], "widget")
+    skill_entry["source"] = "old/path"  # the declaration now wants "."
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    manifest_data = json.loads(manifest_path.read_text())
+    manifest_data["repositories"]["example-owner/widget"] = repo_entry
+    manifest_data["skills"]["widget"] = skill_entry
+    write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external drift (path) — verify fails", code != 0, out)
+    results.check("external drift (path) — reports it",
+                  "no longer matches installed state" in out, out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -1673,6 +1784,9 @@ def main():
         test_skill_dependency_transitive_chain(results, workdir)
         test_skill_dependency_missing_blocks(results, workdir)
         test_skill_dependency_cycle_blocks(results, workdir)
+        test_repo_key_traversal_blocked(results, workdir)
+        test_external_declaration_drift(results, workdir)
+        test_external_path_drift(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

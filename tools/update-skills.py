@@ -306,7 +306,8 @@ def validate_external_declaration(skill_md, metadata):
     findings = []
     source = metadata.get("external-source")
     m = GITHUB_SOURCE_RE.fullmatch(source) if isinstance(source, str) else None
-    if not m or m.group(2).endswith(".git"):
+    if not m or m.group(2).endswith(".git") or m.group(1) in (".", "..") \
+            or m.group(2) in (".", ".."):
         findings.append("external-source must be a canonical GitHub repository "
                          "URL (https://github.com/<owner>/<repository>)")
 
@@ -430,9 +431,39 @@ def dedupe_external_skills(requirements):
     return skills, conflicts
 
 
+def valid_repo_key(key):
+    """A repo_key is exactly two non-empty path segments, neither of which
+    is '.' or '..' — the only shape external_vendor_path() may safely turn
+    into a filesystem path. Rejects anything with a different segment
+    count (traversal chains, absolute paths, extra segments) as well as a
+    single-dot or double-dot segment."""
+    if not isinstance(key, str):
+        return False
+    parts = key.split("/")
+    if len(parts) != 2:
+        return False
+    owner, repo = parts
+    if not owner or not repo or owner in (".", "..") or repo in (".", ".."):
+        return False
+    return True
+
+
 def external_vendor_path(key):
-    owner, repo = key.split("/", 1)
-    return VENDOR_ROOT / owner / repo
+    """Resolves a repo_key to its canonical vendor path. The shape check
+    above should already guarantee containment, but a path derived from
+    external or persisted-manifest input is never trusted on syntactic
+    validation alone — resolved containment beneath VENDOR_ROOT is checked
+    independently as a second, unconditional gate. Raises ValueError for a
+    key the caller must treat as malformed, never silently proceeding."""
+    if not valid_repo_key(key):
+        raise ValueError(f"malformed repository key: {key!r}")
+    owner, repo = key.split("/")
+    path = VENDOR_ROOT / owner / repo
+    try:
+        path.resolve().relative_to(VENDOR_ROOT.resolve())
+    except ValueError:
+        raise ValueError(f"repository key escapes the vendor root: {key!r}")
+    return path
 
 
 def check_external_git(path, expected_origin, expected_commit):
@@ -562,8 +593,12 @@ def classify_prior_external(manifest, root_key):
             repo_status[rkey] = ("malformed", "repository record is not a "
                                   "well-formed {source, commit} object")
             continue
-        findings = check_external_git(external_vendor_path(rkey),
-                                       rentry["source"], rentry["commit"])
+        try:
+            vendor_path = external_vendor_path(rkey)
+        except ValueError as e:
+            repo_status[rkey] = ("malformed", str(e))
+            continue
+        findings = check_external_git(vendor_path, rentry["source"], rentry["commit"])
         if findings:
             repo_status[rkey] = ("unprovable", "; ".join(findings))
         else:
@@ -998,6 +1033,30 @@ def compute_external_state(adoption, manifest, source_root):
 
     added, removed, unchanged, collision = categorize_names(desired, owned_for_categorize)
 
+    # categorize_names only compares repository *keys* — a same-repository
+    # commit or external-path change never shows up as added/removed/
+    # collision, since the owning repository hasn't changed. Declaration
+    # satisfaction requires the full identity to match, not just ownership:
+    # an "unchanged" external name whose manifest-recorded source, commit,
+    # or skill source (external-path) no longer matches the current
+    # declaration is stale — proven-and-installed, but not what's
+    # currently declared. --apply already re-fetches/re-materializes every
+    # unchanged name unconditionally, so this never blocks; it only needs
+    # to be visible to --verify and to the report.
+    stale = set()
+    for name in unchanged:
+        info = ext_skills.get(name)
+        if info is None:
+            continue
+        repo_entry = ((manifest or {}).get("repositories") or {}).get(info["repo_key"])
+        skill_entry = manifest_skills.get(name)
+        if not isinstance(repo_entry, dict) or not isinstance(skill_entry, dict):
+            continue
+        if (repo_entry.get("source") != info["source"]
+                or repo_entry.get("commit") != info["commit"]
+                or skill_entry.get("source") != info["path"]):
+            stale.add(name)
+
     # For report splitting only: which names belong to the root section vs
     # the external section, independent of add/remove/unchanged/collision.
     root_names = (closure - set(ext_skills)) | {
@@ -1025,6 +1084,7 @@ def compute_external_state(adoption, manifest, source_root):
         "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
         "repo_status": repo_status, "skill_status": skill_status,
         "added": added, "removed": removed, "unchanged": unchanged, "collision": collision,
+        "stale": stale,
         "root_names": root_names, "ext_names": ext_names,
         "unresolved": unresolved, "malformed": malformed,
         "orphan_unprovable_repos": orphan_unprovable_repos,
@@ -1074,6 +1134,12 @@ def verify_state(adoption, manifest):
         errors.append(f"skill installed but no longer declared: {name}")
     for name in sorted(state["collision"]):
         errors.append(f"skill collision: {name}")
+    for name in sorted(state["stale"]):
+        errors.append(
+            f"external declaration for {name!r} no longer matches installed "
+            "state (source, commit, or external-path changed) — run --apply "
+            "to update"
+        )
     errors.extend(state["repo_conflicts"])
     errors.extend(state["skill_conflicts"])
     for name in missing_skill_sources(state["closure"], VENDOR):
@@ -1223,7 +1289,11 @@ def prepare_external_installs(ext_skills, names_needed, temp_registry):
         info = ext_skills[name]
         rkey = info["repo_key"]
         if rkey not in checkouts:
-            dest = external_vendor_path(rkey)
+            try:
+                dest = external_vendor_path(rkey)
+            except ValueError as e:
+                findings[name] = str(e)
+                continue
             if dest.exists() and not check_external_git(dest, info["source"], info["commit"]):
                 checkouts[rkey] = dest
             else:
@@ -1399,6 +1469,9 @@ def main():
         if not (state["ext_repos"] or dropped_repos_preview or state["repo_conflicts"]):
             print("  None")
 
+        ext_stale = ext_unchanged & state["stale"]
+        ext_retained = ext_unchanged - ext_stale
+
         print("\n--- External skills ---")
         if ext_added:
             print("Added:")
@@ -1408,10 +1481,14 @@ def main():
             print("Removed:")
             for name in sorted(ext_removed):
                 print(f"  - {name}")
-        if ext_unchanged:
+        if ext_retained:
             print("Retained:")
-            for name in sorted(ext_unchanged):
+            for name in sorted(ext_retained):
                 print(f"  = {name}")
+        if ext_stale:
+            print("Update needed (declaration changed since last install):")
+            for name in sorted(ext_stale):
+                print(f"  ~ {name}")
         if ext_collision or state["skill_conflicts"]:
             print("Collisions (blocking):")
             for name in sorted(ext_collision):

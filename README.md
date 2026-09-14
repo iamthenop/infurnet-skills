@@ -89,7 +89,7 @@ Every skill uses one Agent Skills format, whatever its skill type:
 
 | Template | Description |
 | --- | --- |
-| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, deliverable, or external pseudocode |
+| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode, or an external provenance declaration |
 | `skills/<name>/references` | optional bundled templates and reference material |
 
 ## Skill metadata
@@ -188,10 +188,11 @@ writes to it — moving the pin means editing this file directly, in the
 consumer's own commit, before running `--apply`.
 
 Skill materialization under `.agents/skills/<skill-name>/`, external
-repository acquisition for adopted adapters, and the installation manifest
-at `.agents/infurnet-skills.manifest.json` are live. External repositories
-are acquired under `.agents/vendor/<owner>/<repository>/` and external
-skills use copy materialization. The existing root Infurnet vendor checkout
+repository acquisition for adopted external descriptors, and the
+installation manifest at `.agents/infurnet-skills.manifest.json` are live.
+External repositories are acquired under
+`.agents/vendor/<owner>/<repository>/` and external skills use copy
+materialization. The existing root Infurnet vendor checkout
 has not yet migrated to the two-segment owner/repository path. Symlink
 materialization remains planned and is not implemented.
 
@@ -249,10 +250,12 @@ https://github.com/SpillwaveSolutions/design-doc-mermaid
 .agents/vendor/SpillwaveSolutions/design-doc-mermaid/
 ```
 
-### External adapters
+### External descriptors
 
-A local skill that declares a dependency on an external skill is an external
-adapter. It records the dependency in frontmatter `metadata`:
+A local skill declaring `skill-type: external` is the acquisition and
+provenance declaration for the upstream skill of the same name — not a
+dependency relationship, and not the upstream skill's own content. It
+records that declaration in frontmatter `metadata`:
 
 ```yaml
 metadata:
@@ -270,9 +273,9 @@ metadata:
 | `external-release` | Optional human-friendly external version identity. May be blank. |
 | `external-path` | Repository-relative path to the skill; `.` is the repository root. |
 
-External adapter metadata creates installation closure only, the same way
-`skill-dependency` does (see Installation semantics). It grants no authority
-to the external skill and does not change profile, deliverable, or
+An external descriptor does not itself expand installation closure; that is
+`skill-dependency`'s role (see Installation semantics). It grants no
+authority to the external skill and does not change profile, deliverable, or
 governance authority.
 
 ### Generated state and consumer boundaries

@@ -65,15 +65,17 @@ def tree_hash(directory):
     return h.hexdigest()
 
 
-def adapter_skill_md(name, source, commit, release="", path="."):
-    """A root-library skill declaring an external-* dependency."""
+def adapter_skill_md(name, source, commit, release="", path=".", skill_type="external"):
+    """A root-library skill declaring an external-* dependency. skill_type
+    defaults to the coherent Infurnet value; a caller building a wrong-type
+    fixture overrides it explicitly."""
     return (
         "---\n"
         f"name: {name}\n"
         "description: Adapter.\n"
         "license: MIT\n"
         "metadata:\n"
-        "  skill-type: standard\n"
+        f"  skill-type: {skill_type}\n"
         f'  external-source: "{source}"\n'
         f'  external-commit: "{commit}"\n'
         f'  external-release: "{release}"\n'
@@ -861,7 +863,10 @@ def test_external_skill_installs(results, workdir):
     """A fresh external requirement is acquired, verified, and
     materialized: the vendor checkout lands at the canonical two-segment
     path with correct origin/HEAD/detached/clean-tree, the skill directory
-    is a full copy, and the manifest and git-exclude record it."""
+    is a full copy, and the manifest and git-exclude record it. The upstream
+    fixture (make_external_repo) never carries an Infurnet metadata block at
+    all, so this also proves an upstream skill needs no Infurnet skill-type
+    to install — that requirement binds only the local descriptor."""
     base = workdir / "external-install"
     ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
     updater, upstream, commits, consumer_root = make_consumer(
@@ -901,6 +906,9 @@ def test_external_skill_installs(results, workdir):
         (skill_dir / "SKILL.md").read_text() != local_descriptor
         and "external-source" not in (skill_dir / "SKILL.md").read_text(),
         out)
+    results.check(
+        "external install — upstream skill needed no Infurnet skill-type",
+        "skill-type" not in (skill_dir / "SKILL.md").read_text(), out)
     results.check(
         "external install — no second alias directory exists",
         {p.name for p in (agents / "skills").iterdir()} == {"widget"}, out)
@@ -1757,6 +1765,88 @@ def test_external_flow_style_metadata_blocked(results, workdir):
                   "unsupported metadata syntax" in out, out)
 
 
+def test_external_wrong_type_blocks(results, workdir):
+    """external-* metadata is only coherent on skill-type: external — a
+    local descriptor carrying the wrong type must fail closed instead of
+    being silently treated as an ordinary root skill."""
+    base = workdir / "external-wrong-type"
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"], dependents=[("widget", [])])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "skills" / "widget" / "SKILL.md",
+          adapter_skill_md("widget", EXTERNAL_SOURCE, "a" * 40, "", ".",
+                            skill_type="standard"))
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "external-* metadata with non-external skill-type — verify fails closed",
+        code != 0, out)
+    results.check(
+        "external-* metadata with non-external skill-type — names it",
+        "external-* metadata present but skill-type is 'standard', not 'external'" in out,
+        out)
+
+
+def test_external_type_without_source_blocks(results, workdir):
+    """skill-type: external with no external-* metadata at all is an
+    incomplete local descriptor — it must fail closed rather than being
+    silently skipped as "not external"."""
+    base = workdir / "external-no-source"
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"], dependents=[("widget", [])])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "skills" / "widget" / "SKILL.md", (
+        "---\n"
+        "name: widget\n"
+        "description: Adapter.\n"
+        "license: MIT\n"
+        "metadata:\n"
+        "  skill-type: external\n"
+        "---\n"
+        "Adapter.\n"
+    ))
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "skill-type: external without external-source — verify fails closed",
+        code != 0, out)
+    results.check(
+        "skill-type: external without external-source — names it",
+        "skill-type is 'external' but external-source is missing" in out, out)
+
+
+def test_external_inline_comment_metadata_blocked(results, workdir):
+    """A plain-scalar inline comment on skill-type (or an explicit tag) is
+    syntax this narrow parser does not resolve the same way real YAML
+    (validate.py's yaml.safe_load) does — it must fail closed rather than
+    being compared as literal text and rejected as some other type, which
+    would let a descriptor the validator accepts get blocked here instead."""
+    base = workdir / "external-inline-comment"
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"], dependents=[("widget", [])])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "skills" / "widget" / "SKILL.md", (
+        "---\n"
+        "name: widget\n"
+        "description: Adapter.\n"
+        "license: MIT\n"
+        "metadata:\n"
+        "  skill-type: external # provenance descriptor\n"
+        f'  external-source: "{EXTERNAL_SOURCE}"\n'
+        '  external-commit: "' + "a" * 40 + '"\n'
+        "---\n"
+        "Adapter.\n"
+    ))
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "skill-type with inline comment — verify fails closed",
+        code != 0, out)
+    results.check(
+        "skill-type with inline comment — names it",
+        "unsupported YAML syntax" in out, out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -1817,6 +1907,9 @@ def main():
         test_external_declaration_drift(results, workdir)
         test_external_path_drift(results, workdir)
         test_external_flow_style_metadata_blocked(results, workdir)
+        test_external_wrong_type_blocks(results, workdir)
+        test_external_type_without_source_blocks(results, workdir)
+        test_external_inline_comment_metadata_blocked(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

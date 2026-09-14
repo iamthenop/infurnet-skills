@@ -1,10 +1,10 @@
 # AGENTS.md
 
 This repository is a library of portable Agent Skills. The library
-recognizes three skill types: profiles, standards, and deliverables. Library
-content acquires authority only when adopted by a consuming repository's
-governance; in this repository it binds only as stated in the self-hosting rule
-below.
+recognizes four skill types: profiles, standards, deliverables, and
+externals. Library content acquires authority only when adopted by a
+consuming repository's governance; in this repository it binds only as
+stated in the self-hosting rule below.
 
 Agents working here maintain the library; they do not run the profiles it
 defines.
@@ -77,14 +77,22 @@ Everything in `skills/` is project-neutral. Do not introduce:
 * references to files outside this repository;
 * tool-specific instructions inside skill bodies.
 
+Instructional skill content remains project-neutral. Concrete external
+repository identity, revision, release, and path are permitted in
+`external-*` metadata on `skill-type: external` because those fields are
+provenance bindings, not instructional content.
+
 ## Repository conventions
 
-* Every governed profile, standard, and deliverable uses one skill per
+* Every governed `profile`, `standard`, and `deliverable` uses one skill per
   folder: `skills/<name>/SKILL.md`, frontmatter `name` matching the folder and
   a trigger-phrased `description`. Optional reference material lives under
   `skills/<name>/references/`.
-* Every skill belongs to exactly one skill type: `profile`, `standard`, or
-  `deliverable`.
+* An `external` skill is an installation/provenance declaration. Its
+  description identifies the external dependency; it does not define runtime
+  applicability and is not a native trigger candidate.
+* Every Infurnet skill belongs to exactly one skill type: `profile`,
+  `standard`, `deliverable`, or `external`.
 * Cross-references use backticked skill names, never paths outside the
   repository.
 * One home per fact across the whole library: a rule lives in exactly one
@@ -92,9 +100,9 @@ Everything in `skills/` is project-neutral. Do not introduce:
   an edit is a defect to report, not silently to fix out of scope.
 * No character-drawn diagrams; representation follows the selection ladder in
   `design-docs`.
-* `README.md` organizes the library under Profiles, Standards, and Deliverables.
-  Adding, renaming, removing, or reclassifying an entry updates that inventory
-  in the same change.
+* `README.md` organizes the library under Profiles, Standards, Deliverables,
+  and Externals. Adding, renaming, removing, or reclassifying an entry
+  updates that inventory in the same change.
 
 ## Change discipline
 

@@ -201,6 +201,26 @@ def valid_skill_name(name):
     return bool(name) and len(name) <= 64 and SKILL_NAME_RE.fullmatch(name) is not None
 
 
+def _unsupported_scalar_syntax(value):
+    """True for a right-hand-side scalar this narrow line parser cannot
+    resolve the same way real YAML (yaml.safe_load, used by validate.py)
+    does: an anchor/alias/flow/block indicator or explicit tag as the
+    leading character (`&`, `*`, `|`, `>`, `{`, `[`, `!foo`, `!!str foo`),
+    or a plain-scalar inline comment (a '#' preceded by whitespace, outside
+    a fully-quoted value). Guessing past any of these risks reading a
+    different value than the validator parsed — e.g.
+    `skill-type: external # note` is the string 'external' in real YAML,
+    but this parser's own comparison would otherwise see
+    'external # note' and reject a descriptor the validator accepts."""
+    if not value:
+        return False
+    if value[0] in "&*|>{[!":
+        return True
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return False
+    return re.search(r"(?:^|\s)#", value) is not None
+
+
 def read_metadata_keys(skill_md, keys):
     """Narrow, fail-closed extraction of specific keys from a SKILL.md's
     frontmatter `metadata:` block. Returns {key: value} for whichever of
@@ -225,7 +245,7 @@ def read_metadata_keys(skill_md, keys):
                     sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
                 key, value = m.group(1), m.group(2).strip()
                 if key in keys:
-                    if value and value[0] in "&*|>{[":
+                    if _unsupported_scalar_syntax(value):
                         sys.exit(f"{skill_md}:{lineno}: unsupported YAML syntax "
                                   f"in {key!r}: {value!r}")
                     if key in metadata:
@@ -243,14 +263,25 @@ def read_metadata_keys(skill_md, keys):
 
 
 def read_external_metadata(skill_md):
-    """Narrow, fail-closed extraction of the external-* keys. Returns None
-    when the skill declares no external-source at all."""
-    metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS)
-    if not any(k in metadata for k in EXTERNAL_KEYS):
+    """Narrow, fail-closed extraction of the external-* keys from an
+    Infurnet-owned local descriptor, validated for coherence against its own
+    skill-type. Returns None when the skill declares neither external-*
+    metadata nor skill-type: external — an ordinary root skill, not an
+    external descriptor at all. Never applied to an upstream SKILL.md; those
+    are read by resolve_upstream_skill() instead and carry no Infurnet
+    skill-type requirement."""
+    metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS + ("skill-type",))
+    skill_type = metadata.pop("skill-type", None)
+    has_external = any(k in metadata for k in EXTERNAL_KEYS)
+
+    if not has_external and skill_type != "external":
         return None
+    if skill_type != "external":
+        sys.exit(f"{skill_md}: external-* metadata present but skill-type is "
+                  f"{skill_type!r}, not 'external'")
     if "external-source" not in metadata:
-        sys.exit(f"{skill_md}: external-commit/-release/-path present "
-                  "without external-source")
+        sys.exit(f"{skill_md}: skill-type is 'external' but external-source "
+                  "is missing")
     return metadata
 
 

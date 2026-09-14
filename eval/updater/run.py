@@ -1674,6 +1674,53 @@ def test_repo_key_traversal_blocked(results, workdir):
                       manifest_path.read_text() == before, out)
 
 
+def test_manifest_skill_name_traversal_blocked(results, workdir):
+    """A manifest skill key that fails the Agent Skills naming rule is
+    rejected before it can enter owned state, be categorized, or reach
+    remove_skill() — proven by placing a real directory at the exact
+    location SKILLS_ROOT / name would resolve to for each malicious key,
+    and confirming that directory survives a blocked apply."""
+    cases = {
+        "relative": lambda base, consumer_root: (
+            "../../victim", consumer_root / "victim"),
+        "absolute": lambda base, consumer_root: (
+            str((base / "absolute-victim").resolve()),
+            (base / "absolute-victim").resolve()),
+    }
+    for case_name, locate in cases.items():
+        base = workdir / f"skill-name-{case_name}"
+        updater, upstream, commits, consumer_root = make_consumer(
+            base, adopted=["alpha"])
+        bad_name, victim = locate(base, consumer_root)
+        victim.mkdir(parents=True)
+        write(victim / "sentinel.txt", "must survive\n")
+
+        correct_key = repo_key(str(upstream))
+        agents = consumer_root / ".agents"
+        manifest_path = agents / "infurnet-skills.manifest.json"
+        manifest_data = json.loads(manifest_path.read_text())
+        manifest_data["skills"][bad_name] = {
+            "repository": correct_key, "source": "skills/victim",
+            "mode": "copy", "tree_hash": "0" * 64,
+        }
+        write(manifest_path, json.dumps(manifest_data, indent=2) + "\n")
+        before = manifest_path.read_text()
+
+        code, out = run_updater(updater, ["--apply"])
+        results.check(f"skill name ({case_name}) — apply exits nonzero", code != 0, out)
+        results.check(f"skill name ({case_name}) — reports naming-rule violation",
+                      "Agent Skills naming rule" in out, out)
+        results.check(
+            f"skill name ({case_name}) — victim directory untouched",
+            victim.is_dir()
+            and (victim / "sentinel.txt").read_text() == "must survive\n", out)
+        results.check(f"skill name ({case_name}) — manifest unchanged",
+                      manifest_path.read_text() == before, out)
+        results.check(
+            f"skill name ({case_name}) — no unrelated materialization",
+            not (agents / "skills" / "alpha").exists(), out)
+
+
 def test_external_declaration_drift(results, workdir):
     """Declaration satisfaction compares the full external identity —
     source, commit, and external-path — not just repository ownership. A
@@ -1904,6 +1951,7 @@ def main():
         test_skill_dependency_missing_blocks(results, workdir)
         test_skill_dependency_cycle_blocks(results, workdir)
         test_repo_key_traversal_blocked(results, workdir)
+        test_manifest_skill_name_traversal_blocked(results, workdir)
         test_external_declaration_drift(results, workdir)
         test_external_path_drift(results, workdir)
         test_external_flow_style_metadata_blocked(results, workdir)

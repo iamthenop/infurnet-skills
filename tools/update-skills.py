@@ -780,7 +780,11 @@ def owned_from_manifest(manifest):
     current manifest shape (missing repositories, non-dict skills) yields
     an empty owned set rather than being misread as ownership data — this
     is what makes the old IS-3P-04 manifest (a different path, a different
-    shape) harmless on first run after this change."""
+    shape) harmless on first run after this change. A skill key that fails
+    the Agent Skills naming rule is never added to owned — the manifest
+    key becomes a filesystem path component later, so a traversal or
+    absolute key must fail closed here, before categorize_names() or any
+    cleanup logic can see it."""
     if not manifest or not isinstance(manifest.get("repositories"), dict):
         return {}
     skills = manifest.get("skills")
@@ -789,6 +793,9 @@ def owned_from_manifest(manifest):
     owned = {}
     for name, info in skills.items():
         if isinstance(info, dict) and isinstance(info.get("repository"), str):
+            if not valid_skill_name(name):
+                sys.exit(f"manifest skill name {name!r} does not satisfy "
+                         "the Agent Skills naming rule")
             owned[name] = info["repository"]
     return owned
 

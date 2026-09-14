@@ -9,7 +9,7 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SKILL_TYPES = {"profile", "standard", "deliverable"}
+SKILL_TYPES = {"profile", "standard", "deliverable", "external"}
 METADATA_KEYS = {
     "skill-type", "infurnet-compat", "skill-dependency", "prose-setting",
     "external-source", "external-commit", "external-release", "external-path",
@@ -66,7 +66,7 @@ def check_skill(path, doc, skill_names):
     if meta.get("infurnet-compat") and not doc.get("compatibility"):
         findings.append(f"{path}: infurnet-compat requires compatibility field")
     findings.extend(f"{path}: {m}" for m in check_dependencies(meta, skill_names))
-    findings.extend(f"{path}: {m}" for m in check_external(meta))
+    findings.extend(f"{path}: {m}" for m in check_external(meta, skill_type))
 
     # 500-line threshold
     lines = len(path.read_text().splitlines())
@@ -132,11 +132,22 @@ def check_path(value):
     return []
 
 
-def check_external(meta):
-    """Coherence of the external-* declaration. Messages are bare — the
-    caller (check_skill) adds file context when aggregating."""
+EXTERNAL_KEYS = ("external-source", "external-commit", "external-release", "external-path")
+
+
+def check_external(meta, skill_type):
+    """Coherence of the external-* declaration, including its relationship to
+    skill-type. Messages are bare — the caller (check_skill) adds file
+    context when aggregating."""
     findings = []
     has_source = "external-source" in meta
+
+    if any(k in meta for k in EXTERNAL_KEYS) and skill_type != "external":
+        findings.append(
+            f"external-* metadata present but skill-type is {skill_type!r}, "
+            "not 'external'")
+    if skill_type == "external" and not has_source:
+        findings.append("skill-type is 'external' but external-source is missing")
 
     if has_source:
         findings.extend(check_source(meta["external-source"]))
@@ -307,6 +318,7 @@ SECTION_TYPES = [
     ("Profiles", "profile"),
     ("Standards", "standard"),
     ("Deliverables", "deliverable"),
+    ("Externals", "external"),
 ]
 ROW_RE = re.compile(
     r"(?m)^\| \[`([a-z0-9-]+)`\]\((skills/[a-z0-9-]+/SKILL\.md)\) \| .+ \|$"

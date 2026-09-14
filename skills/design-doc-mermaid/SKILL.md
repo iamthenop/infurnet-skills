@@ -1,9 +1,9 @@
 ---
 name: design-doc-mermaid
-description: "Install the pinned external design-doc-mermaid skill."
+description: "External dependency descriptor for design-doc-mermaid."
 license: MIT
 metadata:
-  skill-type: standard
+  skill-type: external
   external-source: "https://github.com/SpillwaveSolutions/design-doc-mermaid"
   external-commit: "c36d83503d2ba9c1e51638dc2d8a34758a377dea"
   external-release: "v1.1.1"

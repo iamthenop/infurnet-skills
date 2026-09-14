@@ -4,8 +4,8 @@
 for coding-agent governance. The library supplies agent profiles, conformance
 standards, and deliverable procedures. It is project-neutral and MIT-licensed.
 
-Every governed skill belongs to one of three skill types: `profile`,
-`standard`, or `deliverable`. Skill content acquires authority only when
+Every Infurnet skill belongs to exactly one skill type: `profile`, `standard`,
+`deliverable`, or `external`. Skill content acquires authority only when
 adopted by consuming repository governance. Installation or native triggering
 does not independently authorize work or mutation.
 
@@ -41,7 +41,6 @@ permit a deliverable, or change the assigned profile.
 | [`bazel-discipline`](skills/bazel-discipline/SKILL.md) | Dependency declaration, visibility, target separation |
 | [`code-comments`](skills/code-comments/SKILL.md) | Comment doctrine; information-location discipline |
 | [`deploy-standard`](skills/deploy-standard/SKILL.md) | Artifact classes, promotion, fixture discipline |
-| [`design-doc-mermaid`](skills/design-doc-mermaid/SKILL.md) | External-skill descriptor for the pinned Mermaid construction skill |
 | [`doc-comment-tags`](skills/doc-comment-tags/SKILL.md) | Custom documentation tag system (Javadoc/docstring) |
 | [`error-handling`](skills/error-handling/SKILL.md) | Exception selection, catching with intent, abstraction boundaries |
 | [`java-standard`](skills/java-standard/SKILL.md) | Java layout, types, tests |
@@ -73,13 +72,24 @@ assigned profile and the accepted work.
 | [`workflow-modeling`](skills/workflow-modeling/SKILL.md) | Gates as states; work package vocabulary |
 | [`workorder-drafting`](skills/workorder-drafting/SKILL.md) | Bounded execution authority for agents |
 
+## Externals
+
+An `external` declares an independently maintained Agent Skill that
+installation must make available. It carries acquisition and provenance
+only. It does not grant authority, constrain work as a standard, define a
+deliverable, or define how a consuming skill uses it.
+
+| External | Governs |
+| --- | --- |
+| [`design-doc-mermaid`](skills/design-doc-mermaid/SKILL.md) | Pinned external Mermaid construction skill |
+
 ## Layout
 
 Every skill uses one Agent Skills format, whatever its skill type:
 
 | Template | Description |
 | --- | --- |
-| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, or deliverable pseudocode |
+| `skills/<name>/SKILL.md` | frontmatter plus profile, standard, deliverable, or external pseudocode |
 | `skills/<name>/references` | optional bundled templates and reference material |
 
 ## Skill metadata
@@ -90,7 +100,7 @@ select a profile.
 
 | Field | Meaning |
 | --- | --- |
-| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, or `deliverable`. |
+| `skill-type` | What the skill supplies. Required value: `profile`, `standard`, `deliverable`, or `external`. |
 | `skill-dependency` | Comma-separated sibling skills that must be installed with this skill. Dependencies do not grant authority and must not introduce a profile. |
 | `infurnet-compat` | Comma-separated compatibility tags for the requirements stated by the top-level `compatibility` field. It does not select or load a skill. |
 | `prose-setting` | For a deliverable, names the prose complexity setting for prose produced under that deliverable. It does not classify the `SKILL.md` instruction text itself. |
@@ -100,9 +110,11 @@ in the canonical table at
 [`skills/prose-discipline/references/complexity-settings.md`](skills/prose-discipline/references/complexity-settings.md).
 Numeric limits and allowed names live in that reference.
 
-`skill-dependency` describes installation closure, not standard applicability.
-Applicable standards still come from the assigned profile, selected
-deliverable, accepted work, or consuming repository governance.
+`skill-dependency` describes installation closure only. The consuming skill's
+body defines how a dependency is used. For a required standard, applicable
+standards still come from the assigned profile, selected deliverable,
+accepted work, or consuming repository governance — never from another
+skill's `skill-dependency` alone.
 
 ## Consuming
 
@@ -244,7 +256,7 @@ adapter. It records the dependency in frontmatter `metadata`:
 
 ```yaml
 metadata:
-  skill-type: standard
+  skill-type: external
   external-source: "https://github.com/SpillwaveSolutions/design-doc-mermaid"
   external-commit: "<full-sha>"
   external-release: ""

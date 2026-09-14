@@ -5,7 +5,7 @@ license: MIT
 metadata:
   skill-type: deliverable
   prose-setting: design
-  skill-dependency: vocabulary-control,prose-discipline
+  skill-dependency: vocabulary-control,prose-discipline,design-doc-mermaid
 ---
 
 # Design documentation

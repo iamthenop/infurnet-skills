@@ -233,7 +233,10 @@ def read_metadata_keys(skill_md, keys):
                     metadata[key] = _unquote(value)
                 continue
             in_metadata = False
-        if re.match(r"^metadata:\s*$", raw):
+        m = re.match(r"^metadata:(.*)$", raw)
+        if m:
+            if m.group(1).strip():
+                sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
             in_metadata = True
 
     return metadata

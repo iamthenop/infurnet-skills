@@ -1728,6 +1728,35 @@ def test_external_path_drift(results, workdir):
                   "no longer matches installed state" in out, out)
 
 
+def test_external_flow_style_metadata_blocked(results, workdir):
+    """A `metadata: {...}` flow-style mapping is unsupported syntax — it
+    must fail closed, not be silently read as "no metadata block" and let
+    the local descriptor materialize as an ordinary root skill instead of
+    installing the pinned upstream skill."""
+    base = workdir / "external-flow-style"
+    ext_repo, ext_commits = make_external_repo(base / "ext", skill_name="widget")
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"],
+        adapters=[("widget", EXTERNAL_SOURCE, ext_commits[-1], "", ".")])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    flow_style = (
+        "---\n"
+        "name: widget\n"
+        "description: Adapter.\n"
+        "license: MIT\n"
+        'metadata: {skill-type: standard, external-source: "' + EXTERNAL_SOURCE
+        + '", external-commit: "' + ext_commits[-1] + '", external-path: "."}\n'
+        "---\n"
+        "Adapter.\n"
+    )
+    write(vendor / "skills" / "widget" / "SKILL.md", flow_style)
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check("external flow-style metadata — verify fails closed", code != 0, out)
+    results.check("external flow-style metadata — names it",
+                  "unsupported metadata syntax" in out, out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -1787,6 +1816,7 @@ def main():
         test_repo_key_traversal_blocked(results, workdir)
         test_external_declaration_drift(results, workdir)
         test_external_path_drift(results, workdir)
+        test_external_flow_style_metadata_blocked(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

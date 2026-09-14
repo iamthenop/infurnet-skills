@@ -1815,6 +1815,38 @@ def test_external_type_without_source_blocks(results, workdir):
         "skill-type is 'external' but external-source is missing" in out, out)
 
 
+def test_external_inline_comment_metadata_blocked(results, workdir):
+    """A plain-scalar inline comment on skill-type (or an explicit tag) is
+    syntax this narrow parser does not resolve the same way real YAML
+    (validate.py's yaml.safe_load) does — it must fail closed rather than
+    being compared as literal text and rejected as some other type, which
+    would let a descriptor the validator accepts get blocked here instead."""
+    base = workdir / "external-inline-comment"
+    updater, upstream, commits, consumer_root = make_consumer(
+        base, adopted=["widget"], dependents=[("widget", [])])
+    vendor = consumer_root / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "skills" / "widget" / "SKILL.md", (
+        "---\n"
+        "name: widget\n"
+        "description: Adapter.\n"
+        "license: MIT\n"
+        "metadata:\n"
+        "  skill-type: external # provenance descriptor\n"
+        f'  external-source: "{EXTERNAL_SOURCE}"\n'
+        '  external-commit: "' + "a" * 40 + '"\n'
+        "---\n"
+        "Adapter.\n"
+    ))
+
+    code, out = run_updater(updater, ["--verify"])
+    results.check(
+        "skill-type with inline comment — verify fails closed",
+        code != 0, out)
+    results.check(
+        "skill-type with inline comment — names it",
+        "unsupported YAML syntax" in out, out)
+
+
 def main():
     if not UPDATER.exists():
         print(f"FAIL  updater not found at {UPDATER}")
@@ -1877,6 +1909,7 @@ def main():
         test_external_flow_style_metadata_blocked(results, workdir)
         test_external_wrong_type_blocks(results, workdir)
         test_external_type_without_source_blocks(results, workdir)
+        test_external_inline_comment_metadata_blocked(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

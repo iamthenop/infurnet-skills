@@ -394,6 +394,15 @@ def test_generic_exposure_created(results, workdir):
             f"generic exposure — {name} resolves to the canonical installed skill",
             (link / "SKILL.md").read_text() == (skills_root / name / "SKILL.md").read_text(),
             f"target={os.readlink(link)!r}")
+        # The expected relative target is derived from this synthetic
+        # generic root, never hardcoded to Claude's "../../..." — proving
+        # the raw representation is repository-relative for whatever root
+        # a client happens to use, not just .claude/skills.
+        expected_raw_target = os.path.relpath(skills_root / name, client_root)
+        results.check(
+            f"generic exposure — {name} raw target is the canonical repository-relative path",
+            os.readlink(link) == expected_raw_target,
+            f"got {os.readlink(link)!r}, expected {expected_raw_target!r}")
     results.check("generic exposure — exactly the desired skills, no extras",
                   {p.name for p in client_root.iterdir()} == {"alpha", "beta"}, "")
 
@@ -404,11 +413,47 @@ def test_generic_exposure_retained_unchanged(results, workdir):
     client_root = module.CONSUMER_ROOT / "client" / "skills"
     module.reconcile_client_skills(client_root)
     inode_before = os.lstat(client_root / "alpha").st_ino
+    raw_target_before = os.readlink(client_root / "alpha")
 
     module.reconcile_client_skills(client_root)
     results.check(
         "generic exposure — correct owned exposure left unchanged (same inode)",
         os.lstat(client_root / "alpha").st_ino == inode_before, "")
+    results.check(
+        "generic exposure — correct canonical relative exposure retains its raw target",
+        os.readlink(client_root / "alpha") == raw_target_before, "")
+
+
+def test_generic_exposure_absolute_target_normalized(results, workdir):
+    """An installer-owned link that already resolves to the correct
+    installed skill, but whose raw on-disk target is absolute rather than
+    the canonical repository-relative form, is not "already correct" —
+    the installer contract requires the relative representation, not just
+    correct resolution. Reconciliation must rewrite it in place."""
+    module, skills_root = make_client_reconciler_env(workdir / "generic-absolute")
+    install_canonical_skill(skills_root, "alpha", "Fixture v1.\n")
+    before_contents = (skills_root / "alpha" / "SKILL.md").read_text()
+    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root.mkdir(parents=True)
+    os.symlink(str(skills_root / "alpha"), client_root / "alpha", target_is_directory=True)
+    raw_before = os.readlink(client_root / "alpha")
+
+    module.reconcile_client_skills(client_root)
+
+    expected_raw_target = os.path.relpath(skills_root / "alpha", client_root)
+    results.check(
+        "generic exposure — absolute owned target was not already canonical (sanity)",
+        raw_before != expected_raw_target, f"raw_before={raw_before!r}")
+    results.check(
+        "generic exposure — absolute owned exposure still resolves to the canonical skill",
+        (client_root / "alpha" / "SKILL.md").read_text() == before_contents, "")
+    results.check(
+        "generic exposure — absolute owned exposure rewritten to the canonical relative target",
+        os.readlink(client_root / "alpha") == expected_raw_target,
+        f"got {os.readlink(client_root / 'alpha')!r}, expected {expected_raw_target!r}")
+    results.check(
+        "generic exposure — canonical installed skill contents unchanged by normalization",
+        (skills_root / "alpha" / "SKILL.md").read_text() == before_contents, "")
 
 
 def test_generic_exposure_removed_when_skill_removed(results, workdir):
@@ -646,6 +691,7 @@ def main():
 
         test_generic_exposure_created(results, workdir)
         test_generic_exposure_retained_unchanged(results, workdir)
+        test_generic_exposure_absolute_target_normalized(results, workdir)
         test_generic_exposure_removed_when_skill_removed(results, workdir)
         test_generic_exposure_corrected(results, workdir)
         test_generic_exposure_preserves_unrelated(results, workdir)

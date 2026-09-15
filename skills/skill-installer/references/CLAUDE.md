@@ -59,8 +59,8 @@ and is not managed by the installer.
 
 ## Script invocation
 
-Installer and check scripts run through Claude Code's Bash tool and remain
-subject to Claude's permission rules.
+Installer scripts run through Claude Code's Bash tool and remain subject to
+Claude's permission rules.
 
 A project-level allow rule in `.claude/settings.json` can avoid repeated
 permission prompts. `.claude/settings.local.json` is the personal equivalent.

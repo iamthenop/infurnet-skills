@@ -158,10 +158,15 @@ def check_client_skills_preflight(client_skills_root):
 
 
 def owned_client_exposure(client_skills_root):
-    """{name: resolved_target} for every symlink directly under
-    client_skills_root whose target names a path beneath SKILLS_ROOT — an
-    installer-owned exposure, identified from its target alone, never its
-    filename. client_skills_root need not exist."""
+    """{name: (resolved_target, raw_target)} for every symlink directly
+    under client_skills_root whose target names a path beneath
+    SKILLS_ROOT — an installer-owned exposure, identified from its
+    resolved target alone, never its filename. raw_target is the literal
+    symlink text on disk: resolving to the right installed skill is
+    necessary but not sufficient for "correct" — the installer contract
+    also requires that raw text to be the canonical repository-relative
+    form, so callers must compare both. client_skills_root need not
+    exist."""
     owned = {}
     if not client_skills_root.is_dir():
         return owned
@@ -171,7 +176,7 @@ def owned_client_exposure(client_skills_root):
         raw_target = os.readlink(entry)
         resolved = Path(os.path.normpath(str(entry.parent / raw_target)))
         if resolved != SKILLS_ROOT and resolved.is_relative_to(SKILLS_ROOT):
-            owned[entry.name] = resolved
+            owned[entry.name] = (resolved, raw_target)
     return owned
 
 
@@ -182,12 +187,17 @@ def reconcile_client_skills(client_skills_root):
     installation-internal provenance collection such as which skills came
     from root, a dependency, an external source, or a stub — and
     reconciles client_skills_root to expose exactly that set, one
-    directory symlink per installed skill. Never touches
-    client_skills_root itself as a symlink, never copies, never
-    overwrites unrelated or non-owned content, and never inspects a
-    skill's own contents — a desired name colliding with anything else
-    there is a stop condition, checked for every desired name before any
-    symlink in this call is created, corrected, or removed."""
+    directory symlink per installed skill. An owned link is left alone
+    only when it both resolves to the correct installed skill and its raw
+    on-disk target is already the canonical repository-relative form —
+    resolving correctly is not by itself enough; an owned link that
+    resolves right but is spelled absolute (or otherwise non-canonical) is
+    corrected in place. Never touches client_skills_root itself as a
+    symlink, never copies, never overwrites unrelated or non-owned
+    content, and never inspects a skill's own contents — a desired name
+    colliding with anything else there is a stop condition, checked for
+    every desired name before any symlink in this call is created,
+    corrected, or removed."""
     desired_names = ({p.name for p in SKILLS_ROOT.iterdir() if p.is_dir()}
                       if SKILLS_ROOT.is_dir() else set())
     owned = owned_client_exposure(client_skills_root)
@@ -195,9 +205,12 @@ def reconcile_client_skills(client_skills_root):
     to_create, to_replace = [], []
     for name in sorted(desired_names):
         desired_target = SKILLS_ROOT / name
+        canonical_raw_target = os.path.relpath(desired_target, client_skills_root)
         if name in owned:
-            if owned[name] != desired_target:
-                to_replace.append(name)
+            resolved, raw_target = owned[name]
+            if resolved == desired_target and raw_target == canonical_raw_target:
+                continue
+            to_replace.append(name)
             continue
         link = client_skills_root / name
         if link.exists() or link.is_symlink():

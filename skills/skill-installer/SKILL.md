@@ -89,9 +89,12 @@ Platform entry points are:
 * [`scripts/install.sh`](scripts/install.sh) for POSIX environments;
 * [`scripts/install.ps1`](scripts/install.ps1) for PowerShell environments.
 
-Both accept an explicit consumer root as their first argument, run the matching
-runtime preflight, and delegate installation to
-[`scripts/install.py`](scripts/install.py).
+Each wrapper performs its own runtime preflight — a supported Python
+interpreter, Git availability, and Git-working-tree-root identity for the
+supplied consumer root — before delegating installation to
+[`scripts/install.py`](scripts/install.py) unchanged. A preflight failure
+stops before any installation mutation; it does not verify installation
+integrity.
 
 Direct Python invocation remains supported:
 
@@ -101,21 +104,6 @@ python scripts/install.py --root <consumer-root>
 
 The consumer root is explicit. The installer's physical location and the
 caller's working directory do not determine installation authority or target.
-
-## Runtime preflight
-
-Runtime checks are:
-
-* [`scripts/check-runtime.sh`](scripts/check-runtime.sh);
-* [`scripts/check-runtime.ps1`](scripts/check-runtime.ps1).
-
-They verify the supported Python runtime, Git availability, consuming repository
-root, and bootstrap-versus-managed classification.
-
-Runtime checks do not verify installation integrity.
-
-Manifest presence defines runtime state classification. Client discovery
-surfaces do not.
 
 ## Runtime dependencies
 
@@ -173,6 +161,25 @@ environment variables, or current execution context.
 
 A client discovery surface does not establish installation state or authority.
 
+Every materialized skill under `.agents/skills/<skill-name>/` is the complete,
+self-contained installed Agent Skill. A client wraps that canonical surface;
+it does not rebuild, copy, or reinterpret it.
+
+A selected client supplies only its own facts:
+
+* a client identifier;
+* a skill root under which it discovers installed skills;
+* any client-specific governance integration.
+
+One reconciliation implementation, shared by every client, then derives the
+desired exposure set directly from `.agents/skills/*` and reconciles the
+client's skill root to it: creating missing exposure, correcting an owned
+exposure whose materialized target changed, removing an owned exposure for a
+skill no longer installed, and preserving every unrelated entry already
+there. A desired name that collides with content it does not own is a stop
+condition, not an overwrite. The current mechanism is one directory symlink
+per installed skill.
+
 ## Claude
 
 The supported Claude client identifier is:
@@ -181,15 +188,12 @@ The supported Claude client identifier is:
 claude
 ```
 
-[`references/CLAUDE.md`](references/CLAUDE.md) defines Claude-specific discovery
-and governance-entry-point mechanics.
+[`references/CLAUDE.md`](references/CLAUDE.md) defines Claude's own facts.
+Nothing there redefines the shared reconciliation above.
 
-For explicit client `claude`, the installer wires root `CLAUDE.md` to
-`AGENTS.md` and exposes each materialized skill through an individual symlink
-under `.claude/skills/`.
-
-The installer owns only Claude integration it can identify from the defined
-import and symlink contracts. Unrelated Claude content remains consumer-owned.
+For explicit client `claude`, the client skill root is `.claude/skills/` and
+the client-specific governance integration wires root `CLAUDE.md` to
+`AGENTS.md`.
 
 Claude permission settings remain consumer-owned and are not changed by the
 installer.

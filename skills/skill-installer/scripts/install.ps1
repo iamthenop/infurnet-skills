@@ -1,9 +1,9 @@
 #requires -Version 5.1
 <#
 Platform entry point for Windows PowerShell 5.1 and PowerShell 7+. Accepts
-the consuming repository root as an explicit first argument, runs runtime
-preflight, then delegates installation to install.py unchanged. Implements
-no installation semantics of its own.
+the consuming repository root as an explicit first argument, runs its own
+runtime preflight, then delegates installation to install.py unchanged.
+Implements no installation semantics of its own.
 #>
 [CmdletBinding()]
 param(
@@ -29,11 +29,35 @@ foreach ($arg in $InstallerArgs) {
     }
 }
 
-$ScriptDir = $PSScriptRoot
+# --- runtime preflight -----------------------------------------------------
 
-& (Join-Path $ScriptDir "check-runtime.ps1") $ConsumerRoot | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Failure "runtime preflight failed"
+if (-not (Test-Path -LiteralPath $ConsumerRoot)) {
+    Write-Failure "consumer root does not exist: $ConsumerRoot"
+}
+if (-not (Test-Path -LiteralPath $ConsumerRoot -PathType Container)) {
+    Write-Failure "consumer root is not a directory: $ConsumerRoot"
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Failure "git executable not found"
+}
+
+$rawCdup = $null
+try {
+    $rawCdup = (& git -C $ConsumerRoot rev-parse --show-cdup 2>$null)
+} catch {
+    $rawCdup = $null
+}
+$cdupExitCode = $LASTEXITCODE
+# Coerced through Out-String so a genuinely empty result (the toplevel case)
+# reads as "" regardless of whether PowerShell captured no output as $null
+# or as an empty string.
+$cdup = ($rawCdup | Out-String).Trim()
+if ($cdupExitCode -ne 0) {
+    Write-Failure "consumer root does not resolve as a Git working tree: $ConsumerRoot"
+}
+if ($cdup -ne '') {
+    Write-Failure "consumer root is not the root of its Git working tree: $ConsumerRoot"
 }
 
 $pythonCandidates = @(
@@ -54,6 +78,8 @@ if (-not $selected) {
     Write-Failure "no supported Python interpreter found (requires Python >= 3.12; tried: py -3, python, python3)"
 }
 
-$installPy = Join-Path $ScriptDir "install.py"
+# --- delegate ---------------------------------------------------------------
+
+$installPy = Join-Path $PSScriptRoot "install.py"
 & $selected.Exe @($selected.Args) $installPy --root $ConsumerRoot @InstallerArgs
 exit $LASTEXITCODE

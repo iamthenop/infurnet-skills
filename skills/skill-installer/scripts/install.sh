@@ -1,6 +1,6 @@
 #!/bin/sh
 # Platform entry point for POSIX shells. Accepts the consuming repository
-# root as an explicit first argument, runs runtime preflight, then
+# root as an explicit first argument, runs its own runtime preflight, then
 # delegates installation to install.py unchanged. Implements no
 # installation semantics of its own.
 set -eu
@@ -39,9 +39,17 @@ for arg in "$@"; do
     esac
 done
 
-SCRIPT_DIR=$(resolve_dir "$0")
+# --- runtime preflight ---------------------------------------------------
 
-"$SCRIPT_DIR/check-runtime.sh" "$CONSUMER_ROOT" >/dev/null
+[ -e "$CONSUMER_ROOT" ] || fail "consumer root does not exist: $CONSUMER_ROOT"
+[ -d "$CONSUMER_ROOT" ] || fail "consumer root is not a directory: $CONSUMER_ROOT"
+
+command -v git >/dev/null 2>&1 || fail "git executable not found"
+
+CDUP=$(cd "$CONSUMER_ROOT" 2>/dev/null && git rev-parse --show-cdup 2>/dev/null) \
+    || fail "consumer root does not resolve as a Git working tree: $CONSUMER_ROOT"
+[ -z "$CDUP" ] \
+    || fail "consumer root is not the root of its Git working tree: $CONSUMER_ROOT"
 
 PY=""
 for candidate in python3 python; do
@@ -53,5 +61,9 @@ for candidate in python3 python; do
     fi
 done
 [ -n "$PY" ] || fail "no supported Python interpreter found (requires Python >= 3.12; tried: python3, python)"
+
+# --- delegate --------------------------------------------------------------
+
+SCRIPT_DIR=$(resolve_dir "$0")
 
 exec "$PY" "$SCRIPT_DIR/install.py" --root "$CONSUMER_ROOT" "$@"

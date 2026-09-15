@@ -20,24 +20,15 @@ The presence of `.claude/` or `CLAUDE.md` does not select the client.
 Claude Code loads project skills from `.claude/skills/`. It does not read
 `.agents/skills/` as a cross-agent materialization surface.
 
-For selected client `claude`, the installer exposes each materialized skill as
-one repository-relative symlink:
-
-```text
-.claude/skills/<skill-name>
-    -> ../../.agents/skills/<skill-name>
-```
+For selected client `claude`, `.claude/skills/` is the client skill root.
+`SKILL.md` defines the shared reconciliation mechanism that exposes each
+installed skill there — one repository-relative directory symlink per
+skill, created, corrected, and removed as `.agents/skills/*` changes, with
+every unrelated entry preserved. This reference does not restate that
+algorithm; Claude does not define or own it.
 
 Do not symlink the `.claude/skills/` directory itself. Claude Code writes its
 own state into that directory.
-
-An installer-owned exposure is a symlink whose target names the same
-repository's `.agents/skills/` tree. Other entries remain consumer-owned.
-
-During reconciliation, the installer creates missing owned exposure, corrects
-owned exposure whose materialized target changed, and removes owned exposure
-for skills no longer materialized. It does not replace unrelated files,
-directories, or symlinks.
 
 Frontmatter fields used only by Infurnet remain installation metadata. Claude
 Code discovery does not grant authority or select a profile.

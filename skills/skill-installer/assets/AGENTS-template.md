@@ -1,5 +1,5 @@
 <!-- BEGIN infurnet-skills -->
-## Infurnet skills
+## Installed skills
 
 Project-specific bindings used by installed skills are declared in root
 `PROJECT.md`.

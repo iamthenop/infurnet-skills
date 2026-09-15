@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and reconcile Infurnet Agent Skills in a consuming repository.
+"""Install and reconcile Agent Skills in a consuming repository.
 
 Run with `--root <consumer-root>` to target the consuming repository
 explicitly; the installer's own physical location and the caller's working
@@ -14,6 +14,11 @@ Run with no option to report and verify; use `--apply` to apply changes or
 `--verify` for verification only (fully offline). Use `--candidate REF` to
 preview an additional, unadopted ref's obligation differences — read-only,
 it never changes what --apply installs or writes to .agents/adoption.yml.
+
+Client integration is explicit and off by default. Pass `--client claude`
+to wire root `CLAUDE.md` to `AGENTS.md` and expose materialized skills under
+`.claude/skills/`; no repository content, environment variable, or installed
+application ever selects a client on its own.
 """
 import argparse
 import hashlib
@@ -25,13 +30,17 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 SELF_PATH = Path(__file__).resolve()
 ASSETS_ROOT = SELF_PATH.parent.parent / "assets"
 
 AGENTS_BEGIN = "<!-- BEGIN infurnet-skills -->"
 AGENTS_END = "<!-- END infurnet-skills -->"
+
+CLAUDE_IMPORT = "@AGENTS.md"
 
 EXCLUDE_BEGIN = "# BEGIN infurnet-skills generated"
 EXCLUDE_END = "# END infurnet-skills generated"
@@ -59,8 +68,8 @@ OBLIGATION_HEADERS = {
 
 
 def bootstrap_agents_md():
-    """Create or reconcile the installer-owned Infurnet section of the
-    consumer's AGENTS.md, delimited by AGENTS_BEGIN/AGENTS_END. An absent
+    """Create or reconcile the installer-owned section of the consumer's
+    AGENTS.md, delimited by AGENTS_BEGIN/AGENTS_END. An absent
     file is written whole from the template. Content with no markers keeps
     everything it already has, with the template appended after exactly one
     blank line. Exactly one valid marker pair has only that region replaced.
@@ -84,7 +93,7 @@ def bootstrap_agents_md():
         new_text = text[:begins[0]] + template + text[end_line_end:]
     else:
         sys.exit(
-            f"{path}: malformed, unmatched, nested, or duplicate Infurnet "
+            f"{path}: malformed, unmatched, nested, or duplicate installer "
             "markers; not modified"
         )
     path.write_text(new_text)
@@ -111,6 +120,184 @@ def bootstrap_adoption_yaml():
     AGENTS_ROOT.mkdir(parents=True, exist_ok=True)
     ADOPTION_YAML.write_bytes((ASSETS_ROOT / "adoption-template.yml").read_bytes())
     return True
+
+
+# --- generic client-skill exposure ---------------------------------------
+#
+# A client wraps the canonical installed-skill surface, .agents/skills/*; it
+# does not rebuild or reinterpret it. One implementation reconciles every
+# client's skill root to that canonical surface, regardless of which client
+# selects it. A client definition supplies only its own facts: where its
+# skill root lives, and any client-specific governance integration.
+
+
+def check_client_skills_preflight(client_skills_root):
+    """Preflight shared by every client, independent of any particular
+    skill name: directory-symlink capability (probed and removed
+    immediately, in an OS temp directory — never under CONSUMER_ROOT), and
+    every path component from CONSUMER_ROOT down to and including
+    client_skills_root is a real, non-symlink entry (and, when it exists,
+    a directory). Checked lexically, one component at a time — a
+    symlinked ancestor is never resolved and followed into its target, so
+    a later mkdir()/symlink() can never write through it, whether that
+    ancestor is dangling or points inside or outside the consumer. Per-
+    skill exposure collisions are checked later, by
+    reconcile_client_skills() itself, once the canonical installed skill
+    set is known — still strictly before any mutation of that root, since
+    that check runs before any symlink is created."""
+    probe_root = Path(tempfile.mkdtemp(prefix="infurnet-skills-symlink-check-"))
+    try:
+        target = probe_root / "target"
+        target.mkdir()
+        try:
+            os.symlink(target, probe_root / "link", target_is_directory=True)
+        except OSError as e:
+            sys.exit(f"directory-symlink capability unavailable: {e}")
+    finally:
+        shutil.rmtree(probe_root, ignore_errors=True)
+
+    try:
+        relative = client_skills_root.relative_to(CONSUMER_ROOT)
+    except ValueError:
+        sys.exit(f"{client_skills_root}: is not beneath the consumer root "
+                  f"{CONSUMER_ROOT}")
+
+    current = CONSUMER_ROOT
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            sys.exit(f"{current}: is a symlink; refusing to write through it")
+        if current.exists() and not current.is_dir():
+            sys.exit(f"{current}: exists but is not a directory")
+
+
+def owned_client_exposure(client_skills_root):
+    """{name: (resolved_target, raw_target)} for every symlink directly
+    under client_skills_root whose target names a path beneath
+    SKILLS_ROOT — an installer-owned exposure, identified from its
+    resolved target alone, never its filename. raw_target is the literal
+    symlink text on disk: resolving to the right installed skill is
+    necessary but not sufficient for "correct" — the installer contract
+    also requires that raw text to be the canonical repository-relative
+    form, so callers must compare both. client_skills_root need not
+    exist."""
+    owned = {}
+    if not client_skills_root.is_dir():
+        return owned
+    for entry in client_skills_root.iterdir():
+        if not entry.is_symlink():
+            continue
+        raw_target = os.readlink(entry)
+        resolved = Path(os.path.normpath(str(entry.parent / raw_target)))
+        if resolved != SKILLS_ROOT and resolved.is_relative_to(SKILLS_ROOT):
+            owned[entry.name] = (resolved, raw_target)
+    return owned
+
+
+def reconcile_client_skills(client_skills_root):
+    """The one generic client-skill reconciliation implementation, shared
+    by every client. Derives the desired exposure set directly from the
+    canonical materialization surface, .agents/skills/* — never from an
+    installation-internal provenance collection such as which skills came
+    from root, a dependency, an external source, or a stub — and
+    reconciles client_skills_root to expose exactly that set, one
+    directory symlink per installed skill. An owned link is left alone
+    only when it both resolves to the correct installed skill and its raw
+    on-disk target is already the canonical repository-relative form —
+    resolving correctly is not by itself enough; an owned link that
+    resolves right but is spelled absolute (or otherwise non-canonical) is
+    corrected in place. Never touches client_skills_root itself as a
+    symlink, never copies, never overwrites unrelated or non-owned
+    content, and never inspects a skill's own contents — a desired name
+    colliding with anything else there is a stop condition, checked for
+    every desired name before any symlink in this call is created,
+    corrected, or removed."""
+    desired_names = ({p.name for p in SKILLS_ROOT.iterdir() if p.is_dir()}
+                      if SKILLS_ROOT.is_dir() else set())
+    owned = owned_client_exposure(client_skills_root)
+
+    to_create, to_replace = [], []
+    for name in sorted(desired_names):
+        desired_target = SKILLS_ROOT / name
+        canonical_raw_target = os.path.relpath(desired_target, client_skills_root)
+        if name in owned:
+            resolved, raw_target = owned[name]
+            if resolved == desired_target and raw_target == canonical_raw_target:
+                continue
+            to_replace.append(name)
+            continue
+        link = client_skills_root / name
+        if link.exists() or link.is_symlink():
+            sys.exit(f"{link}: exists and is not an installer-owned "
+                      "exposure symlink; refusing to overwrite")
+        to_create.append(name)
+    to_remove = sorted(set(owned) - desired_names)
+
+    client_skills_root.mkdir(parents=True, exist_ok=True)
+    for name in to_replace + to_create:
+        link = client_skills_root / name
+        if link.is_symlink():
+            link.unlink()
+        target = os.path.relpath(SKILLS_ROOT / name, client_skills_root)
+        os.symlink(target, link, target_is_directory=True)
+    for name in to_remove:
+        (client_skills_root / name).unlink()
+
+
+# --- Claude client ---------------------------------------------------------
+
+
+def reconcile_claude_governance():
+    """Claude-specific governance integration: root CLAUDE.md must import
+    "@AGENTS.md" as its first line. Absent: create it as the whole file.
+    Present with that import as its exact first line: preserve
+    byte-for-byte (no write at all — this is what keeps every call here a
+    no-op on an already-wired consumer, in every invocation mode). Present
+    with the import on some other line: stop rather than create a
+    duplicate or move consumer content. Present with no such line: prepend
+    the import and one blank line, otherwise unchanged. Present but not a
+    regular file: stop. A symlink is rejected before any operation that
+    would follow it (exists()/is_file() both follow a link, and exists()
+    is false for a dangling one — either could read or write through to
+    an unintended target) — is_symlink() uses lstat and never follows,
+    so it is safe to check first regardless of whether the target
+    exists."""
+    path = CONSUMER_ROOT / "CLAUDE.md"
+    if path.is_symlink():
+        sys.exit(f"{path}: is a symlink; refusing to read or write through it")
+    if path.exists() and not path.is_file():
+        sys.exit(f"{path}: exists but is not a regular file")
+    if not path.exists():
+        path.write_text(CLAUDE_IMPORT + "\n")
+        return
+
+    text = path.read_text()
+    lines = text.split("\n")
+    if lines[0] == CLAUDE_IMPORT:
+        return
+    if CLAUDE_IMPORT in lines[1:]:
+        sys.exit(f"{path}: contains {CLAUDE_IMPORT!r} but not as the first "
+                  "line; refusing to create a duplicate import")
+    path.write_text(CLAUDE_IMPORT + "\n\n" + text)
+
+
+@dataclass(frozen=True)
+class ClientDefinition:
+    """A client's own facts, and nothing the generic reconciler already
+    owns: where its skill root lives (read at call time, since
+    CONSUMER_ROOT is not yet known when CLIENTS is built), and its
+    client-specific governance integration."""
+    skills_root: Callable[[], Path]
+    governance: Callable[[], None]
+
+
+CLIENTS = {
+    "claude": ClientDefinition(
+        skills_root=lambda: CONSUMER_ROOT / ".claude" / "skills",
+        governance=reconcile_claude_governance,
+    ),
+}
+SUPPORTED_CLIENTS = tuple(CLIENTS)
 
 
 # --- adoption.yml ------------------------------------------------------
@@ -288,12 +475,12 @@ def read_metadata_keys(skill_md, keys):
 
 def read_external_metadata(skill_md):
     """Narrow, fail-closed extraction of the external-* keys from an
-    Infurnet-owned local descriptor, validated for coherence against its own
-    skill-type. Returns None when the skill declares neither external-*
-    metadata nor skill-type: external — an ordinary root skill, not an
-    external descriptor at all. Never applied to an upstream SKILL.md; those
-    are read by resolve_upstream_skill() instead and carry no Infurnet
-    skill-type requirement."""
+    installer-owned local descriptor, validated for coherence against its
+    own skill-type. Returns None when the skill declares neither
+    external-* metadata nor skill-type: external — an ordinary root
+    skill, not an external descriptor at all. Never applied to an
+    upstream SKILL.md; those are read by resolve_upstream_skill() instead
+    and carry no such skill-type requirement."""
     metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS + ("skill-type",))
     skill_type = metadata.pop("skill-type", None)
     has_external = any(k in metadata for k in EXTERNAL_KEYS)
@@ -320,8 +507,8 @@ def read_skill_dependencies(skill_md):
 
 def resolve_installation_closure(direct_names, source_root):
     """Recursively expands skill-dependency from the consumer's directly
-    adopted names, reading from source_root — the pinned Infurnet source
-    tree the caller is already using, never a previously materialized
+    adopted names, reading from source_root — the pinned skill-library
+    source tree the caller is already using, never a previously materialized
     consumer directory. Returns the full installation closure as a set;
     adoption.yml itself is never touched, and closure is never written
     back to it. Fails closed (before any persistent mutation, in every
@@ -1405,6 +1592,11 @@ def main():
         help="NAME=keep|stub — resolve one currently-unresolved external "
              "skill; only valid together with --apply",
     )
+    parser.add_argument(
+        "--client", action="append", default=[], choices=SUPPORTED_CLIENTS,
+        help="request a supported client's discovery and governance wiring; "
+             "repeatable; no repository content ever selects a client",
+    )
     args = parser.parse_args()
 
     global CONSUMER_ROOT, AGENTS_ROOT, ADOPTION_YAML, SKILLS_ROOT, MANIFEST
@@ -1416,9 +1608,15 @@ def main():
     MANIFEST = AGENTS_ROOT / "infurnet-skills.manifest.json"
     GIT_EXCLUDE = CONSUMER_ROOT / ".git" / "info" / "exclude"
     VENDOR_ROOT = AGENTS_ROOT / "vendor"
+    selected_clients = [CLIENTS[name] for name in dict.fromkeys(args.client)]
 
     bootstrap_agents_md()
     bootstrap_project_md()
+    for client in selected_clients:
+        check_client_skills_preflight(client.skills_root())
+    for client in selected_clients:
+        client.governance()
+        client.skills_root().mkdir(parents=True, exist_ok=True)
     if bootstrap_adoption_yaml():
         print(f"Created {ADOPTION_YAML} from the bundled template.")
         print("Complete the adoption declaration, then re-run the installer.")
@@ -1714,6 +1912,9 @@ def main():
                 for e in final_errors:
                     print(f"    {e}")
                 sys.exit(1)
+
+            for client in selected_clients:
+                reconcile_client_skills(client.skills_root())
 
             tmp_manifest = MANIFEST.with_name(
                 MANIFEST.name + f".tmp-{uuid.uuid4().hex[:12]}"

@@ -16,7 +16,7 @@ METADATA_KEYS = {
 }
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
-PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
+PORTABILITY = ("Infurnet", "docs/agents", "founder")
 GUARDS = [
     ("authorized by TICKET", "authorization reference in @temporary example"),
     ("get1", "sequential api-docs anchors"),

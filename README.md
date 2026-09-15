@@ -144,11 +144,11 @@ dependencies; see Installation semantics.
   time, a dangling skill reference is a stop condition for the consuming agent.
 * A skill acquires authority in a repository only when that repository's
   governance adopts it; installation alone confers none.
-* The repository's governance entry point declares where its bindings file
-  lives; skills dereference bindings through it.
+* Project-specific bindings live in root `PROJECT.md`; installed portable
+  skills dereference project-specific values there.
 * A skill with `external-*` metadata is an installation descriptor for the
   external skill of the same name. Its `skills/<name>/` directory and
-  frontmatter `name` identify the runtime destination. The updater does not
+  frontmatter `name` identify the runtime destination. The installer does not
   materialize the local descriptor into `.agents/skills/<name>/`; it
   installs the pinned upstream skill there instead. The resolved upstream
   `SKILL.md` must declare the same name. External installation does not
@@ -157,8 +157,9 @@ dependencies; see Installation semantics.
 ## Adoption contract
 
 A consuming repository records its adoption in `.agents/adoption.yml`,
-copied from this repository's [`adoption.yml`](adoption.yml) template. The
-declaration pins a cryptographically exact source commit; a governance
+copied from the
+[`skill-installer` adoption template](skills/skill-installer/assets/adoption-template.yml).
+The declaration pins a cryptographically exact source commit; a governance
 dependency must not follow a mutable checkout or floating `main`.
 
 The adoption declaration records installed skills of any skill type in its
@@ -173,29 +174,54 @@ Updating the pin follows six steps:
 5. update the pin and installed content together;
 6. validate the consumer.
 
-The updater matches governed files by path and resolves the consuming
-repository from its own file location. Install head's updater only after
-approval.
+The installer does not infer approval from a newer source revision.
+`--candidate REF` performs read-only candidate comparison. After approval,
+the consumer updates its durable adoption declaration and runs the installer
+with `--apply`.
 
-When head moves governed files between paths, run head's updater from inside
-the consuming repository before approval; without that run, the obligation
-report omits every moved file.
+The consumer root is always explicit. Platform wrappers accept it as their
+first argument; direct Python invocation uses `--root <consumer-root>`.
 
 ## Adoption and installation
 
 The adoption declaration is a consuming repository's durable statement of
-intent, at `.agents/adoption.yml`. `update-skills.py` reads it and never
-writes to it — moving the pin means editing this file directly, in the
-consumer's own commit, before running `--apply`.
+intent at `.agents/adoption.yml`. The installer reads an existing declaration
+and never rewrites its adoption decisions. Moving the pin means editing this
+file directly in the consumer's own commit before running `--apply`.
 
-Skill materialization under `.agents/skills/<skill-name>/`, external
-repository acquisition for adopted external descriptors, and the
-installation manifest at `.agents/infurnet-skills.manifest.json` are live.
-External repositories are acquired under
-`.agents/vendor/<owner>/<repository>/` and external skills use copy
-materialization. The existing root Infurnet vendor checkout
-has not yet migrated to the two-segment owner/repository path. Symlink
-materialization remains planned and is not implemented.
+Root and external repositories are acquired under
+`.agents/vendor/<owner>/<repository>/`. Adopted skills are materialized under
+`.agents/skills/<skill-name>/`. The installation manifest lives at
+`.agents/infurnet-skills.manifest.json`.
+
+Client discovery is a separate integration layer. A client can require its own
+exposure of materialized skills; those discovery surfaces do not replace
+`.agents/skills/` and do not determine installation state.
+
+### Installer entry points
+
+The bundled platform entry points are:
+
+```text
+install.sh <consumer-root> [installer options...]
+install.ps1 <consumer-root> [installer options...]
+```
+
+Both run runtime preflight and delegate to `install.py`.
+
+Direct Python invocation remains available:
+
+```text
+python scripts/install.py --root <consumer-root> [installer options...]
+```
+
+Client integration is explicit. For Claude Code:
+
+```text
+--client claude
+```
+
+The installer does not infer a client from repository contents.
 
 ### Adoption declaration
 
@@ -239,9 +265,9 @@ surfaces:
 ```
 
 `vendor/` records acquired repository sources; each `<owner>/<repository>`
-directory is a vendor. `skills/` exposes installed Agent Skills to clients;
-each `<skill-name>` directory is a materialized skill — an installed
-discovery copy or link.
+directory is a vendor. `skills/` is the runtime materialization surface; each
+`<skill-name>` directory is an installed skill. Client-specific discovery can
+require a separate exposure surface.
 
 A canonical repository URL maps mechanically to the vendor namespace:
 
@@ -284,7 +310,7 @@ governance authority.
 * An installer-created materialized skill is generated state. A consumer
   does not edit it as durable source.
 * `.agents/infurnet-skills.manifest.json` is generated installation state
-  that `update-skills.py` owns. It records the last successfully installed
+  that `skill-installer` owns. It records the last successfully installed
   state, not the declaration of desired adoption. It is not an authority
   source, and this document does not finalize its schema.
 * A consuming repository owns its own Git tracking policy for `.agents/`.

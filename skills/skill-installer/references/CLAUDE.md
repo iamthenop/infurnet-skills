@@ -30,8 +30,9 @@ algorithm; Claude does not define or own it.
 Do not symlink the `.claude/skills/` directory itself. Claude Code writes its
 own state into that directory.
 
-Frontmatter fields used only by Infurnet remain installation metadata. Claude
-Code discovery does not grant authority or select a profile.
+Frontmatter fields used only by the installed skill library remain
+installation metadata. Claude Code discovery does not grant authority or
+select a profile.
 
 ## Governance entry point
 
@@ -51,7 +52,7 @@ blank line while preserving existing content.
 If the import already exists anywhere except the first line, integration stops
 rather than creating a duplicate or moving consumer content.
 
-Do not maintain a second copy of the Infurnet section in `CLAUDE.md`.
+Do not maintain a second copy of the installer-owned section in `CLAUDE.md`.
 Claude-only instructions belong below the import line.
 
 A `CLAUDE.md` in a subdirectory is not the repository governance entry point

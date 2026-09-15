@@ -540,10 +540,7 @@ def check_text(paths):
         if p.suffix == ".md" and GLYPHS.search(t):
             findings.append(f"{rel}: character-drawn diagram glyphs present")
         if str(rel).startswith("skills/"):
-            in_skill_installer = str(rel).startswith("skills/skill-installer/")
             for needle in PORTABILITY:
-                if needle == "Infurnet" and in_skill_installer:
-                    continue
                 if needle in t:
                     findings.append(f"{rel}: project-specific reference {needle!r}")
             for needle, label in GUARDS:

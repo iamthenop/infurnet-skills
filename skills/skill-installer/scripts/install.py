@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and reconcile Infurnet Agent Skills in a consuming repository.
+"""Install and reconcile Agent Skills in a consuming repository.
 
 Run with `--root <consumer-root>` to target the consuming repository
 explicitly; the installer's own physical location and the caller's working
@@ -68,8 +68,8 @@ OBLIGATION_HEADERS = {
 
 
 def bootstrap_agents_md():
-    """Create or reconcile the installer-owned Infurnet section of the
-    consumer's AGENTS.md, delimited by AGENTS_BEGIN/AGENTS_END. An absent
+    """Create or reconcile the installer-owned section of the consumer's
+    AGENTS.md, delimited by AGENTS_BEGIN/AGENTS_END. An absent
     file is written whole from the template. Content with no markers keeps
     everything it already has, with the template appended after exactly one
     blank line. Exactly one valid marker pair has only that region replaced.
@@ -93,7 +93,7 @@ def bootstrap_agents_md():
         new_text = text[:begins[0]] + template + text[end_line_end:]
     else:
         sys.exit(
-            f"{path}: malformed, unmatched, nested, or duplicate Infurnet "
+            f"{path}: malformed, unmatched, nested, or duplicate installer "
             "markers; not modified"
         )
     path.write_text(new_text)
@@ -135,8 +135,13 @@ def check_client_skills_preflight(client_skills_root):
     """Preflight shared by every client, independent of any particular
     skill name: directory-symlink capability (probed and removed
     immediately, in an OS temp directory — never under CONSUMER_ROOT), and
-    client_skills_root is absent or a real directory rather than a
-    symlink. Per-skill exposure collisions are checked later, by
+    every path component from CONSUMER_ROOT down to and including
+    client_skills_root is a real, non-symlink entry (and, when it exists,
+    a directory). Checked lexically, one component at a time — a
+    symlinked ancestor is never resolved and followed into its target, so
+    a later mkdir()/symlink() can never write through it, whether that
+    ancestor is dangling or points inside or outside the consumer. Per-
+    skill exposure collisions are checked later, by
     reconcile_client_skills() itself, once the canonical installed skill
     set is known — still strictly before any mutation of that root, since
     that check runs before any symlink is created."""
@@ -151,10 +156,19 @@ def check_client_skills_preflight(client_skills_root):
     finally:
         shutil.rmtree(probe_root, ignore_errors=True)
 
-    if client_skills_root.is_symlink():
-        sys.exit(f"{client_skills_root}: is a symlink; expected a real directory")
-    if client_skills_root.exists() and not client_skills_root.is_dir():
-        sys.exit(f"{client_skills_root}: exists but is not a directory")
+    try:
+        relative = client_skills_root.relative_to(CONSUMER_ROOT)
+    except ValueError:
+        sys.exit(f"{client_skills_root}: is not beneath the consumer root "
+                  f"{CONSUMER_ROOT}")
+
+    current = CONSUMER_ROOT
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            sys.exit(f"{current}: is a symlink; refusing to write through it")
+        if current.exists() and not current.is_dir():
+            sys.exit(f"{current}: exists but is not a directory")
 
 
 def owned_client_exposure(client_skills_root):
@@ -242,8 +256,15 @@ def reconcile_claude_governance():
     with the import on some other line: stop rather than create a
     duplicate or move consumer content. Present with no such line: prepend
     the import and one blank line, otherwise unchanged. Present but not a
-    regular file: stop."""
+    regular file: stop. A symlink is rejected before any operation that
+    would follow it (exists()/is_file() both follow a link, and exists()
+    is false for a dangling one — either could read or write through to
+    an unintended target) — is_symlink() uses lstat and never follows,
+    so it is safe to check first regardless of whether the target
+    exists."""
     path = CONSUMER_ROOT / "CLAUDE.md"
+    if path.is_symlink():
+        sys.exit(f"{path}: is a symlink; refusing to read or write through it")
     if path.exists() and not path.is_file():
         sys.exit(f"{path}: exists but is not a regular file")
     if not path.exists():
@@ -454,12 +475,12 @@ def read_metadata_keys(skill_md, keys):
 
 def read_external_metadata(skill_md):
     """Narrow, fail-closed extraction of the external-* keys from an
-    Infurnet-owned local descriptor, validated for coherence against its own
-    skill-type. Returns None when the skill declares neither external-*
-    metadata nor skill-type: external — an ordinary root skill, not an
-    external descriptor at all. Never applied to an upstream SKILL.md; those
-    are read by resolve_upstream_skill() instead and carry no Infurnet
-    skill-type requirement."""
+    installer-owned local descriptor, validated for coherence against its
+    own skill-type. Returns None when the skill declares neither
+    external-* metadata nor skill-type: external — an ordinary root
+    skill, not an external descriptor at all. Never applied to an
+    upstream SKILL.md; those are read by resolve_upstream_skill() instead
+    and carry no such skill-type requirement."""
     metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS + ("skill-type",))
     skill_type = metadata.pop("skill-type", None)
     has_external = any(k in metadata for k in EXTERNAL_KEYS)
@@ -486,8 +507,8 @@ def read_skill_dependencies(skill_md):
 
 def resolve_installation_closure(direct_names, source_root):
     """Recursively expands skill-dependency from the consumer's directly
-    adopted names, reading from source_root — the pinned Infurnet source
-    tree the caller is already using, never a previously materialized
+    adopted names, reading from source_root — the pinned skill-library
+    source tree the caller is already using, never a previously materialized
     consumer directory. Returns the full installation closure as a set;
     adoption.yml itself is never touched, and closure is never written
     back to it. Fails closed (before any persistent mutation, in every

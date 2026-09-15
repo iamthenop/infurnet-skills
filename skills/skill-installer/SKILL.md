@@ -1,6 +1,6 @@
 ---
 name: skill-installer
-description: "Bootstrap, install, and reconcile Infurnet Agent Skills in a consuming repository from its adoption declaration. Use when establishing a new managed installation or reconciling installed skills to approved adoption intent."
+description: "Bootstrap, install, and reconcile Agent Skills in a consuming repository from its adoption declaration. Use when establishing a new managed installation or reconciling installed skills to approved adoption intent."
 license: MIT
 metadata:
   skill-type: deliverable
@@ -9,8 +9,8 @@ metadata:
 
 # Skill installer
 
-`skill-installer` establishes and reconciles Infurnet Agent Skills in a
-consuming repository.
+`skill-installer` establishes and reconciles Agent Skills in a consuming
+repository.
 
 Installation state and project authority are separate. Installing a skill does
 not assign a profile, authorize work, widen scope, or grant mutation authority.
@@ -19,15 +19,10 @@ not assign a profile, authorize work, widen scope, or grant mutation authority.
 
 The installer lifecycle is:
 
-```text
-no managed installation
-    ->
-bootstrap
-    ->
-managed installation
-    ->
-reconcile approved adoption intent
-```
+1. Start with no managed installation.
+2. Bootstrap durable consumer state.
+3. Establish a managed installation.
+4. Reconcile approved adoption intent.
 
 Bootstrap establishes durable consumer files and any explicitly selected client
 integration. A missing durable file may be created from its bundled template.
@@ -56,7 +51,7 @@ An existing adoption declaration is never overwritten.
 
 An existing `PROJECT.md` is never overwritten.
 
-The Infurnet section of `AGENTS.md` is owned only between its installer markers.
+The installer-owned section of `AGENTS.md` exists only between its installer markers.
 Content outside those markers belongs to the consuming repository.
 
 ## Generated installation state
@@ -132,16 +127,16 @@ complete the adoption declaration before installation continues.
 If `PROJECT.md` does not exist, copy the bundled project template. Never
 overwrite an existing `PROJECT.md`.
 
-If `AGENTS.md` does not exist, create it from the bundled marked Infurnet
-section.
+If `AGENTS.md` does not exist, create it from the bundled marked
+installer-owned section.
 
-If `AGENTS.md` exists without Infurnet markers, append the marked Infurnet
-section.
+If `AGENTS.md` exists without installer markers, append the marked
+installer-owned section.
 
-If exactly one valid Infurnet marker pair exists, replace that complete marked
+If exactly one valid installer marker pair exists, replace that complete marked
 section with the bundled template.
 
-Malformed, unmatched, nested, or duplicate Infurnet markers are a stop
+Malformed, unmatched, nested, or duplicate installer markers are a stop
 condition. Do not guess ownership.
 
 ## Client integration
@@ -182,21 +177,9 @@ per installed skill.
 
 ## Claude
 
-The supported Claude client identifier is:
-
-```text
-claude
-```
-
-[`references/CLAUDE.md`](references/CLAUDE.md) defines Claude's own facts.
-Nothing there redefines the shared reconciliation above.
-
-For explicit client `claude`, the client skill root is `.claude/skills/` and
-the client-specific governance integration wires root `CLAUDE.md` to
-`AGENTS.md`.
-
-Claude permission settings remain consumer-owned and are not changed by the
-installer.
+[`references/CLAUDE.md`](references/CLAUDE.md) is the single home for
+Claude-specific client facts. Nothing there redefines the shared
+reconciliation above.
 
 ## Stop conditions
 
@@ -205,7 +188,7 @@ Stop without inferring a repair when:
 * required durable configuration is malformed;
 * an existing consumer-owned durable file would need to be overwritten outside
   an explicitly installer-owned section;
-* Infurnet markers in `AGENTS.md` are malformed or ambiguous;
+* installer markers in `AGENTS.md` are malformed or ambiguous;
 * the adoption declaration is incomplete or invalid;
 * a declared source or immutable revision cannot be resolved;
 * installation closure cannot be resolved;

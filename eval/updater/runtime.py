@@ -564,6 +564,33 @@ def test_generic_preflight_client_root_symlink_blocks(results, workdir):
     results.check("generic preflight — client skill root itself a symlink stops", stopped, "")
 
 
+def test_generic_preflight_ancestor_symlink_blocks(results, workdir):
+    """A symlinked ancestor of the client skill root — not just the root
+    itself — must stop preflight before any mutation. The ancestor must
+    never be resolved and followed into its target: no exposure surface
+    may appear there, and the canonical installed-skill surface must be
+    left untouched."""
+    module, skills_root = make_client_reconciler_env(workdir / "generic-ancestor-symlink")
+    install_canonical_skill(skills_root, "alpha")
+    before = (skills_root / "alpha" / "SKILL.md").read_text()
+    elsewhere = workdir / "generic-ancestor-symlink" / "elsewhere"
+    elsewhere.mkdir(parents=True)
+    ancestor = module.CONSUMER_ROOT / "some-client"
+    ancestor.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(elsewhere, ancestor, target_is_directory=True)
+    client_root = ancestor / "skills"
+
+    stopped = stopped_with_system_exit(
+        lambda: module.check_client_skills_preflight(client_root))
+    results.check("generic preflight — symlinked ancestor of client root stops", stopped, "")
+    results.check(
+        "generic preflight — no exposure created through the symlinked ancestor",
+        not (elsewhere / "skills").exists(), "")
+    results.check(
+        "generic preflight — canonical installed skill contents unchanged",
+        (skills_root / "alpha" / "SKILL.md").read_text() == before, "")
+
+
 # --- Claude-specific regressions -------------------------------------------
 #
 # Claude's own wiring onto the shared mechanism above: which root it uses,
@@ -657,6 +684,38 @@ def test_claude_md_not_regular_file_blocks(results, workdir):
     results.check("CLAUDE.md is not a regular file — nonzero exit", code != 0, out)
 
 
+def test_claude_md_symlink_to_existing_file_blocks(results, workdir):
+    """A CLAUDE.md symlink must be rejected before is_file()/read_text()
+    ever follows it — a real file elsewhere must never be read or
+    written through it."""
+    consumer = workdir / "claude-md-symlink-existing"
+    consumer.mkdir(parents=True)
+    target = workdir / "claude-md-symlink-existing-target.md"
+    write(target, "@AGENTS.md\n\nUnrelated existing content.\n")
+    before = target.read_text()
+    os.symlink(target, consumer / "CLAUDE.md")
+
+    code, out = run_install(consumer, ["--client", "claude"])
+    results.check("CLAUDE.md symlinked to an existing file — nonzero exit", code != 0, out)
+    results.check("CLAUDE.md symlinked to an existing file — target bytes unchanged",
+                  target.read_text() == before, out)
+
+
+def test_claude_md_dangling_symlink_blocks(results, workdir):
+    """A dangling CLAUDE.md symlink must be rejected before write_text()
+    can follow it and create a file at the target out from under the
+    symlink."""
+    consumer = workdir / "claude-md-symlink-dangling"
+    consumer.mkdir(parents=True)
+    target = workdir / "claude-md-symlink-dangling-target.md"
+    os.symlink(target, consumer / "CLAUDE.md")
+
+    code, out = run_install(consumer, ["--client", "claude"])
+    results.check("dangling CLAUDE.md symlink — nonzero exit", code != 0, out)
+    results.check("dangling CLAUDE.md symlink — target remains absent",
+                  not target.exists(), out)
+
+
 def test_claude_permission_settings_untouched(results, workdir):
     base = workdir / "permission-settings"
     upstream, sha = make_upstream(base)
@@ -699,6 +758,7 @@ def main():
         test_generic_exposure_canonical_contents_unchanged(results, workdir)
         test_generic_preflight_capability_unavailable_blocks(results, workdir)
         test_generic_preflight_client_root_symlink_blocks(results, workdir)
+        test_generic_preflight_ancestor_symlink_blocks(results, workdir)
 
         test_no_client_no_mutation(results, workdir)
         test_claude_selects_claude_skills_root(results, workdir)
@@ -707,6 +767,8 @@ def main():
         test_claude_md_correct_import_unchanged(results, workdir)
         test_claude_md_import_elsewhere_blocks(results, workdir)
         test_claude_md_not_regular_file_blocks(results, workdir)
+        test_claude_md_symlink_to_existing_file_blocks(results, workdir)
+        test_claude_md_dangling_symlink_blocks(results, workdir)
         test_claude_permission_settings_untouched(results, workdir)
 
     if results.failures:

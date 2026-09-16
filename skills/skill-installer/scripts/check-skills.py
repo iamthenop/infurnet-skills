@@ -11,13 +11,29 @@ Requires no network access. Mutates nothing.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 import yaml
 from pathlib import Path
+
+SELF_PATH = Path(__file__).resolve()
+SCRIPTS_DIR = SELF_PATH.parent
+
+
+def _load(name, filename):
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS_DIR / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+git_ops = _load("git_ops", "git_ops.py")
 
 COPY_MODE = "copy"
 # Read-compatibility only: --resolve, the flag that used to create new stub
@@ -427,41 +443,34 @@ def external_vendor_path(vendor_root, key):
 
 
 def check_external_git(path, expected_origin, expected_commit):
-    if not (path / ".git").exists():
+    """Thin adapter over the shared checkout inspection, preserving this
+    checker's own external-checkout diagnostic wording exactly."""
+    inspected = git_ops.inspect_checkout(path, expected_origin, expected_commit)
+    if not inspected["exists"]:
         return [f"{path}: not a git checkout (.git missing)"]
 
     findings = []
-    head = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"],
-                          capture_output=True, text=True)
-    actual_head = head.stdout.strip()
-    if head.returncode != 0 or actual_head != expected_commit:
+    if not inspected["head_matches"]:
         findings.append(
             f"{path}: HEAD mismatch: expected={expected_commit[:12]} "
-            f"HEAD={(actual_head or '<unreadable>')[:12]}"
+            f"HEAD={(inspected['head'] or '<unreadable>')[:12]}"
         )
 
-    detached = subprocess.run(["git", "-C", str(path), "symbolic-ref", "-q", "HEAD"],
-                              capture_output=True, text=True)
-    if detached.returncode == 0:
+    if not inspected["detached"]:
         findings.append(
-            f"{path}: HEAD is attached to a branch ({detached.stdout.strip()}); "
+            f"{path}: HEAD is attached to a branch ({inspected['branch_name']}); "
             "expected a detached HEAD"
         )
 
-    status = subprocess.run(["git", "-C", str(path), "status", "--porcelain"],
-                            capture_output=True, text=True)
-    if status.returncode != 0:
-        findings.append(f"{path}: git status failed: {status.stderr.strip()}")
-    elif status.stdout.strip():
+    if inspected["clean"] is None:
+        findings.append(f"{path}: git status failed: {inspected['status_error']}")
+    elif not inspected["clean"]:
         findings.append(f"{path}: working tree is dirty")
 
-    origin = subprocess.run(["git", "-C", str(path), "config", "--get",
-                             "remote.origin.url"], capture_output=True, text=True)
-    actual_origin = origin.stdout.strip()
-    if origin.returncode != 0 or actual_origin != expected_origin:
+    if not inspected["origin_matches"]:
         findings.append(
             f"{path}: origin mismatch: expected={expected_origin} "
-            f"origin={actual_origin or '<none>'}"
+            f"origin={inspected['origin'] or '<none>'}"
         )
 
     return findings
@@ -558,50 +567,41 @@ def vendor_pin_matches(vendor, adoption):
     origin, attached branch), which are corruption signals rather than an
     intent change. install.py uses this specifically to tell "the declared
     revision changed" (route to reconcile) apart from "the same revision is
-    just corrupted somehow" (route to repair)."""
-    if not (vendor / ".git").exists():
-        return False
-    head = subprocess.run(["git", "-C", str(vendor), "rev-parse", "HEAD"],
-                          capture_output=True, text=True)
-    return head.returncode == 0 and head.stdout.strip() == adoption["pin"]
+    just corrupted somehow" (route to repair). Derived from the shared
+    checkout inspection rather than its own separate HEAD check."""
+    inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    return inspected["exists"] and inspected["head_matches"]
 
 
 def check_git(vendor, adoption):
-    if not (vendor / ".git").exists():
+    """Thin adapter over the shared checkout inspection, preserving this
+    checker's own root-vendor diagnostic wording exactly."""
+    inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    if not inspected["exists"]:
         return ["vendor tree is not a git checkout (.git missing)"]
 
     findings = []
-    head = subprocess.run(["git", "-C", str(vendor), "rev-parse", "HEAD"],
-                          capture_output=True, text=True)
-    actual_head = head.stdout.strip()
-    if head.returncode != 0 or actual_head != adoption["pin"]:
+    if not inspected["head_matches"]:
         findings.append(
             f"HEAD mismatch: adoption.yml={adoption['pin'][:12]} "
-            f"HEAD={(actual_head or '<unreadable>')[:12]}"
+            f"HEAD={(inspected['head'] or '<unreadable>')[:12]}"
         )
 
-    detached = subprocess.run(["git", "-C", str(vendor), "symbolic-ref", "-q", "HEAD"],
-                              capture_output=True, text=True)
-    if detached.returncode == 0:
+    if not inspected["detached"]:
         findings.append(
-            f"HEAD is attached to a branch ({detached.stdout.strip()}); "
+            f"HEAD is attached to a branch ({inspected['branch_name']}); "
             "expected a detached HEAD"
         )
 
-    status = subprocess.run(["git", "-C", str(vendor), "status", "--porcelain"],
-                            capture_output=True, text=True)
-    if status.returncode != 0:
-        findings.append(f"git status failed: {status.stderr.strip()}")
-    elif status.stdout.strip():
+    if inspected["clean"] is None:
+        findings.append(f"git status failed: {inspected['status_error']}")
+    elif not inspected["clean"]:
         findings.append("vendor working tree is dirty")
 
-    origin = subprocess.run(["git", "-C", str(vendor), "remote", "get-url", "origin"],
-                            capture_output=True, text=True)
-    actual_origin = origin.stdout.strip()
-    if origin.returncode != 0 or actual_origin != adoption["repo"]:
+    if not inspected["origin_matches"]:
         findings.append(
             f"origin mismatch: adoption.yml={adoption['repo']} "
-            f"origin={actual_origin or '<none>'}"
+            f"origin={inspected['origin'] or '<none>'}"
         )
 
     return findings
@@ -774,9 +774,10 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
 
 def owned_client_exposure(client_skills_root):
     """{name: (resolved_target, raw_target)} for every symlink directly
-    under client_skills_root whose target names a path beneath skills_root
-    — an installer-owned exposure, identified from its resolved target
-    alone."""
+    under client_skills_root, whatever it points at. A caller decides
+    ownership by checking whether resolved_target actually lands beneath
+    skills_root — see assess_client_exposure(); being a symlink at all is
+    not by itself installer ownership."""
     owned = {}
     if not client_skills_root.is_dir():
         return owned
@@ -789,55 +790,123 @@ def owned_client_exposure(client_skills_root):
     return owned
 
 
-def check_client_skills(skills_root, client_skills_root, client_name):
-    """Findings describing drift between the canonical .agents/skills/* set
-    and client_skills_root's current owned exposure — never mutating."""
-    findings = []
-    desired = ({p.name for p in skills_root.iterdir() if p.is_dir()}
-               if skills_root.is_dir() else set())
+def assess_client_exposure(desired_names, skills_root, client_skills_root):
+    """The one read-only assessment of client_skills_root against
+    desired_names, shared by verification, collision preflight, and
+    reconciliation. desired_names is supplied explicitly rather than read
+    from skills_root here, so the same assessment works both for an
+    already-materialized skill set and for pre-mutation planning against a
+    not-yet-materialized target.
+
+    Returns {"correct", "needs_correction", "stale", "missing", "occupied"}
+    — sorted name lists. An entry is "occupied" (unrelated consumer
+    content, never installer-owned) whenever its resolved target does not
+    land beneath skills_root, even if it is itself a symlink."""
     owned_raw = owned_client_exposure(client_skills_root)
     owned = {name: (resolved, raw) for name, (resolved, raw) in owned_raw.items()
              if resolved.is_relative_to(skills_root)}
 
-    for name in sorted(desired):
+    correct, needs_correction, missing, occupied = [], [], [], []
+    for name in sorted(desired_names):
         target = skills_root / name
         canonical_raw = os.path.relpath(target, client_skills_root)
-        if name not in owned:
-            link = client_skills_root / name
-            if link.exists() or link.is_symlink():
-                findings.append(("client-exposure", name,
-                                 f"{client_name}: {link} exists and is not an "
-                                 "installer-owned exposure symlink"))
-            else:
-                findings.append(("client-exposure", name,
-                                 f"{client_name}: missing exposure for {name!r}"))
-        else:
+        if name in owned:
             resolved, raw = owned[name]
-            if resolved != target or raw != canonical_raw:
-                findings.append(("client-exposure", name,
-                                 f"{client_name}: exposure for {name!r} does not "
-                                 "match the canonical installed skill"))
-    for name in sorted(set(owned) - desired):
+            if resolved == target and raw == canonical_raw:
+                correct.append(name)
+            else:
+                needs_correction.append(name)
+            continue
+        link = client_skills_root / name
+        if link.exists() or link.is_symlink():
+            occupied.append(name)
+        else:
+            missing.append(name)
+    stale = sorted(set(owned) - set(desired_names))
+
+    return {"correct": correct, "needs_correction": needs_correction,
+           "missing": missing, "occupied": occupied, "stale": stale}
+
+
+def check_client_skills(skills_root, client_skills_root, client_name):
+    """Findings describing drift between the canonical .agents/skills/* set
+    and client_skills_root's current owned exposure — never mutating."""
+    desired = ({p.name for p in skills_root.iterdir() if p.is_dir()}
+               if skills_root.is_dir() else set())
+    assessment = assess_client_exposure(desired, skills_root, client_skills_root)
+
+    findings = []
+    for name in assessment["missing"]:
+        findings.append(("client-exposure", name,
+                         f"{client_name}: missing exposure for {name!r}"))
+    for name in assessment["occupied"]:
+        findings.append(("client-exposure", name,
+                         f"{client_name}: {client_skills_root / name} exists and is "
+                         "not an installer-owned exposure symlink"))
+    for name in assessment["needs_correction"]:
+        findings.append(("client-exposure", name,
+                         f"{client_name}: exposure for {name!r} does not match the "
+                         "canonical installed skill"))
+    for name in assessment["stale"]:
         findings.append(("client-exposure", name,
                          f"{client_name}: stale exposure for {name!r}, no longer installed"))
     return findings
 
 
-def check_claude_governance(consumer_root):
-    """Read-only counterpart of install.py's reconcile_claude_governance:
-    root CLAUDE.md must import "@AGENTS.md" as its exact first line."""
+CLAUDE_IMPORT = "@AGENTS.md"
+
+
+def assess_claude_governance(consumer_root):
+    """The one read-only assessment of root CLAUDE.md's required
+    "@AGENTS.md" import, shared by this checker's own findings and
+    install.py's staging. Distinguishes:
+
+      "correct"         -- the import is already the exact first line
+      "missing"         -- CLAUDE.md does not exist
+      "needs-insertion" -- CLAUDE.md exists, lacks the import anywhere;
+                            safe to prepend
+      "unsafe"          -- a symlink, a non-regular file, or the import
+                            present but not as the first line (ambiguous;
+                            never guessed or repaired)
+
+    Returns {"state", "detail", "existing_text"} — "detail" is the
+    diagnostic for "unsafe", else None; "existing_text" is CLAUDE.md's
+    current content for "needs-insertion", else None."""
     path = consumer_root / "CLAUDE.md"
     if path.is_symlink():
-        return [("client-exposure", "CLAUDE.md", f"{path}: is a symlink")]
+        return {"state": "unsafe", "detail": f"{path}: is a symlink", "existing_text": None}
     if not path.exists():
-        return [("client-exposure", "CLAUDE.md", f"{path}: missing @AGENTS.md import")]
+        return {"state": "missing", "detail": None, "existing_text": None}
     if not path.is_file():
-        return [("client-exposure", "CLAUDE.md", f"{path}: exists but is not a regular file")]
-    lines = path.read_text().split("\n")
-    if lines[0] != "@AGENTS.md":
-        return [("client-exposure", "CLAUDE.md",
-                 f"{path}: first line is not the required '@AGENTS.md' import")]
-    return []
+        return {"state": "unsafe",
+               "detail": f"{path}: exists but is not a regular file", "existing_text": None}
+    text = path.read_text()
+    lines = text.split("\n")
+    if lines[0] == CLAUDE_IMPORT:
+        return {"state": "correct", "detail": None, "existing_text": None}
+    if CLAUDE_IMPORT in lines[1:]:
+        return {"state": "unsafe",
+               "detail": f"{path}: contains {CLAUDE_IMPORT!r} but not as the first "
+                         "line; refusing to create a duplicate import",
+               "existing_text": None}
+    return {"state": "needs-insertion", "detail": None, "existing_text": text}
+
+
+def check_claude_governance(consumer_root):
+    """Read-only counterpart of install.py's Claude governance staging:
+    root CLAUDE.md must import "@AGENTS.md" as its exact first line."""
+    assessment = assess_claude_governance(consumer_root)
+    state = assessment["state"]
+    if state == "correct":
+        return []
+    if state == "unsafe":
+        return [("client-exposure", "CLAUDE.md", assessment["detail"])]
+    path = consumer_root / "CLAUDE.md"
+    if state == "missing":
+        return [("client-exposure", "CLAUDE.md", f"{path}: missing @AGENTS.md import")]
+    # "needs-insertion"
+    return [("client-exposure", "CLAUDE.md",
+             f"{path}: first line is not the required '@AGENTS.md' import")]
 
 
 CLIENT_GOVERNANCE_CHECKS = {

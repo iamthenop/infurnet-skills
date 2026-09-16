@@ -20,7 +20,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -57,6 +56,7 @@ def _load(name, filename):
 
 
 check_skills = _load("check_skills", "check-skills.py")
+git_ops = _load("git_ops", "git_ops.py")
 
 
 # --- remote ref resolution (non-mutating) --------------------------------
@@ -71,12 +71,11 @@ def resolve_sha(repo_url, ref):
     SHA is therefore returned as-is rather than sent through ls-remote."""
     if FULL_SHA_RE.fullmatch(ref):
         return ref.lower()
-    result = subprocess.run(
-        ["git", "ls-remote", repo_url, ref, f"refs/tags/{ref}",
-         f"refs/tags/{ref}^{{}}", f"refs/heads/{ref}"],
-        capture_output=True, text=True,
-    )
-    pairs = [line.split("\t") for line in result.stdout.splitlines() if line.strip()]
+    try:
+        pairs = git_ops.ls_remote(repo_url, ref, f"refs/tags/{ref}",
+                                  f"refs/tags/{ref}^{{}}", f"refs/heads/{ref}")
+    except RuntimeError as e:
+        sys.exit(str(e))
     for sha, name in pairs:
         if name.endswith("^{}"):
             return sha
@@ -88,11 +87,10 @@ def resolve_sha(repo_url, ref):
 def resolve_tag(repo_url, ref):
     """The commit refs/tags/<ref> resolves to, or None if no such tag
     exists — used to decide whether a resolved target is an exact tag."""
-    result = subprocess.run(
-        ["git", "ls-remote", repo_url, f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}"],
-        capture_output=True, text=True,
-    )
-    pairs = [line.split("\t") for line in result.stdout.splitlines() if line.strip()]
+    try:
+        pairs = git_ops.ls_remote(repo_url, f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}")
+    except RuntimeError as e:
+        sys.exit(str(e))
     for sha, name in pairs:
         if name.endswith("^{}"):
             return sha
@@ -105,21 +103,14 @@ def discover_refs(repo_url):
     """Discoverable tags/branches and remote HEAD. Never selects one as
     "latest" — that decision belongs to a human or an explicit
     --target-version."""
-    listing = subprocess.run(["git", "ls-remote", "--tags", "--heads", repo_url],
-                             capture_output=True, text=True)
-    refs = []
-    for line in listing.stdout.splitlines():
-        if not line.strip():
-            continue
-        sha, name = line.split("\t", 1)
-        refs.append({"sha": sha, "name": name})
-    head_result = subprocess.run(["git", "ls-remote", repo_url, "HEAD"],
-                                 capture_output=True, text=True)
+    try:
+        ref_pairs = git_ops.ls_remote("--tags", "--heads", repo_url)
+        head_pairs = git_ops.ls_remote(repo_url, "HEAD")
+    except RuntimeError as e:
+        sys.exit(str(e))
+    refs = [{"sha": sha, "name": name} for sha, name in ref_pairs]
     remote_head = None
-    for line in head_result.stdout.splitlines():
-        if not line.strip():
-            continue
-        sha, name = line.split("\t", 1)
+    for sha, name in head_pairs:
         if name == "HEAD":
             remote_head = sha
     return {"refs": refs, "head": remote_head}
@@ -148,9 +139,7 @@ def fetch_temp_tree(repo_url, sha, tmp_parent=None):
     or purely inspecting invocation never creates anything under the
     consumer repository itself."""
     tmp = Path(tempfile.mkdtemp(dir=tmp_parent, prefix=".check-update-fetch-"))
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)],
-                   check=True)
-    subprocess.run(["git", "-C", str(tmp), "checkout", "--quiet", sha], check=True)
+    git_ops.acquire_tree(repo_url, sha, tmp)
     return tmp
 
 
@@ -178,6 +167,8 @@ def collect_governed(tree):
     if not skills_dir.is_dir():
         return files
     for bundle in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
+        if bundle.is_symlink():
+            sys.exit(f"{bundle}: symlink skill bundle root; refusing to inventory")
         bundle_resolved = bundle.resolve()
         for dirpath, dirnames, filenames in os.walk(bundle, followlinks=False):
             dirnames.sort()

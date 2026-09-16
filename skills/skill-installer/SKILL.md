@@ -93,6 +93,12 @@ Non-mutating checker entry points are:
 * [`scripts/check-update.py`](scripts/check-update.py) for remote update
   discovery and candidate comparison.
 
+Shared internal implementation:
+
+* [`scripts/git_ops.py`](scripts/git_ops.py) provides Git checkout
+  inspection, repository acquisition, and remote-reference retrieval. It is
+  not a command-line entry point.
+
 `install.py` invokes these checker surfaces. It does not maintain separate
 copies of their checks.
 

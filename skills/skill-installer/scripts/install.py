@@ -34,7 +34,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -51,7 +50,6 @@ ASSETS_ROOT = SCRIPTS_DIR.parent / "assets"
 
 AGENTS_BEGIN = "<!-- BEGIN infurnet-skills -->"
 AGENTS_END = "<!-- END infurnet-skills -->"
-CLAUDE_IMPORT = "@AGENTS.md"
 EXCLUDE_BEGIN = "# BEGIN infurnet-skills generated"
 EXCLUDE_END = "# END infurnet-skills generated"
 
@@ -69,11 +67,32 @@ def _load(name, filename):
 check_skills = _load("check_skills", "check-skills.py")
 check_bindings = _load("check_bindings", "check-bindings.py")
 check_update = _load("check_update", "check-update.py")
+git_ops = _load("git_ops", "git_ops.py")
 
 SUPPORTED_CLIENTS = check_skills.SUPPORTED_CLIENTS
 
 
 # --- bootstrap: compute (read-only) then apply ---------------------------
+
+
+def locate_marked_section(text, begin_marker, end_marker):
+    """The one marker-location and splice-index operation shared by every
+    marked-section edit in this file. Returns ("absent", None) when neither
+    marker appears; ("present", (start, end)) for exactly one well-formed
+    begin<end pair, where text[:start] + <replacement> + text[end:]
+    performs the splice (end is just past the end marker's own line); or
+    ("malformed", None) for anything else — unmatched, nested, or duplicate
+    markers. Never guesses which occurrence is authoritative; the caller
+    decides what "absent" and "malformed" mean for its own document."""
+    begins = [m.start() for m in re.finditer(re.escape(begin_marker), text)]
+    ends = [m.start() for m in re.finditer(re.escape(end_marker), text)]
+    if not begins and not ends:
+        return "absent", None
+    if len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
+        end_line_end = text.find("\n", ends[0])
+        end_line_end = end_line_end + 1 if end_line_end != -1 else len(text)
+        return "present", (begins[0], end_line_end)
+    return "malformed", None
 
 
 def compute_agents_md(consumer_root):
@@ -83,14 +102,12 @@ def compute_agents_md(consumer_root):
     if not path.exists():
         return True, template
     text = path.read_text()
-    begins = [m.start() for m in re.finditer(re.escape(AGENTS_BEGIN), text)]
-    ends = [m.start() for m in re.finditer(re.escape(AGENTS_END), text)]
-    if not begins and not ends:
+    state, span = locate_marked_section(text, AGENTS_BEGIN, AGENTS_END)
+    if state == "absent":
         new_text = text.rstrip("\n") + "\n\n" + template
-    elif len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
-        end_line_end = text.find("\n", ends[0])
-        end_line_end = end_line_end + 1 if end_line_end != -1 else len(text)
-        new_text = text[:begins[0]] + template + text[end_line_end:]
+    elif state == "present":
+        start, end = span
+        new_text = text[:start] + template + text[end:]
     else:
         sys.exit(f"{path}: malformed, unmatched, nested, or duplicate installer "
                  "markers; not modified")
@@ -112,32 +129,38 @@ def compute_adoption_yaml(consumer_root):
 
 
 def compute_claude_governance(consumer_root):
-    """Read-only counterpart of reconcile_claude_governance()."""
-    path = consumer_root / "CLAUDE.md"
-    if path.is_symlink():
-        sys.exit(f"{path}: is a symlink; refusing to read or write through it")
-    if path.exists() and not path.is_file():
-        sys.exit(f"{path}: exists but is not a regular file")
-    if not path.exists():
-        return True, CLAUDE_IMPORT + "\n"
-    text = path.read_text()
-    lines = text.split("\n")
-    if lines[0] == CLAUDE_IMPORT:
+    """Read-only staging counterpart of apply_claude_governance(): the
+    (needs_write, new_text) install.py stages before confirmation, derived
+    from the shared, checker-owned governance assessment rather than a
+    separate reread. A symlink, non-regular file, or an ambiguous existing
+    import is a hard stop here, before confirmation — never guessed or
+    repaired. Never writes."""
+    assessment = check_skills.assess_claude_governance(consumer_root)
+    state = assessment["state"]
+    if state == "unsafe":
+        sys.exit(assessment["detail"])
+    if state == "correct":
         return False, None
-    if CLAUDE_IMPORT in lines[1:]:
-        sys.exit(f"{path}: contains {CLAUDE_IMPORT!r} but not as the first line; "
-                 "refusing to create a duplicate import")
-    return True, CLAUDE_IMPORT + "\n\n" + text
+    if state == "missing":
+        return True, check_skills.CLAUDE_IMPORT + "\n"
+    # "needs-insertion"
+    return True, check_skills.CLAUDE_IMPORT + "\n\n" + assessment["existing_text"]
 
 
-def reconcile_claude_governance(consumer_root):
-    needs_write, new_text = compute_claude_governance(consumer_root)
+def apply_claude_governance(consumer_root, plan):
+    """Writes the plan already staged by compute_claude_governance()
+    verbatim — never rereads CLAUDE.md, reassesses it, or generates a
+    different edit after confirmation."""
+    needs_write, new_text = plan
     if needs_write:
         (consumer_root / "CLAUDE.md").write_text(new_text)
 
 
-CLIENT_GOVERNANCE_MUTATORS = {
-    "claude": reconcile_claude_governance,
+CLIENT_GOVERNANCE_COMPUTERS = {
+    "claude": compute_claude_governance,
+}
+CLIENT_GOVERNANCE_APPLIERS = {
+    "claude": apply_claude_governance,
 }
 
 
@@ -177,55 +200,41 @@ def check_client_skills_preflight(consumer_root, client_skills_root):
             sys.exit(f"{current}: exists but is not a directory")
 
 
-def reconcile_client_skills(consumer_root, skills_root, client_skills_root):
-    """The one generic client-skill reconciliation, shared by every client.
-    Derives the desired exposure set directly from .agents/skills/* and
-    reconciles client_skills_root to it — a plain path, not a client name,
-    so this algorithm is provably independent of any particular client."""
-    check_client_skills_preflight(consumer_root, client_skills_root)
-
-    desired_names = ({p.name for p in skills_root.iterdir() if p.is_dir()}
-                     if skills_root.is_dir() else set())
-    owned_raw = check_skills.owned_client_exposure(client_skills_root)
-    owned = {n: v for n, v in owned_raw.items() if v[0].is_relative_to(skills_root)}
-
-    to_create, to_replace = [], []
-    for name in sorted(desired_names):
-        desired_target = skills_root / name
-        canonical_raw_target = os.path.relpath(desired_target, client_skills_root)
-        if name in owned:
-            resolved, raw_target = owned[name]
-            if resolved == desired_target and raw_target == canonical_raw_target:
-                continue
-            to_replace.append(name)
-            continue
-        link = client_skills_root / name
-        if link.exists() or link.is_symlink():
-            sys.exit(f"{link}: exists and is not an installer-owned exposure "
-                     "symlink; refusing to overwrite")
-        to_create.append(name)
-    to_remove = sorted(set(owned) - desired_names)
+def apply_client_exposure(desired_names, skills_root, client_skills_root, assessment):
+    """Mutates client_skills_root toward `assessment` — an already-computed
+    and (via the transaction's confirmation) approved plan from
+    check_skills.assess_client_exposure(). Never rediscovers ownership to
+    decide what to do: it reassesses the current on-disk state only to
+    guard against having drifted since the plan was approved, and stops
+    rather than silently recomputing or expanding that plan if it has."""
+    current = check_skills.assess_client_exposure(desired_names, skills_root,
+                                                   client_skills_root)
+    if current != assessment:
+        sys.exit(f"{client_skills_root}: exposure state changed since the approved "
+                 "plan was computed; refusing to apply a possibly-stale plan")
 
     client_skills_root.mkdir(parents=True, exist_ok=True)
-    for name in to_replace + to_create:
+    for name in assessment["needs_correction"] + assessment["missing"]:
         link = client_skills_root / name
         if link.is_symlink():
             link.unlink()
         target = os.path.relpath(skills_root / name, client_skills_root)
         os.symlink(target, link, target_is_directory=True)
-    for name in to_remove:
+    for name in assessment["stale"]:
         (client_skills_root / name).unlink()
 
 
-def reconcile_client(consumer_root, skills_root, client_name):
-    """install.py's own per-client wiring: the generic exposure reconciler
-    at that client's registered skill root, plus its own governance
-    integration, if any."""
-    reconcile_client_skills(consumer_root, skills_root,
-                            client_skills_root_for(consumer_root, client_name))
-    governance = CLIENT_GOVERNANCE_MUTATORS.get(client_name)
-    if governance:
-        governance(consumer_root)
+def reconcile_client(consumer_root, skills_root, client_name, plan):
+    """install.py's own per-client wiring: applies plan["exposure"] via the
+    shared generic reconciler at that client's registered skill root, plus
+    its own already-staged governance content, if any — neither is
+    reassessed or regenerated here."""
+    apply_client_exposure(plan["desired_names"], skills_root,
+                          client_skills_root_for(consumer_root, client_name),
+                          plan["exposure"])
+    applier = CLIENT_GOVERNANCE_APPLIERS.get(client_name)
+    if applier and plan["governance"] is not None:
+        applier(consumer_root, plan["governance"])
 
 
 # --- CLI parsing and the flag-compatibility contract ----------------------
@@ -565,8 +574,7 @@ def print_findings(findings):
 
 def fetch_tree(repo_url, sha, sibling_of):
     tmp = Path(tempfile.mkdtemp(dir=sibling_of.parent, prefix=f".{sibling_of.name}.fetch-"))
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)], check=True)
-    subprocess.run(["git", "-C", str(tmp), "checkout", "--quiet", sha], check=True)
+    git_ops.acquire_tree(repo_url, sha, tmp)
     return tmp
 
 
@@ -657,7 +665,8 @@ def generate_manifest(adoption, root_key_, materialized, provenance, ext_repos_f
     return {"repositories": repositories, "skills": skills}
 
 
-def reconcile(consumer_root, adoption, result, to_materialize, to_remove, clients, temp_registry):
+def reconcile(consumer_root, adoption, result, to_materialize, to_remove, clients,
+             temp_registry, client_plans):
     """Mutates generated state toward to_materialize/to_remove and returns
     the resulting candidate manifest. Never writes the canonical manifest —
     the caller verifies and promotes it."""
@@ -722,7 +731,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
             ext_repos_final, skills_root)
 
         for client in clients:
-            reconcile_client(consumer_root, skills_root, client)
+            reconcile_client(consumer_root, skills_root, client, client_plans[client])
 
         return candidate_manifest
     finally:
@@ -780,15 +789,13 @@ def update_git_exclude(consumer_root, candidate_manifest):
     try:
         text = git_exclude.read_text() if git_exclude.exists() else ""
         block = "\n".join([EXCLUDE_BEGIN] + [f"/{p}" for p in paths] + [EXCLUDE_END]) + "\n"
-        begins = [m.start() for m in re.finditer(re.escape(EXCLUDE_BEGIN), text)]
-        ends = [m.start() for m in re.finditer(re.escape(EXCLUDE_END), text)]
-        if not begins and not ends:
+        state, span = locate_marked_section(text, EXCLUDE_BEGIN, EXCLUDE_END)
+        if state == "absent":
             sep = "" if not text or text.endswith("\n") else "\n"
             new_text = text + sep + block
-        elif len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
-            end_line_end = text.find("\n", ends[0])
-            end_line_end = end_line_end + 1 if end_line_end != -1 else len(text)
-            new_text = text[:begins[0]] + block + text[end_line_end:]
+        elif state == "present":
+            start, end = span
+            new_text = text[:start] + block + text[end:]
         else:
             print("  NOTE: .git/info/exclude has malformed infurnet-skills markers; skipping")
             return
@@ -808,8 +815,7 @@ def fetch_preview_tree(repo_url, sha):
     inspecting invocation never creates anything under the consumer
     repository itself (not even an empty directory)."""
     tmp = Path(tempfile.mkdtemp(prefix="infurnet-skills-preview-"))
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)], check=True)
-    subprocess.run(["git", "-C", str(tmp), "checkout", "--quiet", sha], check=True)
+    git_ops.acquire_tree(repo_url, sha, tmp)
     return tmp
 
 
@@ -866,18 +872,22 @@ def mutation_targets(result, repair):
 
 def check_client_collision(consumer_root, desired_names, client_skills_root):
     """Read-only preflight: stops before ANY mutation in the transaction —
-    not partway through reconcile() — if a desired name already exists at
-    client_skills_root without being an installer-owned exposure. Runs the
-    full capability/symlinked-ancestor preflight too, for the same reason."""
+    not partway through reconcile() — if a desired name is occupied by
+    content that is not an installer-owned exposure (an unrelated symlink
+    included: being a symlink at all does not make it installer-owned).
+    Runs the full capability/symlinked-ancestor preflight too, for the same
+    reason. Returns the computed assessment so the exact approved action
+    set can be threaded through to execution unchanged, rather than
+    rediscovered during reconciliation."""
     check_client_skills_preflight(consumer_root, client_skills_root)
-    owned_raw = check_skills.owned_client_exposure(client_skills_root)
-    for name in sorted(desired_names):
-        if name in owned_raw:
-            continue
+    skills_root = consumer_root / ".agents" / "skills"
+    assessment = check_skills.assess_client_exposure(desired_names, skills_root,
+                                                      client_skills_root)
+    for name in assessment["occupied"]:
         link = client_skills_root / name
-        if link.exists() or link.is_symlink():
-            sys.exit(f"{link}: exists and is not an installer-owned exposure "
-                     "symlink; refusing to overwrite")
+        sys.exit(f"{link}: exists and is not an installer-owned exposure "
+                 "symlink; refusing to overwrite")
+    return assessment
 
 
 def collect_blocking(adoption, result):
@@ -960,12 +970,20 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
                             | refresh_names_for_vendor_change(consumer_root, adoption, result))
     target_inventory = set(result["unchanged"]) | set(result["added"])
 
-    # Client collisions and capability problems are checked before any other
-    # mutation in this transaction begins — never discovered partway through
-    # reconcile(), after vendor/skill changes already happened.
+    # Client collisions, capability problems, and Claude governance staging
+    # are all computed before any other mutation in this transaction begins
+    # — never discovered or generated partway through reconcile(), after
+    # vendor/skill changes already happened. Each client's complete plan
+    # (exposure assessment plus any staged governance content) is threaded
+    # through to reconcile() unchanged, never rediscovered there.
+    client_plans = {}
     for client in clients:
-        check_client_collision(consumer_root, target_inventory,
-                              client_skills_root_for(consumer_root, client))
+        exposure = check_client_collision(consumer_root, target_inventory,
+                                          client_skills_root_for(consumer_root, client))
+        governance_computer = CLIENT_GOVERNANCE_COMPUTERS.get(client)
+        governance = governance_computer(consumer_root) if governance_computer else None
+        client_plans[client] = {"desired_names": target_inventory,
+                                "exposure": exposure, "governance": governance}
 
     # Every mutating invocation, not only the one-shot bootstrap that creates
     # adoption.yml itself, ensures these two durable consumer files exist —
@@ -1010,7 +1028,7 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
     temp_registry = []
     try:
         candidate_manifest = reconcile(consumer_root, adoption, result, to_materialize,
-                                       to_remove, clients, temp_registry)
+                                       to_remove, clients, temp_registry, client_plans)
     finally:
         for tmp in temp_registry:
             if tmp.exists():
@@ -1069,9 +1087,8 @@ def run_bootstrap(consumer_root, clients, force):
         project_md.write_bytes(project_new_bytes)
     if agents_needs_write:
         agents_md.write_text(agents_new_text)
-    for client, (needs_write, new_text) in claude_plans.items():
-        if needs_write:
-            claude_md.write_text(new_text)
+    for plan in claude_plans.values():
+        apply_claude_governance(consumer_root, plan)
     for client in clients:
         client_skills_root_for(consumer_root, client).mkdir(parents=True, exist_ok=True)
 

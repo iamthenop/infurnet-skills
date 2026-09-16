@@ -584,6 +584,24 @@ def make_client_reconciler_env(base):
     return module, consumer_root, skills_root
 
 
+def reconcile_generic(module, consumer_root, skills_root, client_skills_root):
+    """Test-only convenience reproducing install.py's real assess-then-
+    apply sequence in one call, against a synthetic discovery root — the
+    same shared, generic reconciliation algorithm the production
+    transaction flow now computes before confirmation and applies after,
+    exercised directly without a full install.py transaction."""
+    module.check_client_skills_preflight(consumer_root, client_skills_root)
+    desired = ({p.name for p in skills_root.iterdir() if p.is_dir()}
+              if skills_root.is_dir() else set())
+    assessment = module.check_skills.assess_client_exposure(desired, skills_root,
+                                                            client_skills_root)
+    for name in assessment["occupied"]:
+        link = client_skills_root / name
+        sys.exit(f"{link}: exists and is not an installer-owned exposure "
+                 "symlink; refusing to overwrite")
+    module.apply_client_exposure(desired, skills_root, client_skills_root, assessment)
+
+
 def install_canonical_skill(skills_root, name, content="Fixture.\n"):
     write(skills_root / name / "SKILL.md", content)
 
@@ -602,7 +620,7 @@ def test_generic_exposure_created(results, workdir):
     install_canonical_skill(skills_root, "beta")
     client_root = consumer_root / "some-client" / "skills"
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
 
     for name in ("alpha", "beta"):
         link = client_root / name
@@ -628,11 +646,11 @@ def test_generic_exposure_retained_unchanged(results, workdir):
     module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-retained")
     install_canonical_skill(skills_root, "alpha")
     client_root = consumer_root / "client" / "skills"
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     inode_before = os.lstat(client_root / "alpha").st_ino
     raw_target_before = os.readlink(client_root / "alpha")
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — correct owned exposure left unchanged (same inode)",
         os.lstat(client_root / "alpha").st_ino == inode_before, "")
@@ -655,7 +673,7 @@ def test_generic_exposure_absolute_target_normalized(results, workdir):
     os.symlink(str(skills_root / "alpha"), client_root / "alpha", target_is_directory=True)
     raw_before = os.readlink(client_root / "alpha")
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
 
     expected_raw_target = os.path.relpath(skills_root / "alpha", client_root)
     results.check(
@@ -678,13 +696,13 @@ def test_generic_exposure_removed_when_skill_removed(results, workdir):
     install_canonical_skill(skills_root, "alpha")
     install_canonical_skill(skills_root, "beta")
     client_root = consumer_root / "client" / "skills"
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — both present before removal",
         (client_root / "alpha").is_symlink() and (client_root / "beta").is_symlink(), "")
 
     shutil.rmtree(skills_root / "beta")
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — stale exposure removed once the canonical skill is gone",
         not (client_root / "beta").exists(), "")
@@ -701,7 +719,7 @@ def test_generic_exposure_corrected(results, workdir):
     os.symlink(os.path.relpath(skills_root / "not-alpha", client_root),
                client_root / "alpha", target_is_directory=True)
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — owned exposure with the wrong target is corrected",
         (client_root / "alpha" / "SKILL.md").read_text()
@@ -718,7 +736,7 @@ def test_generic_exposure_preserves_unrelated(results, workdir):
     outside_target.mkdir(parents=True)
     os.symlink(outside_target, client_root / "external", target_is_directory=True)
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check("generic exposure — unrelated file preserved",
                   (client_root / "notes.txt").read_text() == "unrelated file\n", "")
     results.check("generic exposure — unrelated directory preserved",
@@ -736,7 +754,7 @@ def test_generic_exposure_collision_blocks(results, workdir):
     client_root = consumer_root / "client" / "skills"
     write(client_root / "alpha", "unmanaged file\n")
 
-    stopped = stopped_with_system_exit(lambda: module.reconcile_client_skills(consumer_root, skills_root, client_root))
+    stopped = stopped_with_system_exit(lambda: reconcile_generic(module, consumer_root, skills_root, client_root))
     results.check("generic exposure — desired-name collision stops", stopped, "")
     results.check(
         "generic exposure — colliding content untouched",
@@ -750,7 +768,7 @@ def test_generic_exposure_canonical_contents_unchanged(results, workdir):
     before = (skills_root / "alpha" / "SKILL.md").read_text()
     client_root = consumer_root / "client" / "skills"
 
-    module.reconcile_client_skills(consumer_root, skills_root, client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check("generic exposure — canonical skill contents unchanged",
                   (skills_root / "alpha" / "SKILL.md").read_text() == before, "")
 
@@ -933,6 +951,102 @@ def test_claude_md_dangling_symlink_blocks(results, workdir):
                   not target.exists(), out)
 
 
+def test_agents_md_malformed_markers_blocks(results, workdir):
+    """Unmatched, nested, or duplicate installer markers in AGENTS.md must
+    block the whole transaction — the opposite failure policy from a
+    malformed .git/info/exclude, which only produces a note."""
+    module = load_install_module()
+    base = workdir / "agents-md-malformed"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "AGENTS.md", (
+        f"Existing content.\n{module.AGENTS_BEGIN}\nstale\n{module.AGENTS_END}\n"
+        f"{module.AGENTS_BEGIN}\nduplicate\n{module.AGENTS_END}\n"
+    ))
+    before = (consumer / "AGENTS.md").read_text()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("AGENTS.md duplicate markers — nonzero exit", code != 0, out)
+    results.check("AGENTS.md duplicate markers — file byte-unchanged",
+                  (consumer / "AGENTS.md").read_text() == before, out)
+    results.check("AGENTS.md duplicate markers — no other mutation began",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_agents_md_marker_replacement_preserves_surrounding_content(results, workdir):
+    module = load_install_module()
+    base = workdir / "agents-md-replace"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "AGENTS.md", (
+        f"# Repo AGENTS.md\n\nBefore.\n\n{module.AGENTS_BEGIN}\nstale installer content\n"
+        f"{module.AGENTS_END}\n\nAfter.\n"
+    ))
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("AGENTS.md marker replacement — install exits zero", code == 0, out)
+    after_text = (consumer / "AGENTS.md").read_text()
+    results.check("AGENTS.md marker replacement — content before the section preserved",
+                  "Before." in after_text, after_text)
+    results.check("AGENTS.md marker replacement — content after the section preserved",
+                  "After." in after_text, after_text)
+    results.check("AGENTS.md marker replacement — stale content inside replaced",
+                  "stale installer content" not in after_text, after_text)
+
+
+def test_git_exclude_malformed_markers_notes_and_skips(results, workdir):
+    """A malformed .git/info/exclude marker must not block the transaction
+    — only a note, and the file is left byte-unchanged — the opposite
+    failure policy from malformed AGENTS.md markers, which is a hard
+    stop."""
+    module = load_install_module()
+    base = workdir / "git-exclude-malformed"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    make_git_repo(consumer)
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    exclude_path = consumer / ".git" / "info" / "exclude"
+    write(exclude_path,
+         f"{module.EXCLUDE_BEGIN}\nstale\n{module.EXCLUDE_BEGIN}\nagain\n{module.EXCLUDE_END}\n")
+    before = exclude_path.read_text()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("git exclude malformed markers — install still exits zero", code == 0, out)
+    results.check("git exclude malformed markers — a note is printed",
+                  "malformed infurnet-skills markers" in out, out)
+    results.check("git exclude malformed markers — file left byte-unchanged",
+                  exclude_path.read_text() == before, out)
+
+
+def test_git_exclude_created_then_updated_in_place(results, workdir):
+    """A first mutating install creates the marked exclude block in a git
+    consumer repository; a later mutation updates that same block in
+    place rather than duplicating it."""
+    module = load_install_module()
+    base = workdir / "git-exclude-lifecycle"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    make_git_repo(consumer)
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    exclude_path = consumer / ".git" / "info" / "exclude"
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("git exclude lifecycle — install exits zero", code == 0, out)
+    first_text = exclude_path.read_text()
+    results.check(
+        "git exclude lifecycle — marked block created",
+        module.EXCLUDE_BEGIN in first_text and "/.agents/skills/alpha/" in first_text,
+        first_text)
+
+    code2, out2 = run_install(consumer, ["--repair", "--force"])
+    results.check("git exclude lifecycle — repair exits zero", code2 == 0, out2)
+    second_text = exclude_path.read_text()
+    results.check("git exclude lifecycle — block updated in place, not duplicated",
+                  second_text.count(module.EXCLUDE_BEGIN) == 1, second_text)
+
+
 def test_claude_permission_settings_untouched(results, workdir):
     base = workdir / "permission-settings"
     upstream, sha = make_upstream(base)
@@ -944,6 +1058,90 @@ def test_claude_permission_settings_untouched(results, workdir):
                   not (consumer / ".claude" / "settings.json").exists(), out)
     results.check("permission settings — .claude/settings.local.json never created",
                   not (consumer / ".claude" / "settings.local.json").exists(), out)
+
+
+def test_claude_governance_four_states(results, workdir):
+    """check_skills.assess_claude_governance() must distinguish exactly the
+    four states RC3.3 requires, sharing one implementation between the
+    checker's findings and install.py's staging."""
+    module = load_install_module()
+    base = workdir / "claude-governance-states"
+
+    correct = base / "correct"
+    write(correct / "CLAUDE.md", "@AGENTS.md\n\nExtra notes.\n")
+    results.check("claude governance — correct import detected",
+                  module.check_skills.assess_claude_governance(correct)["state"] == "correct", "")
+
+    missing = base / "missing"
+    missing.mkdir(parents=True)
+    results.check("claude governance — missing file detected",
+                  module.check_skills.assess_claude_governance(missing)["state"] == "missing", "")
+
+    needs_insertion = base / "needs-insertion"
+    write(needs_insertion / "CLAUDE.md", "Some existing notes.\n")
+    assessment = module.check_skills.assess_claude_governance(needs_insertion)
+    results.check("claude governance — needs-insertion detected",
+                  assessment["state"] == "needs-insertion", assessment)
+    results.check("claude governance — needs-insertion carries the existing text",
+                  assessment["existing_text"] == "Some existing notes.\n", assessment)
+
+    ambiguous = base / "ambiguous"
+    write(ambiguous / "CLAUDE.md", "Some notes.\n@AGENTS.md\n")
+    results.check(
+        "claude governance — import present but not first line is unsafe/ambiguous",
+        module.check_skills.assess_claude_governance(ambiguous)["state"] == "unsafe", "")
+
+    symlink_root = base / "symlink"
+    symlink_root.mkdir(parents=True)
+    target = base / "symlink-target.md"
+    write(target, "@AGENTS.md\n")
+    os.symlink(target, symlink_root / "CLAUDE.md")
+    results.check("claude governance — symlink is unsafe",
+                  module.check_skills.assess_claude_governance(symlink_root)["state"] == "unsafe", "")
+
+
+class _StubArgs:
+    def __init__(self, bindings, force):
+        self.bindings = bindings
+        self.force = force
+
+
+def test_claude_governance_staged_once_not_reassessed(results, workdir):
+    """compute_claude_governance() — install.py's own pre-confirmation
+    staging step — must be called exactly once for the whole mutate()
+    transaction. apply_claude_governance() must write that staged plan
+    verbatim rather than independently rereading, reassessing, or
+    regenerating the edit after confirmation. (The separate post-mutation
+    check_skills verification pass legitimately reassesses CLAUDE.md too —
+    that is a different step, "Verify", not a second "stage".)"""
+    module = load_install_module()
+    base = workdir / "claude-governance-once"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    consumer_root = consumer.resolve()
+    classification = module.classify(consumer_root, ["claude"])
+
+    call_count = {"n": 0}
+    real_compute = module.compute_claude_governance
+
+    def counting_compute(consumer_root_arg):
+        call_count["n"] += 1
+        return real_compute(consumer_root_arg)
+
+    with mock.patch.object(module, "compute_claude_governance", side_effect=counting_compute):
+        module.CLIENT_GOVERNANCE_COMPUTERS["claude"] = module.compute_claude_governance
+        code = module.mutate(
+            _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+            classification["adoption"], classification["result"], mode="default")
+    results.check("claude governance — install exits zero", code == 0, "")
+    results.check(
+        "claude governance — staged exactly once for the whole transaction "
+        "(never reassessed a second time to decide what to write)",
+        call_count["n"] == 1, call_count)
+    results.check(
+        "claude governance — CLAUDE.md written with the staged import",
+        (consumer_root / "CLAUDE.md").read_text().split("\n")[0] == "@AGENTS.md", "")
 
 
 # --- Phase 3: installer orchestration, mode/modifier CLI, checkers --------
@@ -1711,6 +1909,54 @@ def test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir):
                   "symlink" in (out + err).lower(), out + err)
 
 
+def test_check_update_rejects_symlinked_bundle_root(results, workdir):
+    """A skills/<name> bundle ROOT that is itself a symlink must be
+    rejected before any traversal — is_dir() alone would silently accept a
+    directory symlink, unlike an unsafe symlink found *within* an accepted
+    bundle (the case above)."""
+    base = workdir / "check-update-symlink-bundle-root"
+    upstream, sha = make_upstream(base)
+    outside = base / "outside-bundle"
+    outside.mkdir(parents=True)
+    write(outside / "SKILL.md", FIXTURE_SKILL.format(name="evil-alias"))
+    os.symlink(outside, upstream / "skills" / "evil-alias", target_is_directory=True)
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add symlinked bundle root"], upstream)
+    unsafe_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("symlinked bundle root fixture — clean v1 install exits zero", code0 == 0, out0)
+
+    code, out, err = run_check(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", unsafe_sha])
+    results.check("symlinked bundle root — nonzero exit, not a crash", code != 0, out + err)
+    results.check("symlinked bundle root — diagnostic mentions the symlink",
+                  "symlink" in (out + err).lower(), out + err)
+
+
+def test_check_update_ls_remote_failure_surfaced(results, workdir):
+    """A failed `git ls-remote` (an unreachable or invalid source) must
+    surface as a clear failure — never silently look like a successful
+    discovery that simply found zero refs."""
+    base = workdir / "ls-remote-failure"
+    consumer = base / "consumer"
+    bogus_source = str(base / "does-not-exist-as-a-repo")
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {bogus_source}\n"
+        "commit: 1234567890abcdef1234567890abcdef12345678\n"
+        "skills:\n  - alpha\n"
+    ))
+
+    code, out, err = run_check(CHECK_UPDATE_PY, ["--root", str(consumer)])
+    results.check("check-update discovery against an unreachable source — nonzero exit",
+                  code != 0, out + err)
+    results.check(
+        "check-update discovery against an unreachable source — surfaces the git "
+        "failure rather than an empty successful discovery",
+        "ls-remote" in (out + err) or "failed" in (out + err).lower(), out + err)
+
+
 def test_update_requires_explicit_target_no_latest_selection(results, workdir):
     base = workdir / "update-no-target"
     upstream, sha, consumer = full_install(base, ["alpha"])
@@ -2304,6 +2550,77 @@ def test_client_collision_preflight_before_any_mutation(results, workdir):
                   (consumer / ".claude" / "skills" / "beta").read_text() == "unmanaged\n", out)
 
 
+def test_foreign_symlink_collision_blocks_before_any_mutation(results, workdir):
+    """A foreign symlink at a desired skill name — not merely a plain file
+    — must still be recognized as unrelated consumer content, not
+    installer-owned merely because it is a symlink, and must stop the
+    entire transaction before vendor, materialized skill, adoption,
+    manifest, or client changes. The old preflight treated the mere
+    presence of any symlink at the desired name as sufficient to skip
+    collision detection; this proves that gap is closed."""
+    base = workdir / "foreign-symlink-collision"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta"])
+    elsewhere = base / "unrelated-target"
+    elsewhere.mkdir(parents=True)
+    write(elsewhere / "marker.txt", "not an installed skill\n")
+    (consumer / ".claude" / "skills").mkdir(parents=True)
+    os.symlink(elsewhere, consumer / ".claude" / "skills" / "beta", target_is_directory=True)
+    adoption_before = (consumer / ".agents" / "adoption.yml").read_text()
+
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("foreign symlink collision — nonzero exit", code != 0, out)
+    results.check(
+        "foreign symlink collision — stops before any other mutation begins "
+        "(no vendor/skills tree, no manifest, adoption unchanged)",
+        not (consumer / ".agents" / "skills").exists()
+        and not (consumer / ".agents" / "vendor").exists()
+        and not (consumer / ".agents" / "infurnet-skills.manifest.json").exists()
+        and (consumer / ".agents" / "adoption.yml").read_text() == adoption_before,
+        out)
+    results.check(
+        "foreign symlink collision — the foreign symlink itself is untouched",
+        os.path.realpath(consumer / ".claude" / "skills" / "beta")
+        == os.path.realpath(elsewhere),
+        out)
+
+
+def test_client_exposure_apply_guard_stops_on_drift(results, workdir):
+    """apply_client_exposure() must reassess the current on-disk state
+    immediately before executing and stop — rather than silently
+    recomputing or expanding the approved plan — if it no longer matches
+    the assessment a human already confirmed."""
+    module = load_install_module()
+    base = workdir / "exposure-apply-guard"
+    consumer = base / "consumer"
+    skills_root = consumer / ".agents" / "skills"
+    skills_root.mkdir(parents=True)
+    install_canonical_skill(skills_root, "alpha")
+    client_root = consumer / "client" / "skills"
+
+    desired = {"alpha"}
+    approved = module.check_skills.assess_client_exposure(desired, skills_root, client_root)
+    results.check("apply guard setup — alpha approved as missing (not yet created)",
+                  approved["missing"] == ["alpha"], approved)
+
+    # The world changes after the plan was approved but before it is
+    # applied: something now occupies the name the plan expected to find
+    # empty.
+    client_root.mkdir(parents=True)
+    write(client_root / "alpha", "raced unrelated content\n")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_client_exposure(desired, skills_root, client_root, approved))
+    results.check("apply guard — stops rather than silently applying a stale plan",
+                  stopped, "")
+    results.check(
+        "apply guard — the raced content is left exactly as it was, not overwritten",
+        (client_root / "alpha").is_file()
+        and (client_root / "alpha").read_text() == "raced unrelated content\n",
+        "")
+
+
 def test_check_skills_malformed_manifest_shape_reports_finding(results, workdir):
     """Syntactically valid JSON whose top-level value is not an object (an
     array, a bare string, a number, a boolean) must report a malformed-
@@ -2412,6 +2729,12 @@ def main():
         test_claude_md_not_regular_file_blocks(results, workdir)
         test_claude_md_symlink_to_existing_file_blocks(results, workdir)
         test_claude_md_dangling_symlink_blocks(results, workdir)
+        test_agents_md_malformed_markers_blocks(results, workdir)
+        test_agents_md_marker_replacement_preserves_surrounding_content(results, workdir)
+        test_git_exclude_malformed_markers_notes_and_skips(results, workdir)
+        test_git_exclude_created_then_updated_in_place(results, workdir)
+        test_claude_governance_four_states(results, workdir)
+        test_claude_governance_staged_once_not_reassessed(results, workdir)
         test_claude_permission_settings_untouched(results, workdir)
 
         test_removed_flags_rejected(results, workdir)
@@ -2450,6 +2773,8 @@ def main():
         test_check_update_obligation_lists_and_fenced_examples(results, workdir)
         test_check_update_inventory_includes_nested_and_binary_files(results, workdir)
         test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir)
+        test_check_update_rejects_symlinked_bundle_root(results, workdir)
+        test_check_update_ls_remote_failure_surfaced(results, workdir)
         test_update_requires_explicit_target_no_latest_selection(results, workdir)
         test_update_changes_only_commit_and_release(results, workdir)
         test_update_preserves_comments_and_flow_style(results, workdir)
@@ -2474,6 +2799,8 @@ def main():
         test_update_summary_reflects_target_not_current(results, workdir)
         test_update_inspection_creates_no_persistent_directories(results, workdir)
         test_client_collision_preflight_before_any_mutation(results, workdir)
+        test_foreign_symlink_collision_blocks_before_any_mutation(results, workdir)
+        test_client_exposure_apply_guard_stops_on_drift(results, workdir)
         test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
         test_check_skills_yaml_duplicate_keys_and_shape(results, workdir)
 

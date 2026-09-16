@@ -1238,6 +1238,12 @@ def test_bindings_file_valid_fills_unresolved(results, workdir):
 
 
 def test_bindings_file_rejects_malformed_content(results, workdir):
+    """Schema- and duplicate-key-level rejection under real YAML parsing.
+    Flow-style mappings and anchors are no longer special-cased failures —
+    a real parser resolves them to the exact same structure as their block
+    equivalents — so those two cases moved to
+    test_bindings_file_accepts_real_yaml_syntax below instead of being
+    listed as malformed here."""
     base = workdir / "bindings-file-malformed"
     upstream, sha = make_upstream(base)
     consumer = base / "consumer"
@@ -1253,10 +1259,12 @@ def test_bindings_file_rejects_malformed_content(results, workdir):
                               '  "Widgets":\n    "Widget size": "B"\n'),
         "duplicate-binding": ('bindings:\n  "Widgets":\n    "Widget size": "A"\n'
                               '    "Widget size": "B"\n'),
-        "flow-mapping": 'bindings:\n  "Widgets": {"Widget size": "A"}\n',
         "second-top-level-key": ('bindings:\n  "Widgets":\n    "Widget size": "A"\n'
                                  'other: 1\n'),
-        "anchor": 'bindings:\n  "Widgets": &anchor\n    "Widget size": "A"\n',
+        "invalid-yaml-syntax": 'bindings:\n  "Widgets:\n    "Widget size": "A"\n',
+        "non-string-value": 'bindings:\n  "Widgets":\n    "Widget size": ["A", "B"]\n',
+        "bindings-not-a-mapping": 'bindings: not-a-mapping\n',
+        "section-not-a-mapping": 'bindings:\n  "Widgets": "not-a-mapping"\n',
     }
     before = (consumer / "PROJECT.md").read_text()
     for name, content in cases.items():
@@ -1267,6 +1275,34 @@ def test_bindings_file_rejects_malformed_content(results, workdir):
         results.check(
             f"--bindings {name} — PROJECT.md byte-unchanged by the rejected file",
             (consumer / "PROJECT.md").read_text() == before, out)
+
+
+def test_bindings_file_accepts_real_yaml_syntax(results, workdir):
+    """A real YAML parser resolves flow-style mappings and anchors to
+    exactly the same structure as their block-style equivalents — these are
+    no longer rejected the way the old hand-written line parser rejected
+    them (it simply could not handle them safely)."""
+    base = workdir / "bindings-file-real-yaml"
+    upstream, sha = make_upstream(base)
+
+    for name, content in (
+        ("flow-style", 'bindings:\n  "Widgets": {"Widget size": "Large"}\n'),
+        ("anchor", 'bindings:\n  "Widgets": &w\n    "Widget size": "Large"\n'),
+    ):
+        consumer = base / f"consumer-{name}"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        write_project_md(consumer, [
+            {"name": "Widgets", "applies_to": "alpha",
+             "rows": [("Widget size", "*not yet defined*")]},
+        ])
+        bindings_file = base / f"bindings-{name}.yml"
+        write(bindings_file, content)
+
+        code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+        results.check(f"--bindings {name} syntax — accepted, exits zero", code == 0, out)
+        results.check(
+            f"--bindings {name} syntax — binding applied",
+            "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out)
 
 
 def test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir):
@@ -1833,6 +1869,51 @@ def test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
     write(manifest_path, good)
 
 
+def test_check_skills_yaml_duplicate_keys_and_shape(results, workdir):
+    """PyYAML now parses adoption.yml and SKILL.md frontmatter, using a
+    safe loader with a duplicate-key-rejecting override — this proves that
+    override actually fires for both document types, and that real-YAML
+    syntax the old hand-written line parsers could not handle (a flow-style
+    list) is now accepted rather than rejected."""
+    base = workdir / "yaml-duplicate-keys"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        f"commit: {sha}\n"
+        "skills:\n  - alpha\n"
+    ))
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("adoption.yml duplicate top-level key — rejected",
+                  code != 0 and not result["adoption_valid"], json.dumps(result))
+
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        "skills: [alpha]\n"
+    ))
+    code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("adoption.yml flow-style skills list — accepted as real YAML",
+                  result2["adoption_valid"], json.dumps(result2))
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-dependency: alpha\n  skill-dependency: beta\n"
+        "---\nFixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget with duplicate metadata key"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, new_sha, ["widget"])
+    code3, result3, err3 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "SKILL.md frontmatter duplicate metadata key — rejected, no crash",
+        code3 != 0, json.dumps(result3) if result3 is not None else err3)
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -1900,6 +1981,7 @@ def main():
 
         test_bindings_file_valid_fills_unresolved(results, workdir)
         test_bindings_file_rejects_malformed_content(results, workdir)
+        test_bindings_file_accepts_real_yaml_syntax(results, workdir)
         test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir)
         test_bindings_staged_until_final_confirmation(results, workdir)
         test_bazel_defaults_precedence_and_scope(results, workdir)
@@ -1925,6 +2007,7 @@ def main():
         test_update_inspection_creates_no_persistent_directories(results, workdir)
         test_client_collision_preflight_before_any_mutation(results, workdir)
         test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
+        test_check_skills_yaml_duplicate_keys_and_shape(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

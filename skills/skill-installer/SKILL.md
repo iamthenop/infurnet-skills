@@ -114,13 +114,13 @@ caller's working directory do not determine installation authority or target.
 
 ## Runtime dependencies
 
-`skill-installer` requires Python 3.12 or later and Git.
+`skill-installer` requires Python 3.12 or later, Git, and PyYAML.
+[`scripts/requirements.txt`](scripts/requirements.txt) records the pinned
+PyYAML version.
 
-It has no third-party Python runtime dependencies.
-[`scripts/requirements.txt`](scripts/requirements.txt) records that contract.
-
-The installer does not provision Python, Git, a virtual environment, or system
-packages.
+The installer does not provision Python, Git, PyYAML, a virtual environment,
+or system packages. A missing PyYAML fails the import rather than installing
+anything automatically.
 
 ## Installation and reconciliation
 

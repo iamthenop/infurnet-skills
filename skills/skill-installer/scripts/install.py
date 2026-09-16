@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import yaml
 from pathlib import Path
 
 SELF_PATH = Path(__file__).resolve()
@@ -269,62 +270,45 @@ def confirm(force):
 # --- bindings: --bindings FILE parsing ------------------------------------
 
 
-_QUOTED = r'"((?:[^"\\]|\\.)*)"'
-_SECTION_RE = re.compile(rf"^  {_QUOTED}:\s*$")
-_BINDING_RE = re.compile(rf"^    {_QUOTED}:\s*{_QUOTED}\s*$")
-
-
 def parse_bindings_file(path):
-    """{(section, label): value} from the narrow --bindings YAML subset:
+    """{(section, label): value} from the narrow --bindings structure:
 
         bindings:
           "Section":
             "Label": "value"
 
-    Anything else — flow syntax, anchors, block scalars, wrong nesting,
-    duplicate section/label, an unknown top-level key — stops before
-    mutation."""
-    lines = path.read_text().splitlines()
+    Fails closed on invalid YAML, a duplicate key at any level (section or
+    binding label), an unexpected top-level key, wrong nesting, or any
+    value that is not a plain string. An empty value does not stage a
+    binding decision."""
+    try:
+        data = check_skills.load_yaml_no_duplicates(path.read_text())
+    except yaml.YAMLError as e:
+        sys.exit(f"{path}: invalid YAML ({check_skills.yaml_error_summary(e)})")
 
-    i = 0
-    while i < len(lines) and (not lines[i].strip() or lines[i].strip().startswith("#")):
-        i += 1
-    if i >= len(lines) or lines[i].rstrip() != "bindings:":
-        sys.exit(f"{path}: expected the sole top-level key 'bindings:'")
-    i += 1
+    if not isinstance(data, dict) or set(data) != {"bindings"}:
+        sys.exit(f"{path}: expected the sole top-level key 'bindings'")
+
+    sections = data["bindings"]
+    if not isinstance(sections, dict):
+        sys.exit(f"{path}: 'bindings' must be a mapping of section name to bindings")
 
     result = {}
-    seen_sections = set()
-    current_section = None
-    seen_labels = set()
-
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip() or line.strip().startswith("#"):
-            i += 1
-            continue
-        m = _SECTION_RE.match(line)
-        if m:
-            section = m.group(1)
-            if section in seen_sections:
-                sys.exit(f"{path}:{i + 1}: duplicate section {section!r}")
-            seen_sections.add(section)
-            current_section = section
-            seen_labels = set()
-            i += 1
-            continue
-        m = _BINDING_RE.match(line)
-        if m and current_section is not None:
-            label, value = m.group(1), m.group(2)
-            if label in seen_labels:
-                sys.exit(f"{path}:{i + 1}: duplicate binding {label!r} in section "
-                         f"{current_section!r}")
-            seen_labels.add(label)
+    for section, labels in sections.items():
+        if not isinstance(section, str):
+            sys.exit(f"{path}: section name {section!r} must be a string")
+        if not isinstance(labels, dict):
+            sys.exit(f"{path}: section {section!r} must be a mapping of binding "
+                     "label to value")
+        for label, value in labels.items():
+            if not isinstance(label, str):
+                sys.exit(f"{path}: binding label {label!r} in section {section!r} "
+                         "must be a string")
+            if not isinstance(value, str):
+                sys.exit(f"{path}: [{section}] {label!r} must be a scalar string "
+                         f"value, got {value!r}")
             if value:
-                result[(current_section, label)] = value
-            i += 1
-            continue
-        sys.exit(f"{path}:{i + 1}: unsupported syntax: {line!r}")
+                result[(section, label)] = value
 
     return result
 

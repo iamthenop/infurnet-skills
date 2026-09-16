@@ -1,1 +1,3 @@
-# Runtime dependencies: none. skill-installer uses the Python standard library.
+# Runtime dependencies: PyYAML, for parsing adoption.yml, SKILL.md
+# frontmatter, and the --bindings file.
+PyYAML==6.0.2

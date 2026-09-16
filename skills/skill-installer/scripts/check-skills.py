@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import yaml
 from pathlib import Path
 
 COPY_MODE = "copy"
@@ -39,73 +40,93 @@ CLIENT_SKILLS_ROOT = {
 SUPPORTED_CLIENTS = tuple(CLIENT_SKILLS_ROOT)
 
 
-# --- narrow adoption/manifest parsing -----------------------------------
+# --- YAML loading ---------------------------------------------------------
+#
+# One shared, safe, duplicate-key-rejecting loader for every YAML document
+# this installer reads (adoption.yml, SKILL.md frontmatter, and — via
+# install.py, which imports this module — the --bindings file). PyYAML's
+# SafeLoader silently keeps the last of a repeated mapping key; a small
+# override makes that a hard error instead, matching the fail-closed
+# posture every reader here already has for everything else.
 
 
-def _unquote(value):
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
+class NoDuplicateKeysLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_mapping_no_duplicates(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r}", key_node.start_mark)
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+NoDuplicateKeysLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_no_duplicates)
+
+
+def load_yaml_no_duplicates(text):
+    """yaml.safe_load(), plus rejecting a mapping with a repeated key at any
+    level. Raises yaml.YAMLError (never a bare exception) on any problem —
+    callers decide how to report that."""
+    return yaml.load(text, Loader=NoDuplicateKeysLoader)
+
+
+def yaml_error_summary(e):
+    return str(e).splitlines()[0]
+
+
+# --- adoption.yml ----------------------------------------------------------
+
+ADOPTION_KEYS = {"source", "commit", "release", "skills"}
+ADOPTION_REQUIRED = ("source", "commit", "skills")
 
 
 def parse_adoption_text(text, label):
-    """Parse adoption.yml's deliberately narrow YAML subset from already-read
-    text. Fails closed (sys.exit) on any unsupported syntax — the caller
-    decides whether to let that propagate or convert it into a finding."""
-    fields = {}
-    skills = []
-    in_skills = False
+    """Parse adoption.yml. Fails closed (sys.exit) on invalid YAML, an
+    unexpected shape, or a value of the wrong type — the caller decides
+    whether to let that propagate or convert it into a finding."""
+    try:
+        data = load_yaml_no_duplicates(text)
+    except yaml.YAMLError as e:
+        sys.exit(f"{label}: invalid YAML ({yaml_error_summary(e)})")
 
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
+    if not isinstance(data, dict):
+        sys.exit(f"{label}: top-level value must be a mapping")
 
-        if in_skills and raw[:1] in (" ", "\t"):
-            item = re.match(r"^\s*-\s+(.+)$", raw)
-            if not item:
-                sys.exit(f"{label}:{lineno}: expected a '- item' line under "
-                         f"'skills:', got {raw!r}")
-            skills.append(_unquote(item.group(1).strip()))
-            continue
-        in_skills = False
-
-        m = re.match(r"^([A-Za-z_]+):\s*(.*)$", raw)
-        if not m:
-            sys.exit(f"{label}:{lineno}: unsupported syntax: {raw!r}")
-        key, value = m.group(1), m.group(2).strip()
-
-        if key not in ("source", "commit", "release", "skills"):
-            sys.exit(f"{label}:{lineno}: unsupported key {key!r}")
-        if key in fields:
-            sys.exit(f"{label}:{lineno}: duplicate key {key!r}")
-
-        if key == "skills":
-            if value:
-                sys.exit(f"{label}:{lineno}: 'skills:' must be a block list "
-                         f"(one '- item' per line), not {value!r}")
-            fields["skills"] = True
-            in_skills = True
-            continue
-
-        if value and value[0] in "&*|>{[":
-            sys.exit(f"{label}:{lineno}: unsupported YAML syntax in value: "
-                     f"{value!r}")
-        fields[key] = _unquote(value)
-
-    for required in ("source", "commit", "skills"):
-        if required not in fields:
+    unknown = set(data) - ADOPTION_KEYS
+    if unknown:
+        sys.exit(f"{label}: unsupported key(s) {sorted(unknown)!r}")
+    for required in ADOPTION_REQUIRED:
+        if required not in data:
             sys.exit(f"{label}: missing required field {required!r}")
 
-    commit = fields["commit"]
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+    source = data["source"]
+    if not isinstance(source, str) or not source:
+        sys.exit(f"{label}: 'source' must be a non-empty string")
+
+    commit = data["commit"]
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         sys.exit(f"{label}: commit must be a full 40-character SHA, got "
                  f"{commit!r}")
 
+    release = data.get("release")
+    if release is not None and not isinstance(release, str):
+        sys.exit(f"{label}: 'release' must be a string when present, got {release!r}")
+
+    skills = data["skills"]
+    if not isinstance(skills, list) or not all(isinstance(s, str) and s for s in skills):
+        sys.exit(f"{label}: 'skills' must be a list of non-empty strings")
+
     return {
         "pin": commit,
-        "repo": fields["source"],
-        "tag": fields.get("release") or None,
+        "repo": source,
+        "tag": release or None,
         "skills": sorted(set(skills)),
     }
 
@@ -171,50 +192,47 @@ def valid_skill_name(name):
     return bool(name) and len(name) <= 64 and SKILL_NAME_RE.fullmatch(name) is not None
 
 
-def _unsupported_scalar_syntax(value):
-    if not value:
-        return False
-    if value[0] in "&*|>{[!":
-        return True
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return False
-    return re.search(r"(?:^|\s)#", value) is not None
+def parse_frontmatter_strict(skill_md):
+    """The full frontmatter mapping, or None if the file has no frontmatter
+    block at all. A present-but-malformed block — invalid YAML, a duplicate
+    key, a non-mapping top level — is a hard, fail-closed error: every
+    frontmatter read in this file goes through this one entry point."""
+    fm = frontmatter_block(skill_md.read_text())
+    if fm is None:
+        return None
+    try:
+        data = load_yaml_no_duplicates(fm)
+    except yaml.YAMLError as e:
+        sys.exit(f"{skill_md}: frontmatter is not valid YAML ({yaml_error_summary(e)})")
+    if not isinstance(data, dict):
+        sys.exit(f"{skill_md}: frontmatter must be a mapping")
+    return data
 
 
 def read_metadata_keys(skill_md, keys):
     """Narrow, fail-closed extraction of specific keys from a SKILL.md's
-    frontmatter `metadata:` block."""
-    fm = frontmatter_block(skill_md.read_text())
-    if fm is None:
+    frontmatter `metadata:` block. Returns {key: value} for whichever of
+    `keys` are actually present. A requested key present with a non-string
+    value is a hard error — every field named by this installer's callers
+    is declared as a string."""
+    data = parse_frontmatter_strict(skill_md)
+    if data is None:
         return {}
+    metadata = data.get("metadata")
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        sys.exit(f"{skill_md}: frontmatter 'metadata' must be a mapping")
 
-    metadata = {}
-    in_metadata = False
-    for lineno, raw in enumerate(fm.splitlines(), 1):
-        if not raw.strip():
+    result = {}
+    for key in keys:
+        if key not in metadata:
             continue
-        if in_metadata:
-            if raw[:1] in (" ", "\t"):
-                m = re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*)$", raw)
-                if not m:
-                    sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
-                key, value = m.group(1), m.group(2).strip()
-                if key in keys:
-                    if _unsupported_scalar_syntax(value):
-                        sys.exit(f"{skill_md}:{lineno}: unsupported YAML syntax "
-                                 f"in {key!r}: {value!r}")
-                    if key in metadata:
-                        sys.exit(f"{skill_md}:{lineno}: duplicate key {key!r} in metadata")
-                    metadata[key] = _unquote(value)
-                continue
-            in_metadata = False
-        m = re.match(r"^metadata:(.*)$", raw)
-        if m:
-            if m.group(1).strip():
-                sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
-            in_metadata = True
-
-    return metadata
+        value = metadata[key]
+        if not isinstance(value, str):
+            sys.exit(f"{skill_md}: metadata {key!r} must be a string, got {value!r}")
+        result[key] = value
+    return result
 
 
 def read_external_metadata(skill_md):
@@ -450,24 +468,15 @@ def check_external_git(path, expected_origin, expected_commit):
 
 
 def read_upstream_name(skill_md):
-    fm = frontmatter_block(skill_md.read_text())
-    if fm is None:
+    """Top-level frontmatter `name:` scalar. Returns None when the name is
+    missing or not a string — the caller treats None as invalid, never as
+    an assumed match. Malformed frontmatter YAML itself is a hard error,
+    same as every other frontmatter read here."""
+    data = parse_frontmatter_strict(skill_md)
+    if data is None:
         return None
-    name = None
-    for raw in fm.splitlines():
-        if not raw.strip() or raw[:1] in (" ", "\t"):
-            continue
-        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", raw)
-        if not m:
-            continue
-        key, value = m.group(1), m.group(2).strip()
-        if key == "name":
-            if name is not None:
-                return None
-            if value and value[0] in "&*|>{[":
-                return None
-            name = _unquote(value)
-    return name
+    name = data.get("name")
+    return name if isinstance(name, str) else None
 
 
 def resolve_upstream_skill(checkout, path, exposed_name):

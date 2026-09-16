@@ -114,13 +114,18 @@ caller's working directory do not determine installation authority or target.
 
 ## Runtime dependencies
 
-`skill-installer` requires Python 3.12 or later, Git, and PyYAML.
-[`scripts/requirements.txt`](scripts/requirements.txt) records the pinned
-PyYAML version.
+`skill-installer` requires Python 3.12 or later, Git, and the Python packages
+pinned in [`scripts/requirements.txt`](scripts/requirements.txt).
 
-The installer does not provision Python, Git, PyYAML, a virtual environment,
-or system packages. A missing PyYAML fails the import rather than installing
-anything automatically.
+Provision the dependencies in an existing authorized Bazel environment or an
+isolated virtual environment before invoking the installer. Use that
+environment's Python interpreter to install the bundled requirements and
+execute the installer. Do not install packages into system Python.
+
+The platform wrappers select a supported interpreter and invoke
+`install.py`. They do not install Python packages automatically. A missing
+runtime dependency is a preflight failure with a diagnostic identifying
+`scripts/requirements.txt`.
 
 ## Installation and reconciliation
 

@@ -29,6 +29,7 @@ loaded as modules (their filenames are hyphenated and cannot be
 """
 import argparse
 import importlib.util
+import io
 import json
 import os
 import re
@@ -39,6 +40,10 @@ import tempfile
 import uuid
 import yaml
 from pathlib import Path
+
+from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 SELF_PATH = Path(__file__).resolve()
 SCRIPTS_DIR = SELF_PATH.parent
@@ -412,38 +417,87 @@ def write_bindings(consumer_root, staged):
         line_idx, _ = located
         lines[line_idx] = check_bindings.replace_binding_line(label, value)
     new_text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+    # Reparse the staged document before writing it: a label or value
+    # containing a literal pipe must still round-trip as exactly the
+    # intended value, never as extra table columns.
+    for section, label, value in staged:
+        relocated = check_bindings.locate_binding(new_text, section, label)
+        if relocated is None or relocated[1] != value:
+            sys.exit(f"PROJECT.md: staged binding write for [{section}] {label!r} "
+                     "did not reparse to the intended value; refusing to write")
+
     project_md.write_text(new_text)
 
 
 # --- adoption.yml commit/release rewrite ----------------------------------
 
 
-def write_adoption_fields(adoption_yaml, commit, release):
-    """Replaces only the commit:/release: lines, byte-for-byte preserving
-    every other line (comments, source:, the skills: block)."""
-    lines = adoption_yaml.read_text().splitlines(keepends=True)
-    commit_written = False
-    release_written = False
-    commit_index = None
-    for i, line in enumerate(lines):
-        stripped = line.rstrip("\r\n")
-        newline = line[len(stripped):]
-        if not commit_written and re.match(r"^commit:\s*", stripped):
-            lines[i] = f"commit: {commit}" + newline
-            commit_written = True
-            commit_index = i
-            continue
-        if not release_written and re.match(r"^release:\s*", stripped):
-            lines[i] = (f"release: {release}" if release else 'release: ""') + newline
-            release_written = True
+def _detect_skills_indent(text):
+    """Leading-space count before the '-' of the first skills: list item's
+    dash, for a block-style skills list — None for flow-style or absent.
+    Used only to configure the round-trip dumper's sequence indent so a
+    commit/release edit does not reformat an untouched skills list."""
+    m = re.search(r"^skills:[ \t]*(?:#.*)?$", text, re.M)
+    if not m:
+        return None
+    item = re.search(r"^([ \t]*)-", text[m.end():], re.M)
+    return len(item.group(1)) if item else None
 
-    if not commit_written:
-        sys.exit(f"{adoption_yaml}: no 'commit:' line found to update")
-    if not release_written:
-        insertion = (f"release: {release}\n" if release else 'release: ""\n')
-        lines.insert(commit_index + 1, insertion)
 
-    adoption_yaml.write_text("".join(lines))
+def stage_adoption_edit(adoption_yaml, commit, release):
+    """The exact adoption.yml text an --update would write — parsed,
+    produced, and validated in full before any confirmation or mutation, so
+    an unsupported representation is never discovered only after
+    PROJECT.md, AGENTS.md, or adoption state has already been written.
+    Never touches disk itself; the caller writes the returned text verbatim
+    after confirmation, with no recomputation.
+
+    Round-trips through ruamel.yaml so only commit/release change: source,
+    skills, comments, key order, and the document's block-or-flow style
+    survive untouched, and a duplicate key is still rejected. Fails closed
+    (sys.exit, no write) if the edit cannot preserve those contracts."""
+    original_text = adoption_yaml.read_text()
+    original = check_skills.parse_adoption_text(original_text, str(adoption_yaml))
+
+    yaml_rt = YAML(typ="rt")
+    # A source URL or commit line is never line-wrapped: ruamel's default
+    # scalar width would otherwise fold a long, but untouched, source: line
+    # onto a second line, a formatting change this function must not make.
+    yaml_rt.width = 2**30
+    indent = _detect_skills_indent(original_text)
+    if indent is not None:
+        yaml_rt.indent(mapping=2, sequence=indent + 2, offset=indent)
+
+    try:
+        data = yaml_rt.load(io.StringIO(original_text))
+    except YAMLError as e:
+        sys.exit(f"{adoption_yaml}: cannot stage an update "
+                 f"({check_skills.yaml_error_summary(e)})")
+    if not isinstance(data, CommentedMap) or "commit" not in data:
+        sys.exit(f"{adoption_yaml}: cannot stage an update — 'commit' key not "
+                 "found at the top level")
+
+    data["commit"] = commit
+    release_value = release if release else DoubleQuotedScalarString("")
+    if "release" in data:
+        data["release"] = release_value
+    else:
+        data.insert(list(data).index("commit") + 1, "release", release_value)
+
+    out = io.StringIO()
+    yaml_rt.dump(data, out)
+    staged_text = out.getvalue()
+
+    staged = check_skills.parse_adoption_text(staged_text, str(adoption_yaml))
+    if staged["repo"] != original["repo"] or staged["skills"] != original["skills"]:
+        sys.exit(f"{adoption_yaml}: staged update would change 'source' or "
+                 "'skills'; refusing to update")
+    if staged["pin"] != commit or (staged["tag"] or "") != (release or ""):
+        sys.exit(f"{adoption_yaml}: staged update does not reflect the "
+                 "intended commit/release; refusing to update")
+
+    return staged_text
 
 
 # --- state classification --------------------------------------------
@@ -890,6 +944,16 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
             print(f"  {b}")
         return 1
 
+    # Staged, validated, and retained before any output or confirmation —
+    # see stage_adoption_edit() — so an unsupported adoption.yml
+    # representation is never discovered only after other durable state has
+    # already been written.
+    staged_adoption_text = None
+    if version_change is not None:
+        staged_adoption_text = stage_adoption_edit(
+            consumer_root / ".agents" / "adoption.yml",
+            version_change["target_commit"], version_change["target_release"])
+
     repair = (mode == "repair")
     to_materialize, to_remove = mutation_targets(result, repair)
     to_materialize = sorted(set(to_materialize)
@@ -938,10 +1002,10 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
         # begins: if reconciliation fails partway, the approved desired
         # state survives and --repair can continue toward it. adoption/
         # result/to_materialize/to_remove were already computed against
-        # this exact target (see run_update()) and are not recomputed here.
-        write_adoption_fields(consumer_root / ".agents" / "adoption.yml",
-                              version_change["target_commit"],
-                              version_change["target_release"])
+        # this exact target (see run_update()), and staged_adoption_text was
+        # already staged and validated above — both are written/used exactly
+        # as computed, never recomputed here.
+        (consumer_root / ".agents" / "adoption.yml").write_text(staged_adoption_text)
 
     temp_registry = []
     try:
@@ -1025,6 +1089,58 @@ def run_verify(consumer_root, clients):
     return 0 if (skills_result["ok"] and bindings_result["ok"]) else 1
 
 
+def print_update_summary(update_result):
+    """The complete pre-confirmation --update comparison: everything
+    check_update.evaluate() already computed against the resolved target,
+    not just governed-file counts. Never invents a summary or evaluation —
+    every line here is a value check-update.py itself returned."""
+    inv = update_result["inventory_diff"] or {}
+    print(f"\nGoverned-file inventory: +{len(inv.get('added', []))} "
+         f"-{len(inv.get('removed', []))} ~{len(inv.get('changed', []))}")
+    for path in inv.get("added", []):
+        print(f"  + {path}")
+    for path in inv.get("removed", []):
+        print(f"  - {path}")
+    for path in inv.get("changed", []):
+        print(f"  ~ {path}")
+
+    if update_result["obligation_diff"]:
+        print("\nObligation changes:")
+        for f, sections in sorted(update_result["obligation_diff"].items()):
+            print(f"  {f}")
+            for key, delta in sections.items():
+                for item in delta["added"]:
+                    print(f"    [{key}] + {item}")
+                for item in delta["removed"]:
+                    print(f"    [{key}] - {item}")
+
+    ext = update_result["external_diff"] or {}
+    if ext.get("repos_added") or ext.get("repos_removed") or ext.get("repos_changed"):
+        print("\nExternal repositories:")
+        for rkey in ext.get("repos_added", []):
+            print(f"  + {rkey}")
+        for rkey in ext.get("repos_removed", []):
+            print(f"  - {rkey}")
+        for change in ext.get("repos_changed", []):
+            print(f"  ~ {change['repo_key']}: "
+                 f"{change['before']['source']} @ {change['before']['commit'][:12]} -> "
+                 f"{change['after']['source']} @ {change['after']['commit'][:12]}")
+
+    if ext.get("skill_path_changed"):
+        print("\nExternal skill path changes:")
+        for change in ext["skill_path_changed"]:
+            print(f"  ~ {change['name']}: {change['before']} -> {change['after']}")
+
+    if ext.get("conflicts"):
+        print("\nConflicts:")
+        for c in ext["conflicts"]:
+            print(f"  {c}")
+
+    if update_result["candidate_installer_changed"]:
+        print("\nNOTE: the target ships a different install.py; this report may omit "
+             "changes only that installer can see.")
+
+
 def run_update(args, consumer_root, clients, classification):
     if classification["state"] == "damaged":
         print(f"Damaged managed state: {classification['reason']}")
@@ -1066,12 +1182,7 @@ def run_update(args, consumer_root, clients, classification):
     }
 
     print(f"\nDiffers from current: {update_result['differs_from_current']}")
-    inv = update_result["inventory_diff"] or {}
-    print(f"Governed-file inventory: +{len(inv.get('added', []))} "
-         f"-{len(inv.get('removed', []))} ~{len(inv.get('changed', []))}")
-    if update_result["candidate_installer_changed"]:
-        print("NOTE: the target ships a different install.py; this report may omit "
-             "changes only that installer can see.")
+    print_update_summary(update_result)
 
     # The action set install.py plans, shows, and executes is computed
     # against the resolved TARGET — same source/skills, the new pin/release

@@ -17,6 +17,7 @@ after human confirmation, using the values this script resolves.
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,8 +25,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from markdown_it import MarkdownIt
+
 SELF_PATH = Path(__file__).resolve()
 SCRIPTS_DIR = SELF_PATH.parent
+
+MD = MarkdownIt("commonmark")
 
 OBLIGATION_HEADERS = {
     "must not",
@@ -162,29 +167,59 @@ def differing_candidate_updater(tree):
 
 
 def collect_governed(tree):
-    patterns = ["skills/*/SKILL.md", "skills/*/references/*.md", "skills/*/scripts/*"]
+    """{relative_path: bytes} for every regular file within a skills/<name>/
+    bundle — SKILL.md, references, scripts, assets, and anything else, at
+    any nesting depth. A directory symlink inside a bundle is rejected
+    outright; a file symlink is included only when its resolved target
+    stays inside that same bundle. Comparison elsewhere is byte-based, so a
+    binary asset is never decoded as text here."""
     files = {}
-    for pattern in patterns:
-        for p in sorted(tree.glob(pattern)):
-            if p.is_file():
-                files[str(p.relative_to(tree))] = p.read_text()
+    skills_dir = tree / "skills"
+    if not skills_dir.is_dir():
+        return files
+    for bundle in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
+        bundle_resolved = bundle.resolve()
+        for dirpath, dirnames, filenames in os.walk(bundle, followlinks=False):
+            dirnames.sort()
+            current_dir = Path(dirpath)
+            for dirname in dirnames:
+                if (current_dir / dirname).is_symlink():
+                    sys.exit(f"{current_dir / dirname}: symlink directory inside a "
+                             "skill bundle; refusing to inventory")
+            for filename in sorted(filenames):
+                p = current_dir / filename
+                if p.is_symlink():
+                    target = p.resolve()
+                    if not target.is_relative_to(bundle_resolved):
+                        sys.exit(f"{p}: symlink escapes its skill bundle; refusing "
+                                 "to inventory")
+                files[str(p.relative_to(tree))] = p.read_bytes()
     return files
 
 
 def extract_obligations(text):
+    """{heading_text: [item_text, ...]} for every heading (any level) whose
+    text contains one of OBLIGATION_HEADERS, collecting the plain text of
+    every ordered or unordered list item that follows it, up to the next
+    heading. Headings and list items are real markdown-it-py tokens, so
+    matching text inside a fenced code block is never collected."""
     obligations = {}
     current = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if re.match(r'^#{1,4}\s+', line):
-            heading = stripped.lstrip('#').strip().lower()
-            if any(h in heading for h in OBLIGATION_HEADERS):
-                current = heading
-                obligations[current] = []
-            else:
-                current = None
-        elif current and stripped.startswith('* '):
-            obligations[current].append(stripped)
+    in_list_item = 0
+    prev_type = None
+    for t in MD.parse(text):
+        if prev_type == "heading_open" and t.type == "inline":
+            heading = t.content.strip().lower()
+            current = heading if any(h in heading for h in OBLIGATION_HEADERS) else None
+            if current is not None:
+                obligations.setdefault(current, [])
+        elif t.type == "list_item_open":
+            in_list_item += 1
+        elif t.type == "list_item_close":
+            in_list_item -= 1
+        elif t.type == "inline" and in_list_item > 0 and current is not None:
+            obligations[current].append(t.content)
+        prev_type = t.type
     return obligations
 
 
@@ -233,8 +268,8 @@ def diff_against(root, source, target_commit):
 
         obligation_diff = {}
         for f in sorted(set(before) & set(after)):
-            if before[f] != after[f]:
-                d = diff_obligations(before[f], after[f])
+            if f.endswith(".md") and before[f] != after[f]:
+                d = diff_obligations(before[f].decode(), after[f].decode())
                 if d:
                     obligation_diff[f] = d
 
@@ -249,13 +284,33 @@ def diff_against(root, source, target_commit):
             ext_skills, skill_conflicts = check_skills.dedupe_external_skills(requirements)
             current_state = check_skills.evaluate(root)
             current_repos = current_state["external_repos"]
+            root_key = check_skills.repo_key(source)
+            current_ext_paths = {
+                name: info["source"] for name, info in current_state["provenance"].items()
+                if info["repo_key"] != root_key
+            }
+            target_ext_paths = {name: info["path"] for name, info in ext_skills.items()}
             external_diff = {
                 "repos_added": sorted(set(ext_repos) - set(current_repos)),
                 "repos_removed": sorted(set(current_repos) - set(ext_repos)),
-                "repos_changed": sorted(
-                    k for k in set(ext_repos) & set(current_repos)
-                    if ext_repos[k]["commit"] != current_repos[k]["commit"]
-                ),
+                # Changed on either identity, not commit alone: a source
+                # migration that keeps the same owner/repo (and so the same
+                # repo_key) would otherwise be invisible here.
+                "repos_changed": [
+                    {"repo_key": k,
+                     "before": {"source": current_repos[k]["source"],
+                                "commit": current_repos[k]["commit"]},
+                     "after": {"source": ext_repos[k]["source"],
+                               "commit": ext_repos[k]["commit"]}}
+                    for k in sorted(set(ext_repos) & set(current_repos))
+                    if (ext_repos[k]["commit"] != current_repos[k]["commit"]
+                        or ext_repos[k]["source"] != current_repos[k]["source"])
+                ],
+                "skill_path_changed": [
+                    {"name": n, "before": current_ext_paths[n], "after": target_ext_paths[n]}
+                    for n in sorted(set(current_ext_paths) & set(target_ext_paths))
+                    if current_ext_paths[n] != target_ext_paths[n]
+                ],
                 "conflicts": repo_conflicts + skill_conflicts,
             }
 

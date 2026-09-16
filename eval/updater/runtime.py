@@ -261,6 +261,16 @@ def load_install_module():
     return module
 
 
+def load_check_update_module():
+    """A fresh, unexecuted-as-main import of check-update.py, for a test
+    that needs to call its functions directly with a mocked check_skills —
+    a subprocess invocation would not see the mock."""
+    spec = importlib.util.spec_from_file_location("check_update_under_test", CHECK_UPDATE_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class Results:
     def __init__(self):
         self.failures = []
@@ -465,10 +475,98 @@ def test_wrapper_selects_interpreter_once(results, workdir, target):
         target.install_cmd(probe_dir, consumer, ["--probe-exit", "0"]), env=env)
     results.check(f"{label} interpreter-selection-once run exits zero", code == 0, out)
     invocations = counter_file.read_text().splitlines() if counter_file.exists() else []
-    version_probes = [line for line in invocations if line.startswith("-c ")]
+    # A dependency preflight probe (a second, distinct `-c` call on the same
+    # already-selected interpreter) is expected and intentional — only a
+    # second *version-check* probe would mean the interpreter was
+    # rediscovered rather than reused.
+    version_probes = [line for line in invocations
+                      if line.startswith("-c ") and "version_info" in line]
+    dependency_probes = [line for line in invocations
+                         if line.startswith("-c ") and "import yaml" in line]
     results.check(f"{label} exactly one version-check probe (no duplicate search loop)",
                   len(version_probes) == 1,
                   f"recorded invocations: {invocations!r}")
+    results.check(f"{label} exactly one dependency preflight probe",
+                  len(dependency_probes) == 1,
+                  f"recorded invocations: {invocations!r}")
+
+
+APPROVED_THIRD_PARTY_IMPORTS = {"yaml", "markdown_it", "ruamel"}
+
+
+def test_dependency_import_completeness(results, workdir):
+    """Every direct third-party import across the four installer entry
+    points is one of the three approved dependencies, and every approved
+    dependency is actually declared in the bundled requirements file —
+    scripts/requirements.txt is the complete declaration in both
+    directions."""
+    import ast
+
+    requirements_text = (SCRIPTS_DIR / "requirements.txt").read_text()
+    declared = {line.split("==")[0].strip().lower()
+               for line in requirements_text.splitlines()
+               if line.strip() and not line.strip().startswith("#")}
+    results.check("requirements.txt declares exactly the three approved dependencies",
+                  declared == {"pyyaml", "markdown-it-py", "ruamel.yaml"}, declared)
+
+    found = set()
+    for script in (INSTALL_PY, CHECK_SKILLS_PY, CHECK_BINDINGS_PY, CHECK_UPDATE_PY):
+        tree = ast.parse(script.read_text(), filename=str(script))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    found.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module.split(".")[0])
+    third_party = found - set(sys.stdlib_module_names)
+    results.check(
+        "the only third-party imports across all four entry points are the "
+        "three approved dependencies",
+        third_party == APPROVED_THIRD_PARTY_IMPORTS, third_party)
+
+
+def test_wrapper_missing_dependency_diagnostic(results, workdir):
+    """A selected interpreter that cannot import the bundled dependencies is
+    a preflight failure naming scripts/requirements.txt — never an attempt
+    to install anything."""
+    probe_dir = make_probe_scripts_dir(workdir / "missing-dep-probe")
+    consumer = make_git_repo(workdir / "missing-dep-consumer")
+    fake = workdir / "missing-dep-fakebin"
+    fake.mkdir(parents=True, exist_ok=True)
+    write(fake / "python3", (
+        "#!/bin/sh\n"
+        'if [ "$1" = "-c" ]; then\n'
+        '    case "$2" in\n'
+        '        *version_info*) exit 0 ;;\n'
+        '        *) exit 1 ;;\n'
+        '    esac\n'
+        'fi\n'
+        'exit 1\n'
+    ))
+    (fake / "python3").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake}:{os.environ.get('PATH', '')}")
+
+    code, out = run_proc(PosixTarget().install_cmd(probe_dir, consumer, []), env=env)
+    results.check("missing dependency — nonzero exit", code != 0, out)
+    results.check("missing dependency — probe install.py never ran",
+                  probe_argv(out) is None, out)
+    results.check("missing dependency — diagnostic names requirements.txt",
+                  "requirements.txt" in out, out)
+    results.check("missing dependency — diagnostic is advisory only (tells the user "
+                  "to run pip themselves; the wrapper never runs it)",
+                  "pip install" in out, out)
+
+
+def test_ps1_prefers_path_interpreter_over_launcher(results, workdir):
+    """install.ps1's interpreter candidates must try 'python'/'python3'
+    (PATH-resolved, so an activated virtual environment's own interpreter is
+    found) before the 'py' launcher (which resolves independent of PATH and
+    would otherwise bypass an activated environment)."""
+    text = INSTALL_PS1.read_text()
+    python_idx = text.index("Exe = 'python'")
+    launcher_idx = text.index("Exe = 'py'")
+    results.check("install.ps1 tries 'python' before the 'py' launcher",
+                  python_idx < launcher_idx, text)
 
 
 # --- generic client-skill exposure regressions (in-process) ---------------
@@ -1305,6 +1403,68 @@ def test_bindings_file_accepts_real_yaml_syntax(results, workdir):
             "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out)
 
 
+def test_check_bindings_ignores_fenced_examples(results, workdir):
+    """A heading, applicability comment, or table that only appears inside a
+    fenced code block must never become a real section or binding —
+    markdown-it-py tokenizes fence content as a single opaque block, unlike
+    a line-by-line regex scan."""
+    base = workdir / "bindings-fenced-examples"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "PROJECT.md", (
+        "# PROJECT.md\n\n"
+        "## Real section\n\n"
+        "<!-- Applies when `alpha` is installed. -->\n\n"
+        "| Binding | Value |\n| :--- | :--- |\n| Widget size | Large |\n\n"
+        "## Fenced example\n\n"
+        "```\n"
+        "## Fake section\n"
+        "<!-- Applies when `alpha` is installed. -->\n"
+        "| Binding | Value |\n| :--- | :--- |\n| x | y |\n"
+        "```\n"
+    ))
+    code, result, err = run_check_json(CHECK_BINDINGS_PY, ["--root", str(consumer),
+                                                          "--skill", "alpha"])
+    results.check("fenced example — real section still resolved",
+                  {"section": "Real section", "binding": "Widget size", "value": "Large"}
+                  in result["resolved"], err)
+    results.check("fenced example — fake section never appears as applicable",
+                  "Fenced example" not in result["applicable_sections"], err)
+
+
+def test_check_bindings_escaped_pipe_round_trips(results, workdir):
+    """A binding value containing a literal pipe must round-trip through a
+    write as exactly that value, in exactly two table columns — not split
+    into extra columns by an unescaped '|'."""
+    base = workdir / "bindings-escaped-pipe"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "a|b|c"\n')
+
+    before_lines = (consumer / "PROJECT.md").read_text().splitlines()
+    code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+    results.check("escaped-pipe value — install exits zero", code == 0, out)
+
+    after_text = (consumer / "PROJECT.md").read_text()
+    code2, result2, err2 = run_check_json(CHECK_BINDINGS_PY, ["--root", str(consumer),
+                                                             "--skill", "alpha"])
+    results.check(
+        "escaped-pipe value — reparses to exactly the intended value, not extra columns",
+        {"section": "Widgets", "binding": "Widget size", "value": "a|b|c"}
+        in result2["resolved"], err2)
+    after_lines = after_text.splitlines()
+    unrelated_changed = [
+        i for i, (b, a) in enumerate(zip(before_lines, after_lines))
+        if b != a and "Widget size" not in b
+    ]
+    results.check("escaped-pipe value — unrelated PROJECT.md content preserved",
+                  not unrelated_changed, (before_lines, after_lines))
+
+
 def test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir):
     base = workdir / "bindings-file-precedence"
     upstream, sha = make_upstream(base)
@@ -1446,6 +1606,111 @@ def test_check_update_no_mutation_and_cleanup(results, workdir):
                   result3["target_commit"] == new_sha, json.dumps(result3))
 
 
+def test_check_update_obligation_lists_and_fenced_examples(results, workdir):
+    """Ordered and unordered obligation lists are recognized as real
+    markdown-it-py list items, and heading/list text that only appears
+    inside a fenced code block is never collected."""
+    base = workdir / "check-update-obligations"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\n"
+        "# Alpha\n\n## Must not\n\n* do the bad thing\n\n"
+        "```\n## Must not\n* fenced bad thing\n```\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "v1 obligations"], upstream)
+    v1_sha = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption(consumer, upstream, v1_sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("obligations fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\n"
+        "# Alpha\n\n## Must not\n\n"
+        "* do the bad thing\n- do another bad thing\n1. do a third bad thing\n\n"
+        "```\n## Must not\n* fenced bad thing\n```\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "v2 obligations"], upstream)
+    v2_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", v2_sha])
+    results.check("check-update — exits zero", code == 0, err)
+    obligations = result["obligation_diff"].get("skills/alpha/SKILL.md", {})
+    added = obligations.get("must not", {}).get("added", [])
+    results.check("obligations — unordered '-' item recognized",
+                  "do another bad thing" in added, json.dumps(result))
+    results.check("obligations — ordered '1.' item recognized",
+                  "do a third bad thing" in added, json.dumps(result))
+    results.check("obligations — fenced example never collected as a real obligation",
+                  "fenced bad thing" not in added, json.dumps(result))
+
+
+def test_check_update_inventory_includes_nested_and_binary_files(results, workdir):
+    """collect_governed()'s inventory reaches every regular file under a
+    skill bundle — nested references and assets, not just SKILL.md and a
+    flat scripts/ listing — and compares binary content by bytes, never by
+    decoding it as text."""
+    base = workdir / "check-update-nested-binary"
+    upstream, sha = make_upstream(base)
+    write(upstream / "skills" / "alpha" / "references" / "nested" / "deep.md", "v1\n")
+    (upstream / "skills" / "alpha" / "assets").mkdir(parents=True, exist_ok=True)
+    (upstream / "skills" / "alpha" / "assets" / "image.bin").write_bytes(b"\x89PNG\x00\x01v1")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add nested/binary content"], upstream)
+    v1_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, v1_sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("nested/binary fixture — v1 install exits zero", code0 == 0, out0)
+
+    (upstream / "skills" / "alpha" / "assets" / "image.bin").write_bytes(b"\x89PNG\x00\x01v2")
+    write(upstream / "skills" / "alpha" / "references" / "nested" / "new.md", "new\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "change binary, add nested file"], upstream)
+    v2_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", v2_sha])
+    results.check("nested/binary inventory diff — exits zero, no crash on binary content",
+                  code == 0, err)
+    inv = result["inventory_diff"]
+    results.check("nested/binary inventory diff — new nested reference file detected",
+                  "skills/alpha/references/nested/new.md" in inv["added"], json.dumps(inv))
+    results.check("nested/binary inventory diff — changed binary asset detected by bytes",
+                  "skills/alpha/assets/image.bin" in inv["changed"], json.dumps(inv))
+
+
+def test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir):
+    """A symlink inside a skill bundle that resolves outside it must stop
+    the comparison outright rather than silently reading outside the
+    authorized inventory."""
+    base = workdir / "check-update-unsafe-symlink"
+    upstream, sha = make_upstream(base)
+    outside = base / "outside-secret"
+    outside.mkdir(parents=True)
+    write(outside / "passwd", "secret\n")
+    os_symlink_relative = os.path.relpath(outside, upstream / "skills" / "alpha" / "scripts")
+    (upstream / "skills" / "alpha" / "scripts").mkdir(parents=True, exist_ok=True)
+    os.symlink(os_symlink_relative, upstream / "skills" / "alpha" / "scripts" / "evil-link")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add unsafe symlink"], upstream)
+    unsafe_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("unsafe-symlink fixture — clean v1 install exits zero", code0 == 0, out0)
+
+    code, out, err = run_check(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", unsafe_sha])
+    results.check("unsafe symlink in candidate bundle — nonzero exit, not a crash",
+                  code != 0, out + err)
+    results.check("unsafe symlink in candidate bundle — diagnostic mentions the symlink",
+                  "symlink" in (out + err).lower(), out + err)
+
+
 def test_update_requires_explicit_target_no_latest_selection(results, workdir):
     base = workdir / "update-no-target"
     upstream, sha, consumer = full_install(base, ["alpha"])
@@ -1484,6 +1749,113 @@ def test_update_changes_only_commit_and_release(results, workdir):
                   f"commit: {new_sha}" in after_adoption, after_adoption)
     results.check("--update — delta not installed (skills: intent untouched)",
                   not (consumer / ".agents" / "skills" / "delta").exists(), out)
+
+
+def test_update_preserves_comments_and_flow_style(results, workdir):
+    """--update's adoption.yml edit round-trips through a real YAML
+    round-trip library: comments and a flow-style skills list survive
+    untouched, and only commit/release change."""
+    base = workdir / "update-preserves-style"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write(consumer / ".agents" / "adoption.yml", (
+        "# Adoption declaration\n"
+        f"source: {upstream.as_posix()}\n"
+        "# pin\n"
+        f"commit: {sha}\n"
+        'release: ""\n'
+        "skills: [alpha]\n"
+    ))
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("flow-style fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", new_sha, "--force"])
+    results.check("--update with comments/flow-style — exits zero", code == 0, out)
+    after = (consumer / ".agents" / "adoption.yml").read_text()
+    results.check("--update — leading comment preserved",
+                  "# Adoption declaration" in after, after)
+    results.check("--update — comment above commit: preserved",
+                  "# pin" in after, after)
+    results.check("--update — flow-style skills list preserved, not reformatted to block",
+                  "skills: [alpha]" in after, after)
+    results.check("--update — commit changed to the new sha",
+                  f"commit: {new_sha}" in after, after)
+
+
+def test_update_inserts_missing_release_field(results, workdir):
+    """An adoption.yml with no release: key at all gets one inserted by
+    --update, without disturbing source/skills or existing comments."""
+    base = workdir / "update-inserts-release"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        "skills:\n  - alpha\n"
+    ))
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("no-release fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    run_git(["tag", "v9.9.9"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", "v9.9.9", "--force"])
+    results.check("--update inserting a missing release: field — exits zero", code == 0, out)
+    after = (consumer / ".agents" / "adoption.yml").read_text()
+    results.check("--update — release: inserted with the resolved tag",
+                  "release: v9.9.9" in after, after)
+    results.check("--update — source: still unchanged",
+                  f"source: {upstream.as_posix()}" in after, after)
+    results.check("--update — skills: block still unchanged",
+                  "skills:\n  - alpha" in after, after)
+
+
+def test_stage_adoption_edit_refuses_on_contract_violation(results, workdir):
+    """stage_adoption_edit()'s own defense-in-depth check — comparing the
+    staged document's re-parsed source/skills against the original's —
+    refuses to return a staged text (and so install.py never writes one) if
+    that comparison ever fails, exercised directly since a real document
+    that defeats both the PyYAML and ruamel.yaml parsers identically is not
+    otherwise constructible."""
+    base = workdir / "stage-adoption-contract"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+
+    install_module = load_install_module()
+    real_parse = install_module.check_skills.parse_adoption_text
+    calls = {"n": 0}
+
+    def fake_parse(text, label):
+        calls["n"] += 1
+        result = real_parse(text, label)
+        if calls["n"] == 2:
+            result = dict(result, skills=["a-different-skill"])
+        return result
+
+    adoption_path = consumer / ".agents" / "adoption.yml"
+    with mock.patch.object(install_module.check_skills, "parse_adoption_text",
+                          side_effect=fake_parse):
+        refused = stopped_with_system_exit(
+            lambda: install_module.stage_adoption_edit(
+                adoption_path, "a3f9b2c1d4e5f60718293a4b5c6d7e8f90a1b2c3", ""))
+    results.check(
+        "stage_adoption_edit — refuses (SystemExit, nonzero) when the staged "
+        "document's skills would differ from the original's",
+        refused, calls)
+    results.check("stage_adoption_edit — refusing this way never touches adoption.yml",
+                  adoption_path.read_text() == (
+                      f"source: {upstream.as_posix()}\ncommit: {sha}\nrelease: \"\"\n"
+                      "skills:\n  - alpha\n"),
+                  adoption_path.read_text())
 
 
 def test_update_blocked_by_current_damage(results, workdir):
@@ -1526,6 +1898,88 @@ def test_fully_supplied_update_runs_noninteractive(results, workdir):
                   new_sha in (consumer / ".agents" / "adoption.yml").read_text(), out)
     results.check("fully supplied --update — binding applied",
                   "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out)
+
+
+def test_update_summary_shows_external_repo_source_changed(results, workdir):
+    """An external repository must be classified (and displayed) as changed
+    when its source differs, even when its commit does not — the
+    dedupe-by-repo_key comparison cannot rely on commit alone. The
+    github.com-only external-source schema makes a same-key, different-source
+    pair unconstructible through normal adoption end to end, so the target
+    side is real and the current side's recorded source is substituted
+    directly, exercising exactly the comparison this workorder corrected."""
+    base = workdir / "update-external-source-changed"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external source-changed fixture — install exits zero", code0 == 0, out0)
+
+    check_update_module = load_check_update_module()
+    real_evaluate = check_update_module.check_skills.evaluate
+
+    def fake_evaluate(root, *args, **kwargs):
+        state = real_evaluate(root, *args, **kwargs)
+        key = "example/ext-upstream"
+        if key in state["external_repos"]:
+            state = dict(state)
+            state["external_repos"] = dict(state["external_repos"])
+            state["external_repos"][key] = dict(
+                state["external_repos"][key],
+                source="https://github.com/example/ext-upstream-renamed")
+        return state
+
+    with mock.patch.object(check_update_module.check_skills, "evaluate",
+                          side_effect=fake_evaluate):
+        result = check_update_module.evaluate(consumer, target_version=new_sha)
+    changed = result["external_diff"]["repos_changed"]
+    results.check(
+        "external repo changed on source alone (same commit) — detected",
+        any(c["repo_key"] == "example/ext-upstream"
+           and c["before"]["source"] == "https://github.com/example/ext-upstream-renamed"
+           and c["after"]["source"] == "https://github.com/example/ext-upstream"
+           and c["before"]["commit"] == c["after"]["commit"]
+           for c in changed),
+        json.dumps(changed))
+
+
+def test_update_summary_shows_external_skill_path_changed(results, workdir):
+    """An external skill whose upstream path moves (same exposed name, same
+    repository) must be reported as a distinct external skill path change,
+    separate from repository-level added/removed/changed reporting."""
+    base = workdir / "update-external-path-changed"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external path-changed fixture — install exits zero", code0 == 0, out0)
+
+    write(ext_upstream / "nested" / "widget" / "SKILL.md",
+         FIXTURE_SKILL.format(name="widget"))
+    run_git(["add", "-A"], ext_upstream)
+    run_git(["commit", "-q", "-m", "move widget"], ext_upstream)
+    new_ext_sha = run_git(["rev-parse", "HEAD"], ext_upstream)
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: External descriptor fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/ext-upstream\n"
+        f"  external-commit: {new_ext_sha}\n"
+        "  external-path: nested/widget\n---\nExternal descriptor fixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget moved upstream"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", new_sha], env=env)
+    results.check("external skill path change — check-update exits zero", code == 0, err)
+    path_changes = result["external_diff"]["skill_path_changed"]
+    results.check(
+        "external skill path change — reported with before/after paths",
+        any(c["name"] == "widget" and c["before"] == "skills/widget"
+           and c["after"] == "nested/widget" for c in path_changes),
+        json.dumps(path_changes))
 
 
 def test_repair_preserves_adoption_and_restores_damage(results, workdir):
@@ -1933,6 +2387,10 @@ def main():
             wrapper_battery(results, workdir / f"wrapper-{target.name}", target)
             test_wrapper_selects_interpreter_once(results, workdir, target)
 
+        test_dependency_import_completeness(results, workdir)
+        test_wrapper_missing_dependency_diagnostic(results, workdir)
+        test_ps1_prefers_path_interpreter_over_launcher(results, workdir)
+
         test_generic_exposure_created(results, workdir)
         test_generic_exposure_retained_unchanged(results, workdir)
         test_generic_exposure_absolute_target_normalized(results, workdir)
@@ -1982,15 +2440,25 @@ def main():
         test_bindings_file_valid_fills_unresolved(results, workdir)
         test_bindings_file_rejects_malformed_content(results, workdir)
         test_bindings_file_accepts_real_yaml_syntax(results, workdir)
+        test_check_bindings_ignores_fenced_examples(results, workdir)
+        test_check_bindings_escaped_pipe_round_trips(results, workdir)
         test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir)
         test_bindings_staged_until_final_confirmation(results, workdir)
         test_bazel_defaults_precedence_and_scope(results, workdir)
 
         test_check_update_no_mutation_and_cleanup(results, workdir)
+        test_check_update_obligation_lists_and_fenced_examples(results, workdir)
+        test_check_update_inventory_includes_nested_and_binary_files(results, workdir)
+        test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir)
         test_update_requires_explicit_target_no_latest_selection(results, workdir)
         test_update_changes_only_commit_and_release(results, workdir)
+        test_update_preserves_comments_and_flow_style(results, workdir)
+        test_update_inserts_missing_release_field(results, workdir)
+        test_stage_adoption_edit_refuses_on_contract_violation(results, workdir)
         test_update_blocked_by_current_damage(results, workdir)
         test_fully_supplied_update_runs_noninteractive(results, workdir)
+        test_update_summary_shows_external_repo_source_changed(results, workdir)
+        test_update_summary_shows_external_skill_path_changed(results, workdir)
 
         test_repair_preserves_adoption_and_restores_damage(results, workdir)
         test_repair_refuses_unowned_collision_and_malformed_adoption(results, workdir)

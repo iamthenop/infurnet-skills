@@ -30,14 +30,15 @@ skills:
   - design-docs
 
 # Update procedure:
-# 1. Edit this file's commit/release/skills to the desired state, in its
-#    own commit.
-# 2. Run install.py --root <consumer-root> (no flags) to review the
-#    inventory, obligation, and skill-adoption differences it would apply.
-# 3. Identify affected consumer bindings and governance text.
+# 1. Edit source/skills here only when consumer intent itself is changing.
+# 2. Run install.py --root <consumer-root> --update to inspect a source update.
+#    Use --target-version <ref> to select the target non-interactively.
+# 3. Review the proposed version, inventory, obligation, external-source,
+#    binding, and removal changes.
 # 4. Obtain approval from the consuming repository's deciding authority.
-# 5. Run install.py --root <consumer-root> --apply to reconcile installed
-#    state to match.
-# 6. Validate the consumer.
+# 5. Confirm the installer's complete mutation plan. The installer updates
+#    commit/release only after approval; source/skills remain consumer intent.
+# 6. Run install.py --root <consumer-root> --verify after completion when an
+#    independent verification pass is desired.
 #
-# A pin update that skips a step is drift with a version number.
+# A version update that skips approval is drift with a version number.

@@ -1671,6 +1671,168 @@ def test_external_skill_lifecycle(results, workdir):
         code6 != 0, out6)
 
 
+# --- PR #105 review corrections --------------------------------------
+
+
+def test_root_skill_content_refreshed_on_pin_change(results, workdir):
+    """A root skill's ownership (name -> repository) can stay "unchanged"
+    across a pin bump even though its content did not: categorize_names
+    only ever compares repo_key, never revision. Default mode must still
+    recopy it from the newly fetched vendor tree, not treat the bump as
+    same-intent damage."""
+    base = workdir / "pin-change-refresh"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    assert code0 == 0, out0
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2 content.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "pin change, default mode — reconciles rather than misclassifying as damaged",
+        code == 0, out)
+    results.check(
+        "pin change, default mode — root skill content refreshed even though its "
+        "ownership (name) never changed",
+        "v2 content." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(),
+        out)
+
+
+def test_root_skill_content_refreshed_via_repair(results, workdir):
+    base = workdir / "pin-change-refresh-repair"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    run_install(consumer, ["--force"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2 content.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--repair", "--force"])
+    results.check("pin change, --repair — exits zero", code == 0, out)
+    results.check("pin change, --repair — root skill content refreshed too",
+                  "v2 content." in
+                  (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+
+
+def test_update_summary_reflects_target_not_current(results, workdir):
+    """The --update confirmation summary must be built from the resolved
+    target's own dependency closure, not the currently-installed one —
+    otherwise an approved plan could differ from what actually installs."""
+    base = workdir / "update-target-preview"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    run_install(consumer, ["--force"])
+
+    write(upstream / "skills" / "widget" / "SKILL.md", FIXTURE_SKILL.format(name="widget"))
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-dependency: widget\n---\nFixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha depends on widget"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", sha2],
+                            input_text=answers("n"))
+    results.check(
+        "update summary — shows the target's dependency closure (widget) before "
+        "any confirmation, not just the current one",
+        "widget" in out, out)
+    results.check("update summary, declined — widget not materialized",
+                  not (consumer / ".agents" / "skills" / "widget").exists(), out)
+
+    code2, out2 = run_install(consumer, ["--update", "--target-version", sha2, "--force"])
+    results.check("update, confirmed — exits zero", code2 == 0, out2)
+    results.check(
+        "update, confirmed — installs exactly what the summary showed",
+        (consumer / ".agents" / "skills" / "widget").is_dir(), out2)
+
+
+def test_update_inspection_creates_no_persistent_directories(results, workdir):
+    """Preview/inspection fetches used to build the --update summary must
+    use OS temp storage, not a directory nested under the consumer's own
+    .agents/vendor/ — otherwise a cancelled or purely-inspecting invocation
+    leaves behind a directory that did not exist before."""
+    base = workdir / "update-inspection-no-dirs"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "fresh-consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    assert not (consumer / ".agents" / "vendor").exists()
+
+    write(upstream / "skills" / "delta2" / "SKILL.md", FIXTURE_SKILL.format(name="delta2"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", sha2],
+                            input_text=answers("n"))
+    results.check("update inspection on a never-installed consumer — declines cleanly",
+                  code == 0, out)
+    results.check(
+        "update inspection — creates no persistent directory under .agents/vendor "
+        "even though it fetched a preview to build the summary",
+        not (consumer / ".agents" / "vendor").exists(), out)
+
+    code2, result2, err2 = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", sha2])
+    results.check("check-update direct invocation — also creates no persistent directory",
+                  code2 == 0 and not (consumer / ".agents" / "vendor").exists(), err2)
+
+
+def test_client_collision_preflight_before_any_mutation(results, workdir):
+    """An unowned client-exposure collision must stop before any other
+    mutation in the same transaction — never discovered partway through
+    reconcile(), after vendor/skill changes already happened."""
+    base = workdir / "client-collision-preflight"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta"])
+    write(consumer / ".claude" / "skills" / "beta", "unmanaged\n")
+
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("client collision — nonzero exit", code != 0, out)
+    results.check(
+        "client collision — stops before any other mutation begins (nothing "
+        "materialized, no manifest written)",
+        not (consumer / ".agents" / "skills").exists()
+        and not (consumer / ".agents" / "infurnet-skills.manifest.json").exists(),
+        out)
+    results.check("client collision — colliding content untouched",
+                  (consumer / ".claude" / "skills" / "beta").read_text() == "unmanaged\n", out)
+
+
+def test_check_skills_malformed_manifest_shape_reports_finding(results, workdir):
+    """Syntactically valid JSON whose top-level value is not an object (an
+    array, a bare string, a number, a boolean) must report a malformed-
+    manifest finding, not raise an uncaught exception."""
+    base = workdir / "malformed-manifest-shape"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    good = manifest_path.read_text()
+
+    for bad_shape in ("[1, 2, 3]", '"just a string"', "42", "true"):
+        write(manifest_path, bad_shape)
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        results.check(
+            f"check-skills — manifest shape {bad_shape!r} reports a finding, no crash",
+            result is not None and code != 0 and not result["manifest_valid"],
+            err)
+    write(manifest_path, good)
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -1756,6 +1918,13 @@ def main():
         test_force_does_not_bypass_validation_or_ownership(results, workdir)
         test_client_behavior_across_repair_and_update(results, workdir)
         test_external_skill_lifecycle(results, workdir)
+
+        test_root_skill_content_refreshed_on_pin_change(results, workdir)
+        test_root_skill_content_refreshed_via_repair(results, workdir)
+        test_update_summary_reflects_target_not_current(results, workdir)
+        test_update_inspection_creates_no_persistent_directories(results, workdir)
+        test_client_collision_preflight_before_any_mutation(results, workdir)
+        test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

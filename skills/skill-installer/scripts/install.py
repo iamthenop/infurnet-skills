@@ -487,7 +487,7 @@ def classify(consumer_root, clients):
         or (skills_root.is_dir() and any(skills_root.iterdir()))
     )
 
-    result = check_skills.evaluate(consumer_root, clients=tuple(clients))
+    result = preview_result(consumer_root, adoption, clients)
 
     if not manifest_present and not generated_present:
         return {"state": "pending-install", "adoption": adoption, "result": result}
@@ -496,8 +496,11 @@ def classify(consumer_root, clients):
         return {"state": "damaged", "adoption": adoption, "result": result,
                 "reason": "manifest absent but generated installer state already exists"}
 
+    # A root pin change is an intent change even when it leaves every
+    # skill's ownership (name -> repository) exactly as it was — added/
+    # removed/collision/stale only ever compare ownership, never revision.
     intent_matches = not (result["added"] or result["removed"] or result["collision"]
-                         or result["stale"])
+                         or result["stale"]) and result["vendor_pin_matches"]
     # Client-exposure damage is excluded here: it only ever appears when
     # --client was explicitly passed, and explicit client selection is
     # itself a standing request to (re)wire that client now, in any mode —
@@ -759,25 +762,56 @@ def update_git_exclude(consumer_root, candidate_manifest):
 # --- mutating-mode orchestration -------------------------------------
 
 
-def ensure_accurate_result(consumer_root, adoption, clients, prior_result):
-    """check-skills.py can only see dependency closure and declared-skill
-    sources that already exist in the local vendor checkout. When the
-    vendor does not yet match the declared pin (a fresh install, or a
-    manually bumped commit awaiting reconciliation), fetch a disposable
-    preview tree so the pre-confirmation plan is accurate. Nothing here is
-    persisted; reconcile() performs its own independent fetch after
-    confirmation."""
+def fetch_preview_tree(repo_url, sha):
+    """A disposable clone+checkout in OS temp storage, for non-mutating
+    preview/inspection only. Unlike fetch_tree(), this is never swapped into
+    a persistent location, so it has no reason to share a filesystem with
+    one — and using real OS temp storage means a cancelled or purely
+    inspecting invocation never creates anything under the consumer
+    repository itself (not even an empty directory)."""
+    tmp = Path(tempfile.mkdtemp(prefix="infurnet-skills-preview-"))
+    subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)], check=True)
+    subprocess.run(["git", "-C", str(tmp), "checkout", "--quiet", sha], check=True)
+    return tmp
+
+
+def preview_result(consumer_root, adoption, clients):
+    """The accurate check-skills.py result for `adoption` — which may
+    describe a hypothetical target (e.g. an --update candidate) that has
+    not been written to adoption.yml. check-skills.py can only see
+    dependency closure and declared-skill sources that already exist in a
+    local checkout, so when the real vendor does not already match
+    `adoption`'s pin, a disposable preview tree is fetched first; nothing
+    here is persisted. Always recomputed fresh (never a cached/prior
+    result), so a plan built from this is guaranteed current."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     vendor_root = consumer_root / ".agents" / "vendor"
     vendor = check_skills.external_vendor_path(vendor_root, root_key_)
     if not check_skills.check_git(vendor, adoption):
-        return prior_result
-    vendor_root.mkdir(parents=True, exist_ok=True)
-    preview = fetch_tree(adoption["repo"], adoption["pin"], vendor_root / "_preview")
+        return check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                     adoption_override=adoption)
+    preview = fetch_preview_tree(adoption["repo"], adoption["pin"])
     try:
-        return check_skills.evaluate(consumer_root, clients=tuple(clients), source_root=preview)
+        return check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                     source_root=preview, adoption_override=adoption)
     finally:
         shutil.rmtree(preview, ignore_errors=True)
+
+
+def refresh_names_for_vendor_change(consumer_root, adoption, result):
+    """Every root-owned name check-skills.py classified as "unchanged" —
+    not just added/stale/damaged — must still be recopied whenever the
+    vendor tree itself is about to be replaced: "unchanged" means ownership
+    didn't change, not that content at the (possibly new) pin already
+    matches what is on disk now. Returns an empty set when the vendor
+    already matches the declared pin, since then nothing is being
+    replaced."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    if not check_skills.check_git(vendor, adoption):
+        return set()
+    return {n for n in result["unchanged"] if result["provenance"][n]["repo_key"] == root_key_}
 
 
 def mutation_targets(result, repair):
@@ -790,6 +824,22 @@ def mutation_targets(result, repair):
     to_materialize = sorted(set(result["added"]) | stale_names | damaged_names)
     to_remove = sorted(result["removed"])
     return to_materialize, to_remove
+
+
+def check_client_collision(consumer_root, desired_names, client_skills_root):
+    """Read-only preflight: stops before ANY mutation in the transaction —
+    not partway through reconcile() — if a desired name already exists at
+    client_skills_root without being an installer-owned exposure. Runs the
+    full capability/symlinked-ancestor preflight too, for the same reason."""
+    check_client_skills_preflight(consumer_root, client_skills_root)
+    owned_raw = check_skills.owned_client_exposure(client_skills_root)
+    for name in sorted(desired_names):
+        if name in owned_raw:
+            continue
+        link = client_skills_root / name
+        if link.exists() or link.is_symlink():
+            sys.exit(f"{link}: exists and is not an installer-owned exposure "
+                     "symlink; refusing to overwrite")
 
 
 def collect_blocking(adoption, result):
@@ -841,7 +891,14 @@ def print_action_summary(mode, version_change, to_materialize, to_remove, client
 
 
 def mutate(args, consumer_root, clients, adoption, result, mode, version_change=None):
-    result = ensure_accurate_result(consumer_root, adoption, clients, result)
+    """`adoption` and `result` describe exactly the state this transaction
+    targets: the real, on-disk adoption for default/repair, or the
+    not-yet-written --update target for update (version_change carries the
+    exact fields that will be written). `result` must already be
+    check-skills.py's accurate result for that same `adoption` (see
+    preview_result()) — computed once, shown, confirmed, and executed
+    unchanged, so an approved plan can never silently diverge from what
+    actually runs."""
     blocking = collect_blocking(adoption, result)
     if blocking:
         print("Blocked:")
@@ -849,16 +906,25 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
             print(f"  {b}")
         return 1
 
+    repair = (mode == "repair")
+    to_materialize, to_remove = mutation_targets(result, repair)
+    to_materialize = sorted(set(to_materialize)
+                            | refresh_names_for_vendor_change(consumer_root, adoption, result))
+    target_inventory = set(result["unchanged"]) | set(result["added"])
+
+    # Client collisions and capability problems are checked before any other
+    # mutation in this transaction begins — never discovered partway through
+    # reconcile(), after vendor/skill changes already happened.
+    for client in clients:
+        check_client_collision(consumer_root, target_inventory,
+                              client_skills_root_for(consumer_root, client))
+
     # Every mutating invocation, not only the one-shot bootstrap that creates
     # adoption.yml itself, ensures these two durable consumer files exist —
     # matching the prior always-on bootstrap behavior.
     agents_needs_write, agents_new_text = compute_agents_md(consumer_root)
     project_needs_write, project_new_bytes = compute_project_md(consumer_root)
     project_text_override = (project_new_bytes.decode() if project_needs_write else None)
-
-    repair = (mode == "repair")
-    to_materialize, to_remove = mutation_targets(result, repair)
-    target_inventory = set(result["unchanged"]) | set(result["added"])
 
     staged, remaining_unresolved = resolve_bindings(consumer_root, target_inventory,
                                                      args.bindings, project_text_override)
@@ -884,15 +950,14 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
         (consumer_root / "AGENTS.md").write_text(agents_new_text)
 
     if version_change is not None:
-        adoption_yaml = consumer_root / ".agents" / "adoption.yml"
-        write_adoption_fields(adoption_yaml, version_change["target_commit"],
+        # The confirmed version change is durable before reconciliation
+        # begins: if reconciliation fails partway, the approved desired
+        # state survives and --repair can continue toward it. adoption/
+        # result/to_materialize/to_remove were already computed against
+        # this exact target (see run_update()) and are not recomputed here.
+        write_adoption_fields(consumer_root / ".agents" / "adoption.yml",
+                              version_change["target_commit"],
                               version_change["target_release"])
-        adoption, adoption_error = check_skills.read_adoption_safe(adoption_yaml)
-        if adoption is None:
-            sys.exit(f"internal error rewriting adoption.yml: {adoption_error}")
-        result = check_skills.evaluate(consumer_root, clients=tuple(clients))
-        result = ensure_accurate_result(consumer_root, adoption, clients, result)
-        to_materialize, to_remove = mutation_targets(result, repair)
 
     temp_registry = []
     try:
@@ -1024,7 +1089,17 @@ def run_update(args, consumer_root, clients, classification):
         print("NOTE: the target ships a different install.py; this report may omit "
              "changes only that installer can see.")
 
-    return mutate(args, consumer_root, clients, adoption, classification["result"],
+    # The action set install.py plans, shows, and executes is computed
+    # against the resolved TARGET — same source/skills, the new pin/release
+    # — not against the current adoption; otherwise the plan a human
+    # approves could differ from what actually installs (e.g. the target's
+    # dependency closure or external requirements changed).
+    target_adoption = dict(adoption)
+    target_adoption["pin"] = update_result["target_commit"]
+    target_adoption["tag"] = update_result["target_release"] or None
+    target_result = preview_result(consumer_root, target_adoption, clients)
+
+    return mutate(args, consumer_root, clients, target_adoption, target_result,
                  mode="update", version_change=version_change)
 
 

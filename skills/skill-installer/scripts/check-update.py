@@ -136,7 +136,12 @@ def verify_ref_resolves(source, ref, expected_commit):
 # --- temporary candidate inspection ---------------------------------------
 
 
-def fetch_temp_tree(repo_url, sha, tmp_parent):
+def fetch_temp_tree(repo_url, sha, tmp_parent=None):
+    """A disposable clone+checkout for inspection only — never swapped into
+    a persistent location, so it has no reason to share a filesystem with
+    one. tmp_parent=None (the default) uses OS temp storage, so a cancelled
+    or purely inspecting invocation never creates anything under the
+    consumer repository itself."""
     tmp = Path(tempfile.mkdtemp(dir=tmp_parent, prefix=".check-update-fetch-"))
     subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)],
                    check=True)
@@ -220,8 +225,7 @@ def diff_against(root, source, target_commit):
         except ValueError:
             current_vendor = None
 
-    vendor_root.mkdir(parents=True, exist_ok=True)
-    candidate = fetch_temp_tree(source, target_commit, vendor_root)
+    candidate = fetch_temp_tree(source, target_commit)
     try:
         before = collect_governed(current_vendor) if current_vendor and current_vendor.is_dir() else {}
         after = collect_governed(candidate)

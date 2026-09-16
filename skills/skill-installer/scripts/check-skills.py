@@ -133,13 +133,19 @@ def read_adoption_safe(adoption_path):
 
 def read_manifest_safe(manifest_path):
     """(manifest_or_None, error_or_None). A missing manifest is (None, None);
-    a present-but-corrupt one is (None, <detail>)."""
+    a present-but-corrupt one — invalid JSON, or syntactically valid JSON
+    whose top-level value is not an object — is (None, <detail>). Every
+    downstream reader assumes a dict-or-None manifest; guarding the shape
+    here means none of them need their own defensive isinstance check."""
     if not manifest_path.exists():
         return None, None
     try:
-        return json.loads(manifest_path.read_text()), None
+        data = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as e:
         return None, f"{manifest_path}: invalid JSON ({e})"
+    if not isinstance(data, dict):
+        return None, f"{manifest_path}: top-level JSON value must be an object"
+    return data, None
 
 
 def repo_key(url):
@@ -537,6 +543,20 @@ def classify_prior_external(vendor_root, manifest, root_key):
 # --- vendor git checkout -------------------------------------------------
 
 
+def vendor_pin_matches(vendor, adoption):
+    """Whether the vendor checkout's HEAD literally equals the declared
+    pin — independent of check_git's other concerns (dirty tree, wrong
+    origin, attached branch), which are corruption signals rather than an
+    intent change. install.py uses this specifically to tell "the declared
+    revision changed" (route to reconcile) apart from "the same revision is
+    just corrupted somehow" (route to repair)."""
+    if not (vendor / ".git").exists():
+        return False
+    head = subprocess.run(["git", "-C", str(vendor), "rev-parse", "HEAD"],
+                          capture_output=True, text=True)
+    return head.returncode == 0 and head.stdout.strip() == adoption["pin"]
+
+
 def check_git(vendor, adoption):
     if not (vendor / ".git").exists():
         return ["vendor tree is not a git checkout (.git missing)"]
@@ -823,7 +843,7 @@ def make_finding(category, subject, detail, severity):
     return {"category": category, "subject": subject, "detail": detail, "severity": severity}
 
 
-def evaluate(root, clients=(), manifest_path=None, source_root=None):
+def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_override=None):
     """The single implementation of skill inventory and installation-
     integrity checking. Returns a deterministic, JSON-able dict. Requires no
     network access and mutates nothing.
@@ -834,7 +854,14 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None):
     real vendor does not yet match the declared pin, so dependency closure
     and declared-skill-source checks reflect the tree that is about to be
     installed rather than an absent or stale one; direct invocation always
-    leaves this as the real vendor."""
+    leaves this as the real vendor.
+
+    adoption_override lets a caller evaluate against a hypothetical adoption
+    state that has not been written to adoption.yml — install.py uses this
+    to preview an --update target (same source/skills, a candidate
+    commit/release) before confirmation, so the plan shown to the human is
+    the plan that actually runs. Direct invocation never sets this; it
+    always reads the real adoption.yml."""
     agents_root = root / ".agents"
     adoption_yaml = agents_root / "adoption.yml"
     skills_root = agents_root / "skills"
@@ -842,16 +869,20 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None):
     manifest_path = manifest_path or (agents_root / "infurnet-skills.manifest.json")
 
     findings = []
-    adoption, adoption_error = read_adoption_safe(adoption_yaml)
+    if adoption_override is not None:
+        adoption, adoption_error = adoption_override, None
+    else:
+        adoption, adoption_error = read_adoption_safe(adoption_yaml)
     manifest, manifest_error = read_manifest_safe(manifest_path)
 
     result = {
         "ok": True,
-        "adoption_present": adoption_yaml.exists(),
+        "adoption_present": adoption_override is not None or adoption_yaml.exists(),
         "adoption_valid": adoption is not None,
         "manifest_present": manifest_path.exists(),
         "manifest_valid": manifest_path.exists() and manifest_error is None,
         "adoption": adoption,
+        "vendor_pin_matches": False,
         "findings": [],
         "closure": [],
         "provenance": {},
@@ -879,6 +910,7 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None):
         result["findings"] = sorted(findings, key=lambda f: (f["category"], f["subject"]))
         return result
 
+    result["vendor_pin_matches"] = vendor_pin_matches(vendor, adoption)
     for detail in check_git(vendor, adoption):
         findings.append(make_finding("vendor", "vendor", detail, "damage"))
 

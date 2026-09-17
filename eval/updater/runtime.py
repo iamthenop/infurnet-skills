@@ -2587,8 +2587,13 @@ def test_external_ownership_malformed_and_contradictory_records_block(results, w
     manifest_path.write_text(json.dumps(manifest, indent=2))
     code1, result1, err1 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
     results.check(
-        "malformed repository record — blocking external-ownership finding",
-        code1 != 0 and any(f["category"] == "external-ownership" for f in result1["findings"]),
+        "malformed repository record — blocking external-ownership finding, "
+        "correct subject and diagnostic text",
+        code1 != 0 and any(
+            f["category"] == "external-ownership" and f["subject"] == "example/ext-upstream"
+            and f["severity"] == "blocking"
+            and "not a well-formed" in f["detail"]
+            for f in result1["findings"]),
         json.dumps(result1))
 
     manifest2 = json.loads(manifest_path.read_text())
@@ -2598,8 +2603,13 @@ def test_external_ownership_malformed_and_contradictory_records_block(results, w
     manifest_path.write_text(json.dumps(manifest2, indent=2))
     code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
     results.check(
-        "contradictory skill record (unknown repository) — blocking external-ownership finding",
-        code2 != 0 and any(f["category"] == "external-ownership" for f in result2["findings"]),
+        "contradictory skill record (unknown repository) — blocking external-ownership finding, "
+        "correct subject and diagnostic text",
+        code2 != 0 and any(
+            f["category"] == "external-ownership" and f["subject"] == "widget"
+            and f["severity"] == "blocking"
+            and "references unknown repository" in f["detail"]
+            for f in result2["findings"]),
         json.dumps(result2))
 
 
@@ -2624,9 +2634,12 @@ def test_external_ownership_orphaned_repo_record_blocks(results, workdir):
 
     code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
     results.check(
-        "orphaned unprovable repository record — still visible as a blocking finding",
+        "orphaned unprovable repository record — still visible as a blocking finding, "
+        "correct subject and diagnostic text",
         code != 0 and any(f["category"] == "external-ownership"
                           and f["subject"] == "example/ext-upstream"
+                          and f["severity"] == "blocking"
+                          and "not a git checkout" in f["detail"]
                           for f in result["findings"]),
         json.dumps(result))
 
@@ -2965,6 +2978,176 @@ def test_check_skills_yaml_duplicate_keys_and_shape(results, workdir):
         code3 != 0, json.dumps(result3) if result3 is not None else err3)
 
 
+# --- RC5: consolidated finding pipeline ---------------------------------
+
+
+def test_check_skills_multiple_findings_and_provenance_are_independent(results, workdir):
+    """Every finding category compute_external_state() produces must appear
+    together in a single evaluate() call without one suppressing another,
+    and provenance must be independent of the missing-source finding: a
+    name classified "added" gets root provenance regardless of whether its
+    declared source actually exists — only the separate missing-source
+    finding blocks the transaction over that."""
+    base = workdir / "check-skills-multiple-findings"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta", "widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("multiple-findings fixture — install exits zero", code0 == 0, out0)
+
+    skills_root = consumer / ".agents" / "skills"
+    write(skills_root / "gamma" / "SKILL.md", "occupied\n")  # unowned dir -> collision
+    # Drop "beta" (-> removed), add "gamma" (occupied -> collision) and
+    # "delta" (no source in the vendored tree -> added + missing-source).
+    write_adoption(consumer, upstream, sha, ["alpha", "gamma", "delta", "widget"])
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    findings = result["findings"] if result else []
+    results.check("multiple findings — nonzero exit", code != 0, err)
+
+    def has(category, subject, detail_substr, severity):
+        return any(f["category"] == category and f["subject"] == subject
+                  and detail_substr in f["detail"] and f["severity"] == severity
+                  for f in findings)
+
+    results.check(
+        "multiple findings — removed (beta) materialization finding present",
+        has("materialization", "beta", "skill installed but no longer declared: beta", "pending"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — added (delta) materialization finding present",
+        has("materialization", "delta", "skill declared but not installed: delta", "pending"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — collision (gamma) finding present",
+        has("collision", "gamma", "skill collision: gamma", "blocking"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — missing-source (delta) finding present",
+        has("missing-source", "delta", "declared skill has no source: delta", "blocking"),
+        json.dumps(findings))
+
+    results.check(
+        "multiple findings — categorization: beta removed, gamma collision, delta added, "
+        "alpha and widget unchanged",
+        "beta" in result["removed"] and "gamma" in result["collision"]
+        and "delta" in result["added"] and "alpha" in result["unchanged"]
+        and "widget" in result["unchanged"],
+        json.dumps(result))
+
+    provenance = result["provenance"]
+    results.check(
+        "multiple findings — alpha (root, unchanged) provenance",
+        provenance.get("alpha") == {"repo_key": "example/infurnet-skills",
+                                    "source": "skills/alpha", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — widget (external, unchanged) provenance",
+        provenance.get("widget") == {"repo_key": "example/ext-upstream",
+                                     "source": "skills/widget", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — delta (added, missing source) still gets root provenance: "
+        "provenance is independent of the missing-source finding",
+        provenance.get("delta") == {"repo_key": "example/infurnet-skills",
+                                    "source": "skills/delta", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — beta (removed) and gamma (collision) get no provenance",
+        "beta" not in provenance and "gamma" not in provenance,
+        json.dumps(provenance))
+
+
+def test_check_skills_reports_repository_requirement_conflict(results, workdir):
+    """Two adapters naming the same external repository at different
+    revisions must surface as a blocking collision/"repository" finding —
+    dedupe_external_repos()'s own conflict list, converted into a finding
+    immediately after it is produced. (The mirror case for
+    dedupe_external_skills()'s own "skill requirement conflict" is not
+    reachable through the public discovery path: discover_external_
+    requirements() enforces that a local adapter's directory name always
+    equals the exposed name it resolves to, and the closure feeding it is a
+    set of unique names, so two different requirements can never land on
+    the same dedupe_external_skills() grouping key. That branch's own
+    behavior is preserved unchanged; it is not exercised end to end here.)"""
+    base = workdir / "check-skills-repo-conflict"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    vendor_skills = consumer / ".agents" / "vendor" / "example" / "infurnet-skills" / "skills"
+    commit_a, commit_b = "a" * 40, "b" * 40
+    write(vendor_skills / "conflict-repo" / "SKILL.md", (
+        "---\nname: conflict-repo\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/conflict-repo\n"
+        f"  external-commit: {commit_a}\n"
+        "---\nFixture.\n"
+    ))
+    write(vendor_skills / "gizmo" / "SKILL.md", (
+        "---\nname: gizmo\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/conflict-repo\n"
+        f"  external-commit: {commit_b}\n"
+        "  external-path: extra/gizmo\n"
+        "---\nFixture.\n"
+    ))
+    write_adoption(consumer, upstream, sha, ["alpha", "conflict-repo", "gizmo"])
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    findings = result["findings"] if result else []
+    results.check("repository requirement conflict — nonzero exit", code != 0, err)
+    results.check(
+        "repository requirement conflict — blocking collision/repository finding naming "
+        "both required revisions",
+        any(f["category"] == "collision" and f["subject"] == "repository"
+           and f["severity"] == "blocking"
+           and "external repository revision conflict" in f["detail"]
+           and commit_a[:12] in f["detail"] and commit_b[:12] in f["detail"]
+           for f in findings),
+        json.dumps(findings))
+
+
+def test_check_skills_reports_stale_external_declaration_without_losing_ownership(
+        results, workdir):
+    """A stale finding fires when the declared external-commit changes but
+    generated state has not yet been reconciled to it — ownership over the
+    still-checked-out (unchanged) commit remains proven; only the
+    declaration is stale."""
+    base = workdir / "check-skills-stale-external"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("stale-external fixture — install exits zero", code0 == 0, out0)
+
+    # Edit the already-vendored root checkout's widget descriptor directly
+    # (bypassing --update): a fresh discovery now sees a different declared
+    # external-commit than what generated state recorded, without touching
+    # the manifest-recorded commit assess_external_ownership checks the
+    # real (unchanged) external checkout against.
+    new_ext_sha = "1a" * 20  # 40 hex chars; not all-digit, so YAML keeps it a string
+    vendor_widget_md = (consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+                        / "skills" / "widget" / "SKILL.md")
+    vendor_widget_md.write_text(vendor_widget_md.read_text().replace(ext_sha, new_ext_sha))
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    findings = result["findings"] if result else []
+    results.check("stale external declaration — nonzero exit", code != 0, err)
+    results.check(
+        "stale external declaration — damage stale/widget finding, correct diagnostic text",
+        any(f["category"] == "stale" and f["subject"] == "widget"
+           and f["severity"] == "damage"
+           and "external declaration for 'widget' no longer matches installed state"
+              in f["detail"]
+           for f in findings),
+        json.dumps(findings))
+    results.check(
+        "stale external declaration — ownership over the unchanged checkout stays proven",
+        "example/ext-upstream" in result["proven_external_repos"], json.dumps(result))
+    results.check(
+        "stale external declaration — widget remains classified unchanged",
+        "widget" in result["unchanged"], json.dumps(result))
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -3092,6 +3275,11 @@ def main():
         test_client_exposure_apply_guard_stops_on_drift(results, workdir)
         test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
         test_check_skills_yaml_duplicate_keys_and_shape(results, workdir)
+
+        test_check_skills_multiple_findings_and_provenance_are_independent(results, workdir)
+        test_check_skills_reports_repository_requirement_conflict(results, workdir)
+        test_check_skills_reports_stale_external_declaration_without_losing_ownership(
+            results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

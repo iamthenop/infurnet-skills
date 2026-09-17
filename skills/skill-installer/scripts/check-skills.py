@@ -718,22 +718,42 @@ def verify_materialized_skills(skills_root, manifest):
 # --- combined state computation -----------------------------------------
 
 
+def make_finding(category, subject, detail, severity):
+    return {"category": category, "subject": subject, "detail": detail, "severity": severity}
+
+
 def compute_external_state(adoption, manifest, source_root, vendor_root, skills_root):
-    """Everything evaluate() needs for external state: closure, discovered
-    requirements, deduped repo/skill requirements, the ownership
-    assessment, and the unified add/remove/unchanged/collision sets.
+    """Everything evaluate() needs for external state, as two distinct
+    outputs: the inventory (closure, requirements, dedupe results,
+    ownership, add/remove/unchanged/collision/stale sets, provenance) that
+    install.py acts on, and the findings validating it. Each finding is
+    produced here, at the point its condition is computed — not
+    reconstructed later from the inventory.
 
     Desired inventory and ownership are computed independently — a name
     with unproven ownership stays desired; its ownership finding blocks the
-    transaction instead of narrowing what was declared."""
+    transaction instead of narrowing what was declared. Provenance is
+    likewise built from the same added/unchanged classification, not
+    reconstructed from it separately.
+
+    Returns (inventory, findings)."""
+    findings = []
     root_key_ = repo_key(adoption["repo"])
     closure = resolve_installation_closure(adoption["skills"], source_root)
     requirements = discover_external_requirements(closure, source_root)
+
     ext_repos, repo_conflicts = dedupe_external_repos(requirements)
+    for c in repo_conflicts:
+        findings.append(make_finding("collision", "repository", c, "blocking"))
+
     ext_skills, skill_conflicts = dedupe_external_skills(requirements)
+    for c in skill_conflicts:
+        findings.append(make_finding("collision", "skill", c, "blocking"))
 
     proven_repos, proven_skills, ownership_findings = assess_external_ownership(
         vendor_root, manifest, root_key_, set(ext_repos))
+    for subject, detail in ownership_findings:
+        findings.append(make_finding("external-ownership", subject, detail, "blocking"))
 
     desired = {name: root_key_ for name in closure if name not in ext_skills}
     for name, info in ext_skills.items():
@@ -758,6 +778,15 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
 
     added, removed, unchanged, collision = categorize_names(
         desired, owned_for_categorize, skills_root)
+    for name in sorted(added):
+        findings.append(make_finding("materialization", name,
+                                     f"skill declared but not installed: {name}", "pending"))
+    for name in sorted(removed):
+        findings.append(make_finding("materialization", name,
+                                     f"skill installed but no longer declared: {name}",
+                                     "pending"))
+    for name in sorted(collision):
+        findings.append(make_finding("collision", name, f"skill collision: {name}", "blocking"))
 
     stale = set()
     for name in unchanged:
@@ -772,26 +801,38 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
                 or repo_entry.get("commit") != info["commit"]
                 or skill_entry.get("source") != info["path"]):
             stale.add(name)
+    for name in sorted(stale):
+        findings.append(make_finding(
+            "stale", name,
+            f"external declaration for {name!r} no longer matches installed state",
+            "damage"))
+
+    for name in missing_skill_sources(closure, source_root):
+        findings.append(make_finding("missing-source", name,
+                                     f"declared skill has no source: {name}", "blocking"))
 
     root_names = (closure - set(ext_skills)) | {
         n for n, k in owned_for_categorize.items() if k == root_key_
     }
-    ext_names = set(ext_skills) | {
-        n for n, k in owned_for_categorize.items() if k != root_key_
-    }
+    provenance = {}
+    for name in sorted(root_names & (added | unchanged)):
+        provenance[name] = {"repo_key": root_key_, "source": f"skills/{name}", "mode": COPY_MODE}
+    for name, info in ext_skills.items():
+        if name in added | unchanged:
+            provenance[name] = {"repo_key": info["repo_key"], "source": info["path"],
+                                "mode": COPY_MODE}
 
-    return {
+    inventory = {
         "root_key": root_key_,
         "closure": closure,
         "requirements": requirements,
-        "ext_repos": ext_repos, "repo_conflicts": repo_conflicts,
-        "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
-        "proven_repos": proven_repos, "proven_skills": proven_skills,
-        "ownership_findings": ownership_findings,
+        "ext_repos": ext_repos,
+        "proven_repos": proven_repos,
         "added": added, "removed": removed, "unchanged": unchanged, "collision": collision,
         "stale": stale,
-        "root_names": root_names, "ext_names": ext_names,
+        "provenance": provenance,
     }
+    return inventory, findings
 
 
 # --- client exposure (read-only) -----------------------------------------
@@ -938,10 +979,6 @@ def first_line_document_findings(path, required_first_line, assessment):
 # --- top-level evaluation -------------------------------------------------
 
 
-def make_finding(category, subject, detail, severity):
-    return {"category": category, "subject": subject, "detail": detail, "severity": severity}
-
-
 def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_override=None):
     """The single implementation of skill inventory and installation-
     integrity checking. Returns a deterministic, JSON-able dict. Requires no
@@ -1019,8 +1056,9 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
 
     effective_source = source_root or vendor
     manifest_for_state = manifest if manifest_error is None else None
-    state = compute_external_state(adoption, manifest_for_state, effective_source,
-                                   vendor_root, skills_root)
+    state, external_findings = compute_external_state(adoption, manifest_for_state,
+                                                       effective_source, vendor_root, skills_root)
+    findings.extend(external_findings)
 
     if manifest_for_state is not None:
         root_key_ = state["root_key"]
@@ -1040,30 +1078,6 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
     for category, subject, detail in verify_materialized_skills(skills_root, manifest_for_state):
         findings.append(make_finding(category, subject, detail, "damage"))
 
-    for name in sorted(state["added"]):
-        findings.append(make_finding("materialization", name,
-                                      f"skill declared but not installed: {name}", "pending"))
-    for name in sorted(state["removed"]):
-        findings.append(make_finding("materialization", name,
-                                      f"skill installed but no longer declared: {name}",
-                                      "pending"))
-    for name in sorted(state["collision"]):
-        findings.append(make_finding("collision", name, f"skill collision: {name}", "blocking"))
-    for name in sorted(state["stale"]):
-        findings.append(make_finding(
-            "stale", name,
-            f"external declaration for {name!r} no longer matches installed state",
-            "damage"))
-    for subject, conflicts in (("repository", state["repo_conflicts"]),
-                              ("skill", state["skill_conflicts"])):
-        for c in conflicts:
-            findings.append(make_finding("collision", subject, c, "blocking"))
-    for name in missing_skill_sources(state["closure"], effective_source):
-        findings.append(make_finding("missing-source", name,
-                                      f"declared skill has no source: {name}", "blocking"))
-    for subject, detail in state["ownership_findings"]:
-        findings.append(make_finding("external-ownership", subject, detail, "blocking"))
-
     for client_name in clients:
         client_skills_root = root.joinpath(*CLIENT_SKILLS_ROOT[client_name])
         for category, subject, detail in check_client_skills(
@@ -1077,15 +1091,6 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
                     doc_path, doc["required_first_line"], assessment):
                 findings.append(make_finding(category, subject, detail, "damage"))
 
-    provenance = {}
-    for name in sorted(state["root_names"] & (state["added"] | state["unchanged"])):
-        provenance[name] = {"repo_key": state["root_key"], "source": f"skills/{name}",
-                            "mode": COPY_MODE}
-    for name, info in state["ext_skills"].items():
-        if name in state["added"] | state["unchanged"]:
-            provenance[name] = {"repo_key": info["repo_key"], "source": info["path"],
-                                "mode": COPY_MODE}
-
     result.update({
         # Declaration satisfaction: ok only when there is nothing at all to
         # report, including a plain "pending" add/remove — this is the
@@ -1096,7 +1101,7 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
         "ok": not findings,
         "findings": sorted(findings, key=lambda f: (f["category"], f["subject"], f["detail"])),
         "closure": sorted(state["closure"]),
-        "provenance": provenance,
+        "provenance": state["provenance"],
         "external_repos": state["ext_repos"],
         "external_requirements": state["requirements"],
         "proven_external_repos": sorted(state["proven_repos"]),

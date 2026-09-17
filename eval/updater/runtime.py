@@ -3738,6 +3738,71 @@ def test_action_plan_discloses_complete_mutation_set_and_matches_execution(resul
         "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out2)
 
 
+# --- RC7.1: temporary-acquisition cleanup on failure -----------------------
+
+
+def test_check_update_fetch_temp_tree_cleans_up_on_clone_failure(results, workdir):
+    """A clone failure must not leave the just-created temporary directory
+    behind — cleanup ownership starts the moment mkdtemp returns, not only
+    once acquisition hands the path back to the caller."""
+    module = load_check_update_module()
+    base = workdir / "fetch-clone-failure"
+    base.mkdir(parents=True)
+    bogus_repo = base / "does-not-exist"
+
+    before = set(p.name for p in base.iterdir())
+    raised = False
+    try:
+        module.fetch_temp_tree(str(bogus_repo), "f" * 40, tmp_parent=base)
+    except Exception:
+        raised = True
+    after = set(p.name for p in base.iterdir())
+    results.check("fetch_temp_tree, clone failure — the original failure propagates",
+                  raised, "")
+    results.check("fetch_temp_tree, clone failure — no leaked temporary directory",
+                  after == before, sorted(after))
+
+
+def test_check_update_fetch_temp_tree_cleans_up_on_checkout_failure(results, workdir):
+    """A checkout failure after a successful clone must also leave nothing
+    behind — the clone itself already populated the temporary directory
+    before the checkout step failed."""
+    module = load_check_update_module()
+    base = workdir / "fetch-checkout-failure"
+    upstream, sha = make_upstream(base / "src")
+    bogus_sha = "f" * 40  # well-formed hex, not an object that exists
+
+    before = set(p.name for p in base.iterdir())
+    raised = False
+    try:
+        module.fetch_temp_tree(str(upstream), bogus_sha, tmp_parent=base)
+    except Exception:
+        raised = True
+    after = set(p.name for p in base.iterdir())
+    results.check("fetch_temp_tree, checkout failure — the original failure propagates",
+                  raised, "")
+    results.check("fetch_temp_tree, checkout failure — no leaked temporary directory",
+                  after == before, sorted(after))
+
+
+def test_check_update_fetch_temp_tree_success_remains_usable(results, workdir):
+    """The failure-cleanup wrapper must not disturb the successful path:
+    fetch_temp_tree still returns a usable checkout, and standalone
+    check-update.py invocations still clean up after a successful
+    comparison (see test_check_update_no_mutation_and_cleanup)."""
+    module = load_check_update_module()
+    base = workdir / "fetch-success"
+    upstream, sha = make_upstream(base / "src")
+
+    tree = module.fetch_temp_tree(str(upstream), sha, tmp_parent=base)
+    try:
+        results.check(
+            "fetch_temp_tree, success — returns a usable checkout at the declared commit",
+            (tree / "skills" / "alpha" / "SKILL.md").is_file(), "")
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -3895,6 +3960,10 @@ def main():
             results, workdir)
         test_action_plan_discloses_complete_mutation_set_and_matches_execution(
             results, workdir)
+
+        test_check_update_fetch_temp_tree_cleans_up_on_clone_failure(results, workdir)
+        test_check_update_fetch_temp_tree_cleans_up_on_checkout_failure(results, workdir)
+        test_check_update_fetch_temp_tree_success_remains_usable(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

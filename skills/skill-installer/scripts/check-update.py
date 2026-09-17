@@ -137,9 +137,18 @@ def fetch_temp_tree(repo_url, sha, tmp_parent=None):
     a persistent location, so it has no reason to share a filesystem with
     one. tmp_parent=None (the default) uses OS temp storage, so a cancelled
     or purely inspecting invocation never creates anything under the
-    consumer repository itself."""
+    consumer repository itself.
+
+    Cleanup ownership is established the moment the directory is created:
+    if clone or checkout fails, this removes exactly that directory and
+    re-raises the original failure — never leaving a partial checkout
+    behind just because acquisition never got to hand the path back."""
     tmp = Path(tempfile.mkdtemp(dir=tmp_parent, prefix=".check-update-fetch-"))
-    git_ops.acquire_tree(repo_url, sha, tmp)
+    try:
+        git_ops.acquire_tree(repo_url, sha, tmp)
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     return tmp
 
 

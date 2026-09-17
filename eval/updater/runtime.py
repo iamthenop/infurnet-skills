@@ -1121,9 +1121,10 @@ def test_claude_governance_four_states(results, workdir):
 
 
 class _StubArgs:
-    def __init__(self, bindings, force):
+    def __init__(self, bindings, force, target_version=None):
         self.bindings = bindings
         self.force = force
+        self.target_version = target_version
 
 
 def test_claude_governance_staged_once_not_reassessed(results, workdir):
@@ -1140,7 +1141,8 @@ def test_claude_governance_staged_once_not_reassessed(results, workdir):
     consumer = base / "consumer"
     write_adoption(consumer, upstream, sha, ["alpha"])
     consumer_root = consumer.resolve()
-    classification = module.classify(consumer_root, ["claude"])
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, ["claude"], txn, cache)
 
     call_count = {"n": 0}
     real_stage = module.stage_first_line_document
@@ -1152,7 +1154,8 @@ def test_claude_governance_staged_once_not_reassessed(results, workdir):
     with mock.patch.object(module, "stage_first_line_document", side_effect=counting_stage):
         code = module.mutate(
             _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
-            classification["adoption"], classification["result"], mode="default")
+            classification["adoption"], classification["result"], mode="default",
+            txn=txn, cache=cache)
     results.check("claude governance — install exits zero", code == 0, "")
     results.check(
         "claude governance — staged exactly once for the whole transaction "
@@ -3289,7 +3292,8 @@ def test_external_vendor_destination_drift_between_planning_and_execution_blocks
 
     write_adoption(consumer, upstream, sha, ["alpha"])  # drop widget -> dropped external repo
 
-    classification = module.classify(consumer.resolve(), [])
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer.resolve(), [], txn, cache)
     results.check("dest-drift — classification reconciles",
                   classification["state"] == "reconcile", classification["state"])
 
@@ -3302,7 +3306,7 @@ def test_external_vendor_destination_drift_between_planning_and_execution_blocks
     stopped = stopped_with_system_exit(
         lambda: module.mutate(_StubArgs(bindings=None, force=True), consumer.resolve(), [],
                               classification["adoption"], classification["result"],
-                              mode="default"))
+                              mode="default", txn=txn, cache=cache))
     results.check("dest-drift — execution stops rather than deleting through the symlink",
                   stopped, "")
     results.check(
@@ -3481,6 +3485,259 @@ def test_check_skills_malformed_nested_manifest_structures_no_crash(results, wor
     write(manifest_path, json.dumps(good_manifest))
 
 
+# --- RC6.2/RC6.3: transaction staging and the complete action plan --------
+
+
+def test_transaction_staging_cleaned_up_on_cancellation(results, workdir):
+    """A cancelled reconciliation to a changed pin must leave no
+    persistent .agents/.tmp staging content and no promoted vendor
+    change — the disposable inspection download used to build the plan
+    is never itself a mutation."""
+    base = workdir / "staging-cleanup-cancel"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest_before = manifest_path.read_text()
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_before = run_git(["rev-parse", "HEAD"], vendor)
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, [], input_text="n\n")
+    results.check("staging cleanup, cancel — exits zero", code == 0, out)
+    tmp_root = consumer / ".agents" / ".tmp"
+    results.check(
+        "staging cleanup, cancel — no transaction directory left in .agents/.tmp "
+        "(the shared .tmp root itself is never swept away)",
+        not tmp_root.exists() or not any(tmp_root.iterdir()), out)
+    results.check("staging cleanup, cancel — vendor HEAD unchanged (nothing promoted)",
+                  run_git(["rev-parse", "HEAD"], vendor) == head_before, "")
+    results.check("staging cleanup, cancel — manifest byte-unchanged",
+                  manifest_path.read_text() == manifest_before, "")
+
+
+def test_transaction_staging_cleaned_up_on_success(results, workdir):
+    """.agents/.tmp must not persist after a successful reconciliation to
+    a changed pin either — cleanup runs regardless of outcome."""
+    base = workdir / "staging-cleanup-success"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("staging cleanup, success — exits zero", code == 0, out)
+    tmp_root = consumer / ".agents" / ".tmp"
+    results.check(
+        "staging cleanup, success — no transaction directory left in .agents/.tmp",
+        not tmp_root.exists() or not any(tmp_root.iterdir()), out)
+    results.check(
+        "staging cleanup, success — vendor content actually reflects the new pin",
+        "v2." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+
+
+def test_update_unseen_candidate_single_acquisition(results, workdir):
+    """--update to a previously unseen candidate must acquire that
+    candidate's tree exactly once — reused for both check-update's
+    comparison and check-skills' plan — never fetched twice for one
+    invocation. This is the specific contract approved for RC6.2:
+    disposable inspection staging, not a second download."""
+    module = load_install_module()
+    base = workdir / "update-single-acquisition"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, [], txn, cache)
+
+    call_count = {"n": 0}
+    real_acquire = module.git_ops.acquire_tree
+
+    def counting_acquire(repo_url, sha, dest):
+        call_count["n"] += 1
+        return real_acquire(repo_url, sha, dest)
+
+    args = _StubArgs(bindings=None, force=True, target_version=sha2)
+    with mock.patch.object(module.git_ops, "acquire_tree", side_effect=counting_acquire):
+        code = module.run_update(args, consumer_root, [], classification, txn, cache)
+    module.cleanup_transaction(txn)
+
+    results.check("update single acquisition — exits zero", code == 0, "")
+    results.check(
+        "update single acquisition — the unseen candidate is acquired exactly once",
+        call_count["n"] == 1, call_count)
+    tmp_root = consumer_root / ".agents" / ".tmp"
+    results.check("update single acquisition — no transaction directory left in .agents/.tmp",
+                  not tmp_root.exists() or not any(tmp_root.iterdir()), "")
+
+
+def test_root_vendor_backup_restored_on_promotion_failure(results, workdir):
+    """The previous root vendor checkout must survive until candidate-
+    manifest verification actually succeeds, and be restored — not lost —
+    if that verification fails."""
+    module = load_install_module()
+    base = workdir / "vendor-backup-restore"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_before = run_git(["rev-parse", "HEAD"], vendor)
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest_before = manifest_path.read_text()
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, [], txn, cache)
+    results.check("vendor backup restore — classification reconciles",
+                  classification["state"] == "reconcile", classification["state"])
+
+    real_evaluate = module.check_skills.evaluate
+
+    def failing_on_candidate(root, *args, **kwargs):
+        r = real_evaluate(root, *args, **kwargs)
+        if kwargs.get("manifest_path") is not None:
+            r = dict(r)
+            r["findings"] = r["findings"] + [
+                {"category": "manifest", "subject": "manifest",
+                 "detail": "synthetic verification failure", "severity": "blocking"}]
+            r["ok"] = False
+        return r
+
+    with mock.patch.object(module.check_skills, "evaluate", side_effect=failing_on_candidate):
+        code = module.mutate(_StubArgs(bindings=None, force=True), consumer_root, [],
+                             classification["adoption"], classification["result"],
+                             mode="default", txn=txn, cache=cache)
+    module.cleanup_transaction(txn)
+
+    results.check("vendor backup restore — mutate reports failure", code == 1, "")
+    results.check(
+        "vendor backup restore — the previous vendor checkout was restored, not lost",
+        run_git(["rev-parse", "HEAD"], vendor) == head_before, "")
+    results.check(
+        "vendor backup restore — canonical manifest left unchanged (candidate never promoted)",
+        manifest_path.read_text() == manifest_before, "")
+    leftovers = [p.name for p in vendor.parent.iterdir() if p.name != vendor.name]
+    results.check(
+        "vendor backup restore — no leftover backup or promotion-staging directories",
+        leftovers == [], leftovers)
+
+
+def test_action_plan_discloses_external_acquisition_and_matches_execution(results, workdir):
+    """The pre-confirmation plan must disclose a genuinely new external
+    repository acquisition, and what actually gets acquired/materialized
+    must match exactly what was displayed."""
+    base = workdir / "plan-external-acquisition"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-acquisition fixture — v1 install exits zero", code0 == 0, out0)
+
+    write_adoption(consumer, upstream, sha, ["alpha", "widget"])
+    code, out = run_install(consumer, [], input_text="n\n", env=env)
+    results.check(
+        "plan-acquisition — decline leaves nothing materialized",
+        code == 0 and not (consumer / ".agents" / "skills" / "widget").exists(), out)
+    results.check(
+        "plan-acquisition — plan discloses the external repository acquisition before "
+        "confirmation",
+        "External repositories:" in out and "acquire example/ext-upstream" in out, out)
+
+    code2, out2 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-acquisition — confirmed run exits zero", code2 == 0, out2)
+    results.check(
+        "plan-acquisition — widget actually materialized, matching the displayed plan",
+        (consumer / ".agents" / "skills" / "widget").is_dir(), out2)
+
+
+def test_action_plan_discloses_complete_mutation_set_and_matches_execution(results, workdir):
+    """The pre-confirmation plan must disclose root vendor/skill refresh,
+    external repository removal, client exposure, client governance, git
+    exclude, and a binding write — and what actually happens must match
+    exactly what was displayed. (Plan-vs-execution disagreement from an
+    intervening filesystem change is covered separately by the
+    destination-drift test, which must stop instead of expanding the
+    plan.)"""
+    base = workdir / "plan-complete-mutation-set"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-complete fixture — v1 install exits zero", code0 == 0, out0)
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])  # drop widget, bump pin
+
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+
+    code, out = run_install(
+        consumer, ["--client", "claude", "--bindings", str(bindings_file)],
+        input_text="n\n", env=env)
+    results.check("plan-complete — decline exits zero", code == 0, out)
+    results.check(
+        "plan-complete — decline: nothing materialized",
+        "v2." not in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+    results.check("plan-complete — plan discloses skill refresh (alpha)",
+                  "+ alpha" in out, out)
+    results.check("plan-complete — plan discloses external removal (widget's repository)",
+                  "External repositories:" in out and "remove example/ext-upstream" in out, out)
+    results.check("plan-complete — plan discloses client exposure",
+                  "Reconcile client exposure: claude" in out and "[claude] link alpha" in out,
+                  out)
+    results.check("plan-complete — plan discloses client governance",
+                  "[claude] governance document" in out, out)
+    results.check("plan-complete — plan discloses the binding write",
+                  "Bindings:" in out and "Widget size" in out, out)
+    results.check("plan-complete — plan discloses the git exclude update",
+                  "Git exclude:" in out, out)
+
+    code2, out2 = run_install(
+        consumer, ["--force", "--client", "claude", "--bindings", str(bindings_file)], env=env)
+    results.check("plan-complete — confirmed run exits zero", code2 == 0, out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: alpha refreshed",
+        "v2." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: widget's repository removed",
+        not (consumer / ".agents" / "vendor" / "example" / "ext-upstream").exists(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: client exposure created",
+        (consumer / ".claude" / "skills" / "alpha").is_symlink(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: governance document created",
+        (consumer / "CLAUDE.md").exists(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: binding applied",
+        "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out2)
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -3629,6 +3886,15 @@ def main():
         test_repair_recovers_from_damage_detected_independent_of_intent(results, workdir)
 
         test_check_skills_malformed_nested_manifest_structures_no_crash(results, workdir)
+
+        test_transaction_staging_cleaned_up_on_cancellation(results, workdir)
+        test_transaction_staging_cleaned_up_on_success(results, workdir)
+        test_update_unseen_candidate_single_acquisition(results, workdir)
+        test_root_vendor_backup_restored_on_promotion_failure(results, workdir)
+        test_action_plan_discloses_external_acquisition_and_matches_execution(
+            results, workdir)
+        test_action_plan_discloses_complete_mutation_set_and_matches_execution(
+            results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

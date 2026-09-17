@@ -235,10 +235,17 @@ def diff_inventory(before_files, after_files):
     }
 
 
-def diff_against(root, source, target_commit):
-    """Non-mutating: temporarily fetch target_commit and diff governed files
-    and dependency closure against the currently vendored tree. The
-    temporary checkout is always removed, on success or failure."""
+def diff_against(root, source, target_commit, candidate_tree=None):
+    """Non-mutating: diff governed files and dependency closure against the
+    currently vendored tree, using target_commit's tree.
+
+    candidate_tree lets a caller that already acquired target_commit (e.g.
+    install.py, which stages a candidate once into its own transaction
+    directory and reuses it here rather than fetching it a second time)
+    supply that tree directly — ownership and cleanup stay with the
+    caller in that case. Standalone invocation (candidate_tree=None, the
+    default) fetches its own temporary, disposable checkout and always
+    removes it, on success or failure."""
     agents_root = root / ".agents"
     vendor_root = agents_root / "vendor"
     adoption, _ = check_skills.read_adoption_safe(agents_root / "adoption.yml")
@@ -251,7 +258,9 @@ def diff_against(root, source, target_commit):
         except ValueError:
             current_vendor = None
 
-    candidate = fetch_temp_tree(source, target_commit)
+    owns_candidate = candidate_tree is None
+    candidate = candidate_tree if candidate_tree is not None else fetch_temp_tree(source,
+                                                                                   target_commit)
     try:
         before = collect_governed(current_vendor) if current_vendor and current_vendor.is_dir() else {}
         after = collect_governed(candidate)
@@ -313,16 +322,20 @@ def diff_against(root, source, target_commit):
             "candidate_installer_changed": differing_candidate_updater(candidate) is not None,
         }
     finally:
-        shutil.rmtree(candidate, ignore_errors=True)
+        if owns_candidate:
+            shutil.rmtree(candidate, ignore_errors=True)
 
 
 # --- top-level evaluation --------------------------------------------------
 
 
-def evaluate(root, target_version=None):
+def evaluate(root, target_version=None, candidate_tree=None):
     """Non-mutating with respect to durable consumer state. Resolves
     target_version to a full commit and compares it against the currently
-    adopted state; without a target, only discovers what's available."""
+    adopted state; without a target, only discovers what's available.
+
+    candidate_tree is passed straight through to diff_against() — see its
+    docstring. Standalone invocation never sets this."""
     agents_root = root / ".agents"
     adoption, adoption_error = check_skills.read_adoption_safe(agents_root / "adoption.yml")
 
@@ -364,7 +377,7 @@ def evaluate(root, target_version=None):
         "target_release": target_version if tag_commit == target_commit else "",
         "differs_from_current": target_commit != adoption["pin"],
     })
-    result.update(diff_against(root, adoption["repo"], target_commit))
+    result.update(diff_against(root, adoption["repo"], target_commit, candidate_tree=candidate_tree))
     return result
 
 

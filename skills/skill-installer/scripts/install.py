@@ -619,9 +619,12 @@ def vendor_previously_damaged(consumer_root, adoption, manifest_path):
                and inspected["detached"] and inspected["clean"])
 
 
-def classify(consumer_root, clients):
+def classify(consumer_root, clients, txn, cache):
     """One of "bootstrap", "adoption-invalid" (not repairable), "damaged"
-    (repairable), "pending-install", "reconcile", "in-sync"."""
+    (repairable), "pending-install", "reconcile", "in-sync". txn/cache are
+    this run's transaction-staging state (see ensure_transaction_dir()),
+    threaded through to preview_result() so a candidate it stages here can
+    be reused for promotion in reconcile() rather than fetched again."""
     adoption_yaml = consumer_root / ".agents" / "adoption.yml"
     manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
     vendor_root = consumer_root / ".agents" / "vendor"
@@ -641,7 +644,7 @@ def classify(consumer_root, clients):
         or (skills_root.is_dir() and any(skills_root.iterdir()))
     )
 
-    result = preview_result(consumer_root, adoption, clients)
+    result = preview_result(consumer_root, adoption, clients, txn, cache)
 
     if not manifest_present and not generated_present:
         return {"state": "pending-install", "adoption": adoption, "result": result}
@@ -696,7 +699,76 @@ def fetch_tree(repo_url, sha, sibling_of):
     return tmp
 
 
-def atomic_replace_dir(new_dir, dest):
+# --- transaction staging: .agents/.tmp/<transaction-id>/ ------------------
+#
+# One disposable staging root per install.py run, used only to inspect a
+# not-yet-locally-present root revision and construct the complete
+# mutation plan before confirmation. Nothing here is installed state: nothing
+# is promoted until after confirmation, and cleanup removes only this run's
+# own transaction directory, never a broader .agents/.tmp/ sweep.
+
+
+def ensure_transaction_dir(consumer_root, txn):
+    """txn: {"dir": Path|None}. Creates .agents/.tmp/<transaction-id>/ on
+    first actual use only — bootstrap, pending-install, and in-sync runs
+    that never need inspection never touch .agents/.tmp at all. The
+    specific transaction-id path is checked for an unsafe symlink at
+    creation time too, in addition to containment_preflight()'s check of
+    .agents/.tmp itself at the top of the run."""
+    if txn["dir"] is not None:
+        return txn["dir"]
+    tmp_root = consumer_root / ".agents" / ".tmp"
+    txn_dir = tmp_root / uuid.uuid4().hex[:12]
+    require_safe_path(consumer_root, txn_dir)
+    txn_dir.mkdir(parents=True)
+    txn["dir"] = txn_dir
+    return txn_dir
+
+
+def stage_candidate(consumer_root, txn, cache, source, commit):
+    """Acquires (source, commit) into this run's transaction directory
+    exactly once, reusing a prior acquisition of the identical pair within
+    the same run. cache: {(source, commit): Path}."""
+    key = (source, commit)
+    if key not in cache:
+        txn_dir = ensure_transaction_dir(consumer_root, txn)
+        dest = txn_dir / f"candidate-{len(cache)}"
+        git_ops.acquire_tree(source, commit, dest)
+        cache[key] = dest
+    return cache[key]
+
+
+def take_staged_candidate(cache, source, commit):
+    """Removes and returns a staged path from the cache — used immediately
+    before promotion, so no later caller in this same run can be handed a
+    path that promotion is about to rename away."""
+    return cache.pop((source, commit))
+
+
+def cleanup_transaction(txn):
+    """Removes only this run's own transaction directory. If it has been
+    replaced by a symlink since creation, this refuses to remove through
+    it and reports the anomaly instead of silently deleting whatever it
+    now points at."""
+    txn_dir = txn["dir"]
+    if txn_dir is None:
+        return
+    if txn_dir.is_symlink():
+        print(f"NOTE: {txn_dir} became a symlink; not removing it", file=sys.stderr)
+        return
+    if txn_dir.exists():
+        shutil.rmtree(txn_dir, ignore_errors=True)
+
+
+def atomic_replace_dir(new_dir, dest, keep_backup=False):
+    """Atomically replaces dest with new_dir via same-filesystem rename,
+    keeping dest's previous content as a recoverable backup until the
+    rename succeeds. By default the backup is removed immediately once the
+    rename succeeds; keep_backup=True instead returns its path (None when
+    dest did not previously exist) so the caller can defer removal until a
+    later verification step succeeds, and restore it if that verification
+    fails — used for the root vendor swap, whose candidate-manifest
+    verification happens only after control returns to the caller."""
     if new_dir.parent != dest.parent:
         raise ValueError(f"{new_dir} is not a sibling of {dest}")
     backup = dest.parent / f".{dest.name}.bak-{uuid.uuid4().hex[:12]}"
@@ -709,8 +781,9 @@ def atomic_replace_dir(new_dir, dest):
         if had_dest:
             backup.rename(dest)
         raise
-    if had_dest:
+    if had_dest and not keep_backup:
         shutil.rmtree(backup)
+    return backup if (had_dest and keep_backup) else None
 
 
 def materialize_from(name, source_dir, skills_root):
@@ -734,38 +807,53 @@ def remove_skill(name, skills_root):
         shutil.rmtree(dest)
 
 
-def swap_vendor_tree(fetched_tree, vendor):
-    atomic_replace_dir(fetched_tree, vendor)
+def classify_external_action(vendor_root, rkey, info, proven_repo_keys):
+    """(action, detail) for one external repository's vendor destination:
+    "acquire" (nothing usable there yet), "reuse" (an already-correct,
+    proven checkout), or "blocking" (detail explains why — an occupied
+    destination without a proven prior-ownership record, or a malformed
+    key). `proven_repo_keys` is the ownership decision check-skills.py's
+    assess_external_ownership() already made — this never independently
+    re-derives whether an occupied destination may be reused or replaced
+    from its Git identity alone: a destination that exists (a dangling
+    symlink included) without a proven prior-ownership record is blocking,
+    not a candidate for reuse, even when a fresh checkout could plainly be
+    obtained instead.
+
+    Pure with respect to the filesystem at call time: both the
+    pre-confirmation action plan and prepare_external_installs()'s own
+    execution call this identically, so a destination unchanged between
+    the two calls always agrees, and one that has changed is caught as
+    drift rather than silently expanding what was approved."""
+    try:
+        dest = check_skills.external_vendor_path(vendor_root, rkey)
+    except ValueError as e:
+        return "blocking", str(e)
+    occupied = dest.exists() or dest.is_symlink()
+    if occupied and rkey not in proven_repo_keys:
+        return "blocking", (f"{dest}: exists without a proven prior ownership "
+                            "record; refusing to reuse, replace, or remove it")
+    if occupied and not check_skills.check_external_git(dest, info["source"], info["commit"]):
+        return "reuse", None
+    return "acquire", None
 
 
 def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, temp_registry,
                               proven_repo_keys):
-    """Acquires or reuses each external repository names_needed requires.
-    `proven_repo_keys` is the ownership decision check-skills.py's
-    assess_external_ownership() already made — this never independently
-    re-derives whether an occupied destination may be reused or replaced
-    from its Git identity alone: a destination that exists (a dangling
-    symlink included) without a proven prior-ownership record is a
-    blocking finding here, not a candidate for reuse, even when a fresh
-    checkout could plainly be obtained instead."""
+    """Acquires or reuses each external repository names_needed requires,
+    per classify_external_action()'s decision for each."""
     resolved, checkouts, findings = {}, {}, {}
     for name in sorted(names_needed):
         prov = provenance[name]
         rkey = prov["repo_key"]
         info = ext_repos[rkey]
         if rkey not in checkouts:
-            try:
-                dest = check_skills.external_vendor_path(vendor_root, rkey)
-            except ValueError as e:
-                findings[name] = str(e)
+            action, detail = classify_external_action(vendor_root, rkey, info, proven_repo_keys)
+            if action == "blocking":
+                findings[name] = detail
                 continue
-            occupied = dest.exists() or dest.is_symlink()
-            if occupied and rkey not in proven_repo_keys:
-                findings[name] = (f"{dest}: exists without a proven prior ownership "
-                                  "record; refusing to reuse, replace, or remove it")
-                continue
-            if occupied and not check_skills.check_external_git(
-                    dest, info["source"], info["commit"]):
+            dest = check_skills.external_vendor_path(vendor_root, rkey)
+            if action == "reuse":
                 checkouts[rkey] = dest
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -798,80 +886,93 @@ def generate_manifest(adoption, root_key_, materialized, provenance, ext_repos_f
 
 
 def reconcile(consumer_root, adoption, result, to_materialize, to_remove, clients,
-             temp_registry, client_plans):
+             temp_registry, client_plans, txn, cache):
     """Mutates generated state toward to_materialize/to_remove and returns
-    the resulting candidate manifest. Never writes the canonical manifest —
-    the caller verifies and promotes it."""
+    (candidate_manifest, vendor_backup). Never writes the canonical
+    manifest — the caller verifies and promotes it, and — because
+    vendor_backup is kept rather than deleted here when the root vendor
+    was swapped — restores it if that verification fails.
+
+    A root revision needing acquisition was already staged into this run's
+    own transaction directory during planning (see preview_result()); this
+    takes that same staged tree rather than fetching it again."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     agents_root = consumer_root / ".agents"
     vendor_root = agents_root / "vendor"
     skills_root = agents_root / "skills"
     vendor = safe_vendor_path(vendor_root, root_key_)
 
-    declared_tree = None
-    try:
-        vendor_matches = not check_skills.check_git(vendor, adoption)
-        if vendor_matches:
-            effective_vendor = vendor
-        else:
-            vendor.parent.mkdir(parents=True, exist_ok=True)
-            declared_tree = fetch_tree(adoption["repo"], adoption["pin"], vendor)
-            effective_vendor = declared_tree
+    vendor_matches = not check_skills.check_git(vendor, adoption)
+    if vendor_matches:
+        effective_vendor = vendor
+    else:
+        effective_vendor = stage_candidate(consumer_root, txn, cache,
+                                           adoption["repo"], adoption["pin"])
 
-        ext_names_needed = [n for n in to_materialize
-                            if result["provenance"][n]["repo_key"] != root_key_]
-        resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
-            result["external_repos"], result["provenance"], ext_names_needed,
-            vendor_root, temp_registry, set(result["proven_external_repos"]))
-        if upstream_findings:
-            sys.exit("external upstream validation failed during install: "
-                     + "; ".join(f"{n}: {r}" for n, r in sorted(upstream_findings.items())))
+    ext_names_needed = [n for n in to_materialize
+                        if result["provenance"][n]["repo_key"] != root_key_]
+    resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
+        result["external_repos"], result["provenance"], ext_names_needed,
+        vendor_root, temp_registry, set(result["proven_external_repos"]))
+    if upstream_findings:
+        sys.exit("external upstream validation failed during install: "
+                 + "; ".join(f"{n}: {r}" for n, r in sorted(upstream_findings.items())))
 
-        if not vendor_matches:
-            swap_vendor_tree(declared_tree, vendor)
-            declared_tree = None
-            effective_vendor = vendor
-
-        for name in to_materialize:
-            prov = result["provenance"][name]
-            if prov["repo_key"] == root_key_:
-                materialize_skill(name, effective_vendor, skills_root)
-            else:
-                materialize_from(name, resolved_dirs[name], skills_root)
-        for name in to_remove:
-            remove_skill(name, skills_root)
-
-        for rkey, checkout in list(ext_checkouts.items()):
+    vendor_backup = None
+    if not vendor_matches:
+        staged = take_staged_candidate(cache, adoption["repo"], adoption["pin"])
+        require_safe_path(consumer_root, staged)
+        vendor.parent.mkdir(parents=True, exist_ok=True)
+        promotion_ready = vendor.parent / f".{vendor.name}.promote-{uuid.uuid4().hex[:12]}"
+        try:
+            staged.rename(promotion_ready)
             # Revalidated immediately before this destructive replacement,
             # not just once during earlier planning.
-            dest = safe_vendor_path(vendor_root, rkey)
-            if checkout != dest:
-                atomic_replace_dir(checkout, dest)
-                temp_registry.remove(checkout)
+            vendor = safe_vendor_path(vendor_root, root_key_)
+            vendor_backup = atomic_replace_dir(promotion_ready, vendor, keep_backup=True)
+        except Exception:
+            if promotion_ready.exists():
+                shutil.rmtree(promotion_ready, ignore_errors=True)
+            raise
+        effective_vendor = vendor
 
-        materialized_final = (set(result["unchanged"]) | set(result["added"])) - set(to_remove)
-        ext_repos_final = {
-            rkey: info for rkey, info in result["external_repos"].items()
-            if any(result["provenance"].get(n, {}).get("repo_key") == rkey
-                  for n in materialized_final)
-        }
-        dropped_repos = set(result["proven_external_repos"]) - set(ext_repos_final)
-        for rkey in sorted(dropped_repos):
-            # Revalidated immediately before this removal, not just once
-            # during earlier planning.
-            shutil.rmtree(safe_vendor_path(vendor_root, rkey), ignore_errors=True)
+    for name in to_materialize:
+        prov = result["provenance"][name]
+        if prov["repo_key"] == root_key_:
+            materialize_skill(name, effective_vendor, skills_root)
+        else:
+            materialize_from(name, resolved_dirs[name], skills_root)
+    for name in to_remove:
+        remove_skill(name, skills_root)
 
-        candidate_manifest = generate_manifest(
-            adoption, root_key_, materialized_final, result["provenance"],
-            ext_repos_final, skills_root)
+    for rkey, checkout in list(ext_checkouts.items()):
+        # Revalidated immediately before this destructive replacement, not
+        # just once during earlier planning.
+        dest = safe_vendor_path(vendor_root, rkey)
+        if checkout != dest:
+            atomic_replace_dir(checkout, dest)
+            temp_registry.remove(checkout)
 
-        for client in clients:
-            reconcile_client(consumer_root, skills_root, client, client_plans[client])
+    materialized_final = (set(result["unchanged"]) | set(result["added"])) - set(to_remove)
+    ext_repos_final = {
+        rkey: info for rkey, info in result["external_repos"].items()
+        if any(result["provenance"].get(n, {}).get("repo_key") == rkey
+              for n in materialized_final)
+    }
+    dropped_repos = set(result["proven_external_repos"]) - set(ext_repos_final)
+    for rkey in sorted(dropped_repos):
+        # Revalidated immediately before this removal, not just once
+        # during earlier planning.
+        shutil.rmtree(safe_vendor_path(vendor_root, rkey), ignore_errors=True)
 
-        return candidate_manifest
-    finally:
-        if declared_tree is not None and declared_tree.exists():
-            shutil.rmtree(declared_tree, ignore_errors=True)
+    candidate_manifest = generate_manifest(
+        adoption, root_key_, materialized_final, result["provenance"],
+        ext_repos_final, skills_root)
+
+    for client in clients:
+        reconcile_client(consumer_root, skills_root, client, client_plans[client])
+
+    return candidate_manifest, vendor_backup
 
 
 def promote_manifest(consumer_root, candidate_manifest, clients):
@@ -942,39 +1043,27 @@ def update_git_exclude(consumer_root, candidate_manifest):
 # --- mutating-mode orchestration -------------------------------------
 
 
-def fetch_preview_tree(repo_url, sha):
-    """A disposable clone+checkout in OS temp storage, for non-mutating
-    preview/inspection only. Unlike fetch_tree(), this is never swapped into
-    a persistent location, so it has no reason to share a filesystem with
-    one — and using real OS temp storage means a cancelled or purely
-    inspecting invocation never creates anything under the consumer
-    repository itself (not even an empty directory)."""
-    tmp = Path(tempfile.mkdtemp(prefix="infurnet-skills-preview-"))
-    git_ops.acquire_tree(repo_url, sha, tmp)
-    return tmp
-
-
-def preview_result(consumer_root, adoption, clients):
+def preview_result(consumer_root, adoption, clients, txn, cache):
     """The accurate check-skills.py result for `adoption` — which may
     describe a hypothetical target (e.g. an --update candidate) that has
     not been written to adoption.yml. check-skills.py can only see
     dependency closure and declared-skill sources that already exist in a
     local checkout, so when the real vendor does not already match
-    `adoption`'s pin, a disposable preview tree is fetched first; nothing
-    here is persisted. Always recomputed fresh (never a cached/prior
-    result), so a plan built from this is guaranteed current."""
+    `adoption`'s pin, the candidate is staged into this run's own
+    transaction directory first (reusing a prior staging of the identical
+    revision within this run, if any — see stage_candidate()); nothing
+    here is promoted. Always recomputed fresh (never a cached/prior
+    check-skills.py result), so a plan built from this is guaranteed
+    current."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     vendor_root = consumer_root / ".agents" / "vendor"
     vendor = safe_vendor_path(vendor_root, root_key_)
     if not check_skills.check_git(vendor, adoption):
         return check_skills.evaluate(consumer_root, clients=tuple(clients),
                                      adoption_override=adoption)
-    preview = fetch_preview_tree(adoption["repo"], adoption["pin"])
-    try:
-        return check_skills.evaluate(consumer_root, clients=tuple(clients),
-                                     source_root=preview, adoption_override=adoption)
-    finally:
-        shutil.rmtree(preview, ignore_errors=True)
+    staged = stage_candidate(consumer_root, txn, cache, adoption["repo"], adoption["pin"])
+    return check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                 source_root=staged, adoption_override=adoption)
 
 
 def refresh_names_for_vendor_change(consumer_root, adoption, result):
@@ -1040,8 +1129,63 @@ def collect_blocking(adoption, result):
     return blocking
 
 
-def print_action_summary(mode, version_change, to_materialize, to_remove, clients,
-                         staged, remaining_unresolved):
+def build_action_plan(consumer_root, adoption, result, mode, version_change,
+                      to_materialize, to_remove, clients, client_plans,
+                      staged, remaining_unresolved):
+    """One explicit representation of every applicable persistent change
+    this transaction will make, built from values already computed before
+    confirmation. print_action_summary() renders exactly this; mutate()'s
+    execution consumes the same to_materialize/to_remove/client_plans/
+    version_change it already had — nothing here is independently
+    recomputed for execution.
+
+    The root-vendor reuse/acquire label and each external repository's
+    classify_external_action() call ARE evaluated fresh here as well as
+    again during reconcile()'s own execution — deliberately: both call
+    identical pure functions against the filesystem, so a destination
+    unchanged between planning and execution always agrees, and one that
+    has changed is caught as drift (reconcile() stops) rather than this
+    plan silently being treated as authorization for something else."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    root_vendor_action = "reuse" if not check_skills.check_git(vendor, adoption) else \
+        "acquire-or-replace"
+
+    ext_names = [n for n in to_materialize if result["provenance"][n]["repo_key"] != root_key_]
+    ext_repo_keys_needed = sorted({result["provenance"][n]["repo_key"] for n in ext_names})
+    proven = set(result["proven_external_repos"])
+    ext_changes = []
+    for rkey in ext_repo_keys_needed:
+        info = result["external_repos"][rkey]
+        action, detail = classify_external_action(vendor_root, rkey, info, proven)
+        ext_changes.append({"repo_key": rkey, "source": info["source"],
+                            "commit": info["commit"], "action": action, "detail": detail})
+
+    materialized_final = (set(result["unchanged"]) | set(result["added"])) - set(to_remove)
+    kept_repo_keys = {result["provenance"][n]["repo_key"] for n in materialized_final
+                      if result["provenance"][n]["repo_key"] != root_key_}
+    ext_removed = sorted(proven - kept_repo_keys)
+
+    any_generated_change = bool(to_materialize or to_remove or ext_changes or ext_removed
+                                or root_vendor_action == "acquire-or-replace")
+
+    return {
+        "mode": mode,
+        "version_change": version_change,
+        "root_vendor": root_vendor_action,
+        "external_vendors": {"changes": ext_changes, "removed": ext_removed},
+        "skills": {"materialize": to_materialize, "remove": to_remove},
+        "manifest": "promote candidate after verification",
+        "clients": clients,
+        "client_plans": client_plans,
+        "bindings": {"staged": staged, "remaining_unresolved": remaining_unresolved},
+        "git_exclude": "update generated section (best-effort)" if any_generated_change else None,
+    }
+
+
+def print_action_summary(plan):
+    version_change = plan["version_change"]
     if version_change is not None:
         print("Download:")
         print(f"  {version_change['current_pin'][:12]} -> "
@@ -1052,7 +1196,9 @@ def print_action_summary(mode, version_change, to_materialize, to_remove, client
         print(f"  adoption.yml release: {version_change['current_release'] or '(blank)'} -> "
              f"{version_change['target_release'] or '(blank)'}")
 
-    heading = "Repair:" if mode == "repair" else "Install/update:"
+    to_materialize = plan["skills"]["materialize"]
+    to_remove = plan["skills"]["remove"]
+    heading = "Repair:" if plan["mode"] == "repair" else "Install/update:"
     if to_materialize and version_change is None:
         print(f"\n{heading}")
     elif to_materialize:
@@ -1063,17 +1209,42 @@ def print_action_summary(mode, version_change, to_materialize, to_remove, client
         print("\nRemove:")
         for name in to_remove:
             print(f"  - {name}")
-    if clients:
-        print(f"\nReconcile client exposure: {', '.join(clients)}")
-    if staged or remaining_unresolved:
+
+    ext = plan["external_vendors"]
+    if ext["changes"] or ext["removed"]:
+        print("\nExternal repositories:")
+        for change in ext["changes"]:
+            verb = "reuse" if change["action"] == "reuse" else "acquire"
+            print(f"  {verb} {change['repo_key']} @ {change['source']} "
+                 f"({change['commit'][:12]})")
+        for rkey in ext["removed"]:
+            print(f"  remove {rkey}")
+
+    if plan["clients"]:
+        print(f"\nReconcile client exposure: {', '.join(plan['clients'])}")
+        for client in plan["clients"]:
+            exposure = plan["client_plans"][client]["exposure"]
+            for name in exposure["needs_correction"] + exposure["missing"]:
+                print(f"  [{client}] link {name}")
+            for name in exposure["stale"]:
+                print(f"  [{client}] remove stale link {name}")
+            governance = plan["client_plans"][client]["governance"]
+            if governance is not None and governance[0]:
+                print(f"  [{client}] governance document: create or update")
+
+    bindings = plan["bindings"]
+    if bindings["staged"] or bindings["remaining_unresolved"]:
         print("\nBindings:")
-        for section, label, value in staged:
+        for section, label, value in bindings["staged"]:
             print(f"  [{section}] {label} = {value}")
-        for section, label in remaining_unresolved:
+        for section, label in bindings["remaining_unresolved"]:
             print(f"  [{section}] {label}: remains unresolved")
 
+    if plan["git_exclude"] is not None:
+        print(f"\nGit exclude: {plan['git_exclude']}")
 
-def mutate(args, consumer_root, clients, adoption, result, mode, version_change=None):
+
+def mutate(args, consumer_root, clients, adoption, result, mode, txn, cache, version_change=None):
     """`adoption` and `result` describe exactly the state this transaction
     targets: the real, on-disk adoption for default/repair, or the
     not-yet-written --update target for update (version_change carries the
@@ -1081,7 +1252,7 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
     check-skills.py's accurate result for that same `adoption` (see
     preview_result()) — computed once, shown, confirmed, and executed
     unchanged, so an approved plan can never silently diverge from what
-    actually runs."""
+    actually runs. txn/cache are this run's transaction-staging state."""
     blocking = collect_blocking(adoption, result)
     if blocking:
         print("Blocked:")
@@ -1139,8 +1310,10 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
             agents_md = consumer_root / "AGENTS.md"
             print(f"  {'create' if not agents_md.exists() else 'update'} {agents_md}")
         print()
-    print_action_summary(mode, version_change, to_materialize, to_remove, clients,
-                         staged, remaining_unresolved)
+    plan = build_action_plan(consumer_root, adoption, result, mode, version_change,
+                             to_materialize, to_remove, clients, client_plans,
+                             staged, remaining_unresolved)
+    print_action_summary(plan)
 
     if not confirm(args.force):
         print("\nCancelled — no changes made.")
@@ -1163,14 +1336,35 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
 
     temp_registry = []
     try:
-        candidate_manifest = reconcile(consumer_root, adoption, result, to_materialize,
-                                       to_remove, clients, temp_registry, client_plans)
+        candidate_manifest, vendor_backup = reconcile(
+            consumer_root, adoption, result, to_materialize, to_remove, clients,
+            temp_registry, client_plans, txn, cache)
     finally:
         for tmp in temp_registry:
             if tmp.exists():
                 shutil.rmtree(tmp, ignore_errors=True)
 
-    if not promote_manifest(consumer_root, candidate_manifest, clients):
+    promoted = promote_manifest(consumer_root, candidate_manifest, clients)
+
+    # The root vendor's previous checkout is kept as a recoverable backup,
+    # not deleted, until candidate-manifest verification above actually
+    # succeeds — atomic_replace_dir(keep_backup=True) in reconcile() made
+    # this possible. This restores root-vendor consistency specifically; it
+    # does not roll back already-materialized skills or external-repo
+    # changes from earlier in this same transaction, which is not
+    # implemented and is not promised here.
+    if vendor_backup is not None:
+        if promoted:
+            shutil.rmtree(vendor_backup, ignore_errors=True)
+        else:
+            root_key_ = check_skills.repo_key(adoption["repo"])
+            vendor = check_skills.external_vendor_path(
+                consumer_root / ".agents" / "vendor", root_key_)
+            if not vendor.is_symlink() and vendor.exists():
+                shutil.rmtree(vendor, ignore_errors=True)
+            vendor_backup.rename(vendor)
+
+    if not promoted:
         return 1
 
     write_bindings(consumer_root, staged)
@@ -1298,7 +1492,7 @@ def print_update_summary(update_result):
              "changes only that installer can see.")
 
 
-def run_update(args, consumer_root, clients, classification):
+def run_update(args, consumer_root, clients, classification, txn, cache):
     if classification["state"] == "damaged":
         print(f"Damaged managed state: {classification['reason']}")
         print_findings([f for f in classification["result"]["findings"]
@@ -1326,7 +1520,16 @@ def run_update(args, consumer_root, clients, classification):
         if not target_version:
             sys.exit("no target selected; re-run with --target-version")
 
-    update_result = check_update.evaluate(consumer_root, target_version=target_version)
+    # Resolving to an immutable commit is metadata-only (git ls-remote),
+    # never a download — done up front so the one candidate acquisition
+    # below can be shared with preview_result()'s own use of the identical
+    # (source, commit) pair further down, instead of each fetching it
+    # separately.
+    target_commit = check_update.resolve_sha(adoption["repo"], target_version)
+    staged_candidate = stage_candidate(consumer_root, txn, cache, adoption["repo"], target_commit)
+
+    update_result = check_update.evaluate(consumer_root, target_version=target_version,
+                                          candidate_tree=staged_candidate)
     if not update_result["ok"]:
         print_findings(update_result["findings"])
         return 1
@@ -1345,14 +1548,16 @@ def run_update(args, consumer_root, clients, classification):
     # against the resolved TARGET — same source/skills, the new pin/release
     # — not against the current adoption; otherwise the plan a human
     # approves could differ from what actually installs (e.g. the target's
-    # dependency closure or external requirements changed).
+    # dependency closure or external requirements changed). preview_result()
+    # reuses the same staged candidate above (identical (source, commit)
+    # key) rather than fetching it a second time.
     target_adoption = dict(adoption)
     target_adoption["pin"] = update_result["target_commit"]
     target_adoption["tag"] = update_result["target_release"] or None
-    target_result = preview_result(consumer_root, target_adoption, clients)
+    target_result = preview_result(consumer_root, target_adoption, clients, txn, cache)
 
     return mutate(args, consumer_root, clients, target_adoption, target_result,
-                 mode="update", version_change=version_change)
+                 mode="update", txn=txn, cache=cache, version_change=version_change)
 
 
 def main():
@@ -1365,48 +1570,58 @@ def main():
 
     containment_preflight(consumer_root)
 
-    classification = classify(consumer_root, clients)
-    state = classification["state"]
+    # This run's own disposable inspection-staging state (see
+    # ensure_transaction_dir()) — created lazily, never written to disk at
+    # all unless a candidate actually needs staging, and removed here
+    # whether the run completes, is cancelled, or fails.
+    txn = {"dir": None}
+    cache = {}
+    try:
+        classification = classify(consumer_root, clients, txn, cache)
+        state = classification["state"]
 
-    if state == "adoption-invalid":
-        sys.exit(f"{classification['reason']} — fix adoption.yml directly and "
-                 "re-run (this is not repairable by --repair)")
+        if state == "adoption-invalid":
+            sys.exit(f"{classification['reason']} — fix adoption.yml directly and "
+                     "re-run (this is not repairable by --repair)")
 
-    if state == "bootstrap":
-        if args.update or args.repair:
-            sys.exit("no adoption.yml yet; run the installer without --update or "
-                     "--repair to bootstrap first")
-        return run_bootstrap(consumer_root, clients, args.force)
+        if state == "bootstrap":
+            if args.update or args.repair:
+                sys.exit("no adoption.yml yet; run the installer without --update or "
+                         "--repair to bootstrap first")
+            return run_bootstrap(consumer_root, clients, args.force)
 
-    if args.repair:
+        if args.repair:
+            return mutate(args, consumer_root, clients, classification["adoption"],
+                         classification["result"], mode="repair", txn=txn, cache=cache)
+
+        if args.update:
+            return run_update(args, consumer_root, clients, classification, txn, cache)
+
+        # default mode
+        if state == "damaged":
+            print(f"Damaged managed state: {classification['reason']}")
+            print_findings([f for f in classification["result"]["findings"]
+                            if f["severity"] in ("damage", "blocking")])
+            print("\nRun install.py --repair to reconstruct generated state.")
+            return 1
+
+        if state == "in-sync" and not clients and not args.bindings:
+            bindings_result = check_bindings.evaluate(consumer_root)
+            if bindings_result["ok"]:
+                print("Already reconciled.")
+                return 0
+            print("Installation is reconciled; applicable project bindings need attention:")
+            check_bindings.print_human(bindings_result)
+            return 1
+
+        # state in ("pending-install", "reconcile"), or "in-sync" with an
+        # explicitly requested client still needing (re)wiring or an
+        # explicitly supplied --bindings file still needing to be validated
+        # and applied.
         return mutate(args, consumer_root, clients, classification["adoption"],
-                     classification["result"], mode="repair")
-
-    if args.update:
-        return run_update(args, consumer_root, clients, classification)
-
-    # default mode
-    if state == "damaged":
-        print(f"Damaged managed state: {classification['reason']}")
-        print_findings([f for f in classification["result"]["findings"]
-                        if f["severity"] in ("damage", "blocking")])
-        print("\nRun install.py --repair to reconstruct generated state.")
-        return 1
-
-    if state == "in-sync" and not clients and not args.bindings:
-        bindings_result = check_bindings.evaluate(consumer_root)
-        if bindings_result["ok"]:
-            print("Already reconciled.")
-            return 0
-        print("Installation is reconciled; applicable project bindings need attention:")
-        check_bindings.print_human(bindings_result)
-        return 1
-
-    # state in ("pending-install", "reconcile"), or "in-sync" with an
-    # explicitly requested client still needing (re)wiring or an explicitly
-    # supplied --bindings file still needing to be validated and applied.
-    return mutate(args, consumer_root, clients, classification["adoption"],
-                 classification["result"], mode="default")
+                     classification["result"], mode="default", txn=txn, cache=cache)
+    finally:
+        cleanup_transaction(txn)
 
 
 if __name__ == "__main__":

@@ -510,28 +510,18 @@ def resolve_upstream_skill(checkout, path, exposed_name):
 
 
 def assess_external_ownership(vendor_root, manifest, root_key, desired_repo_keys):
-    """The one ownership assessment of existing generated external state:
-    for each non-root repository or skill the manifest currently records,
-    and for each desired repository the manifest does not, whether the
-    installer has sufficient evidence to reuse, replace, or remove it.
-
-    Ownership is proven only when the manifest relationship and the
-    checkout's own Git identity are coherent — a matching origin and HEAD
-    are evidence of checkout *integrity*, never proof of ownership by
-    themselves. A destination that already exists (including a dangling
-    symlink) with no manifest record at all is exactly as unproven as one
-    the manifest cannot corroborate; both produce the same
-    `external-ownership` finding, so a coincidentally matching checkout is
-    never silently adopted.
+    """Ownership of existing generated external state: for each non-root
+    manifest repository/skill, and for each desired repository the
+    manifest doesn't mention, whether reuse, replacement, or removal is
+    safe. A matching Git origin and HEAD prove checkout integrity, never
+    ownership — an occupied destination with no manifest record is exactly
+    as unproven as one the manifest contradicts. Orphaned records are
+    never filtered out before being surfaced.
 
     Returns (proven_repos: {repo_key: {"source", "commit"}},
-             proven_skills: {name: repo_key},
-             findings: [(subject, detail), ...]). A finding here always
-    means "the installer cannot prove ownership of this existing repository
-    or skill" — every one of them is reported as a blocking
-    `external-ownership` finding by evaluate(), including an orphaned
-    repository record no current skill references: nothing here is
-    filtered by current relevance before being surfaced."""
+             proven_skills: {name: repo_key}, findings: [(subject, detail)]).
+    Every finding becomes a blocking `external-ownership` finding in
+    evaluate()."""
     repositories = (manifest or {}).get("repositories")
     repositories = repositories if isinstance(repositories, dict) else {}
     skills = (manifest or {}).get("skills")
@@ -613,12 +603,9 @@ def vendor_pin_matches(vendor, adoption):
 
 
 def check_git(vendor, adoption):
-    """Thin adapter over the shared checkout inspection, preserving this
-    checker's own root-vendor diagnostic wording exactly. evaluate() calls
-    check_git_from() directly against an inspection it already has, rather
-    than through here, so a single evaluation never inspects the same
-    checkout twice; this wrapper stays for other callers that only need
-    the findings, each inspecting fresh."""
+    """check_git_from(), inspecting fresh — for callers other than
+    evaluate(), which already has an inspection and calls check_git_from()
+    directly to avoid inspecting the same checkout twice."""
     return check_git_from(git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"]),
                           adoption)
 
@@ -732,20 +719,13 @@ def verify_materialized_skills(skills_root, manifest):
 
 
 def compute_external_state(adoption, manifest, source_root, vendor_root, skills_root):
-    """Everything evaluate() needs to reconcile external state: the resolved
-    skill-dependency installation closure, discovered requirements, deduped
-    repository/skill requirements (with blocking conflict findings), the
-    existing-ownership assessment, and the unified add/remove/unchanged/
-    collision sets across root and external names together.
+    """Everything evaluate() needs for external state: closure, discovered
+    requirements, deduped repo/skill requirements, the ownership
+    assessment, and the unified add/remove/unchanged/collision sets.
 
-    The desired inventory (what the consumer's adoption intent, dependency
-    closure, and validated external declarations actually name) and the
-    ownership assessment (what existing generated content the installer can
-    prove it owns) are computed independently. A name whose prior ownership
-    cannot be proven is never removed from the desired inventory — its
-    ownership_findings entry is a blocking finding, which stops the whole
-    transaction before any reuse, replacement, or removal is attempted; it
-    is not achieved by silently narrowing what was declared."""
+    Desired inventory and ownership are computed independently — a name
+    with unproven ownership stays desired; its ownership finding blocks the
+    transaction instead of narrowing what was declared."""
     root_key_ = repo_key(adoption["repo"])
     closure = resolve_installation_closure(adoption["skills"], source_root)
     requirements = discover_external_requirements(closure, source_root)
@@ -908,22 +888,14 @@ CLIENT_GOVERNANCE_DOCUMENTS = {
 
 
 def assess_first_line_document(path, required_first_line):
-    """The one read-only assessment of a document that must carry
-    `required_first_line` as its exact first line — generic across every
-    client with this kind of requirement, shared by this checker's own
-    findings and install.py's staging. Distinguishes:
+    """Whether `path` has `required_first_line` as its exact first line —
+    generic across every client with this requirement. States: "correct",
+    "missing", "needs-insertion" (safe to prepend), "unsafe" (symlink,
+    non-regular file, or the line present but misplaced — never guessed or
+    repaired).
 
-      "correct"         -- the required line is already the exact first line
-      "missing"         -- the document does not exist
-      "needs-insertion" -- the document exists, lacks the line anywhere;
-                            safe to prepend
-      "unsafe"          -- a symlink, a non-regular file, or the line
-                            present but not as the first line (ambiguous;
-                            never guessed or repaired)
-
-    Returns {"state", "detail", "existing_text"} — "detail" is the
-    diagnostic for "unsafe", else None; "existing_text" is the document's
-    current content for "needs-insertion", else None."""
+    Returns {"state", "detail", "existing_text"} — detail for "unsafe",
+    existing_text for "needs-insertion", else None."""
     if path.is_symlink():
         return {"state": "unsafe", "detail": f"{path}: is a symlink", "existing_text": None}
     if not path.exists():

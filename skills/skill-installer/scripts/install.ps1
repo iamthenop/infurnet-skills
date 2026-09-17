@@ -61,9 +61,13 @@ if ($cdup -ne '') {
 }
 
 $pythonCandidates = @(
-    @{ Exe = 'py'; Args = @('-3') },
+    # 'python'/'python3' resolve through PATH, so an activated virtual
+    # environment's own interpreter is found first; the 'py' launcher
+    # resolves independent of PATH and would otherwise bypass an activated
+    # environment in favor of an unrelated system-wide Python.
     @{ Exe = 'python'; Args = @() },
-    @{ Exe = 'python3'; Args = @() }
+    @{ Exe = 'python3'; Args = @() },
+    @{ Exe = 'py'; Args = @('-3') }
 )
 $selected = $null
 foreach ($candidate in $pythonCandidates) {
@@ -75,7 +79,20 @@ foreach ($candidate in $pythonCandidates) {
     }
 }
 if (-not $selected) {
-    Write-Failure "no supported Python interpreter found (requires Python >= 3.12; tried: py -3, python, python3)"
+    Write-Failure "no supported Python interpreter found (requires Python >= 3.12; tried: python, python3, py -3)"
+}
+
+# --- dependency preflight ---------------------------------------------------
+#
+# Confirms the selected interpreter can import the installer's bundled
+# runtime dependencies. Never installs anything; a missing dependency is a
+# preflight failure naming scripts/requirements.txt.
+
+$requirementsPath = Join-Path $PSScriptRoot "requirements.txt"
+& $selected.Exe @($selected.Args) -c "import yaml, markdown_it, ruamel.yaml" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Failure ("missing installer runtime dependency; install with: " +
+        "pip install -r `"$requirementsPath`" (in an isolated virtual environment)")
 }
 
 # --- delegate ---------------------------------------------------------------

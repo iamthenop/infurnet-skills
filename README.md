@@ -165,19 +165,17 @@ dependency must not follow a mutable checkout or floating `main`.
 The adoption declaration records installed skills of any skill type in its
 `skills` field.
 
-Updating the pin follows six steps:
+Two workflows change what is installed:
 
-1. compare the pinned commit with head;
-2. enumerate changed obligations;
-3. identify affected consumer bindings and governance;
-4. obtain approval from the consuming repository's deciding authority;
-5. update the pin and installed content together;
-6. validate the consumer.
-
-The installer does not infer approval from a newer source revision.
-`--candidate REF` performs read-only candidate comparison. After approval,
-the consumer updates its durable adoption declaration and runs the installer
-with `--apply`.
+* **Default reconciliation** — the consumer changes the declared `commit` or
+  `release` through its own governance process, in its own commit. The
+  installer then reconciles generated state to that already-declared intent.
+* **Installer-managed update** — the consumer runs the installer with
+  `--update`, optionally supplying `--target-version <ref>`. The installer
+  inspects the target, displays the complete mutation plan, and requires
+  confirmation before changing the approved `commit`/`release` values and
+  installed state. The installer does not infer approval from a newer source
+  revision on its own, and never changes `source` or `skills`.
 
 The consumer root is always explicit. Platform wrappers accept it as their
 first argument; direct Python invocation uses `--root <consumer-root>`.
@@ -185,9 +183,11 @@ first argument; direct Python invocation uses `--root <consumer-root>`.
 ## Adoption and installation
 
 The adoption declaration is a consuming repository's durable statement of
-intent at `.agents/adoption.yml`. The installer reads an existing declaration
-and never rewrites its adoption decisions. Moving the pin means editing this
-file directly in the consumer's own commit before running `--apply`.
+intent at `.agents/adoption.yml`. `source` and `skills` are consumer intent
+the installer never changes. The consumer may also move the pin directly, in
+its own commit, for default reconciliation; or run the installer with
+`--update` to inspect a target, display the complete mutation plan, and
+write an approved `commit`/`release` change only after confirmation.
 
 Root and external repositories are acquired under
 `.agents/vendor/<owner>/<repository>/`. Adopted skills are materialized under

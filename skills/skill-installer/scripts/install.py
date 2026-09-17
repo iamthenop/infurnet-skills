@@ -1,150 +1,237 @@
 #!/usr/bin/env python3
-"""Install and reconcile Agent Skills in a consuming repository.
+"""Coordinate installation and reconciliation of Agent Skills in a
+consuming repository.
 
 Run with `--root <consumer-root>` to target the consuming repository
 explicitly; the installer's own physical location and the caller's working
 directory never determine the target.
 
-If `.agents/adoption.yml` does not exist yet, bootstrap copies the bundled
-template to create it (along with `AGENTS.md` and `PROJECT.md` when they are
-absent) and stops before acquisition or materialization — complete the
-adoption declaration, then re-run.
+Primary modes, mutually exclusive:
 
-Run with no option to report and verify; use `--apply` to apply changes or
-`--verify` for verification only (fully offline). Use `--candidate REF` to
-preview an additional, unadopted ref's obligation differences — read-only,
-it never changes what --apply installs or writes to .agents/adoption.yml.
+    (default)   bootstrap, initial installation, or reconciliation to
+                adoption intent the consumer has already changed
+    --verify    run check-skills.py and check-bindings.py, offline,
+                without mutation
+    --update    inspect and install an explicitly selected source revision
+    --repair    reconstruct installer-owned generated state without
+                changing adoption intent
 
-Client integration is explicit and off by default. Pass `--client claude`
-to wire root `CLAUDE.md` to `AGENTS.md` and expose materialized skills under
-`.claude/skills/`; no repository content, environment variable, or installed
-application ever selects a client on its own.
+`--target-version REF` is valid only with `--update`. `--bindings FILE`
+supplies transient project-binding decisions for default/update/repair.
+`--force` suppresses only the final `Continue? [Y/n]` confirmation. Every
+persistent mutating transaction shows its complete action set before that
+prompt.
+
+This script is the transaction coordinator; it does not reimplement
+checking. `check-skills.py`, `check-bindings.py`, and `check-update.py` are
+loaded as modules (their filenames are hyphenated and cannot be
+`import`ed directly) and called for every check this script needs.
 """
 import argparse
-import hashlib
+import importlib.util
+import io
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
+import yaml
 from pathlib import Path
-from typing import Callable
+
+from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 SELF_PATH = Path(__file__).resolve()
-ASSETS_ROOT = SELF_PATH.parent.parent / "assets"
+SCRIPTS_DIR = SELF_PATH.parent
+ASSETS_ROOT = SCRIPTS_DIR.parent / "assets"
 
 AGENTS_BEGIN = "<!-- BEGIN infurnet-skills -->"
 AGENTS_END = "<!-- END infurnet-skills -->"
-
-CLAUDE_IMPORT = "@AGENTS.md"
-
 EXCLUDE_BEGIN = "# BEGIN infurnet-skills generated"
 EXCLUDE_END = "# END infurnet-skills generated"
 
-COPY_MODE = "copy"
-STUB_MODE = "stub"
-STUB_SOURCE = "generated:external-stub"
 
-GITHUB_SOURCE_RE = re.compile(r"https://github\.com/([^/?#]+)/([^/?#]+)")
-EXTERNAL_COMMIT_RE = re.compile(r"[0-9a-fA-F]{40}")
-SKILL_NAME_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-EXTERNAL_KEYS = ("external-source", "external-commit", "external-release", "external-path")
-
-OBLIGATION_HEADERS = {
-    "must not",
-    "stop conditions",
-    "required fields",
-    "permissions",
-    "always",
-    "by-surface",
-}
+def _load(name, filename):
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS_DIR / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-# --- consumer bootstrap -------------------------------------------------
+check_skills = _load("check_skills", "check-skills.py")
+check_bindings = _load("check_bindings", "check-bindings.py")
+check_update = _load("check_update", "check-update.py")
+git_ops = _load("git_ops", "git_ops.py")
+
+SUPPORTED_CLIENTS = check_skills.SUPPORTED_CLIENTS
 
 
-def bootstrap_agents_md():
-    """Create or reconcile the installer-owned section of the consumer's
-    AGENTS.md, delimited by AGENTS_BEGIN/AGENTS_END. An absent
-    file is written whole from the template. Content with no markers keeps
-    everything it already has, with the template appended after exactly one
-    blank line. Exactly one valid marker pair has only that region replaced.
-    Any other marker shape — unmatched, nested, duplicate — is a stop
-    condition; AGENTS.md ownership is never guessed at."""
-    path = CONSUMER_ROOT / "AGENTS.md"
-    template = (ASSETS_ROOT / "AGENTS-template.md").read_text()
-    if not path.exists():
-        path.write_text(template)
-        return
+# --- bootstrap: compute (read-only) then apply ---------------------------
 
-    text = path.read_text()
-    begins = [m.start() for m in re.finditer(re.escape(AGENTS_BEGIN), text)]
-    ends = [m.start() for m in re.finditer(re.escape(AGENTS_END), text)]
 
+def locate_marked_section(text, begin_marker, end_marker):
+    """The one marker-location and splice-index operation shared by every
+    marked-section edit in this file. Returns ("absent", None) when neither
+    marker appears; ("present", (start, end)) for exactly one well-formed
+    begin<end pair, where text[:start] + <replacement> + text[end:]
+    performs the splice (end is just past the end marker's own line); or
+    ("malformed", None) for anything else — unmatched, nested, or duplicate
+    markers. Never guesses which occurrence is authoritative; the caller
+    decides what "absent" and "malformed" mean for its own document."""
+    begins = [m.start() for m in re.finditer(re.escape(begin_marker), text)]
+    ends = [m.start() for m in re.finditer(re.escape(end_marker), text)]
     if not begins and not ends:
-        new_text = text.rstrip("\n") + "\n\n" + template
-    elif len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
+        return "absent", None
+    if len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
         end_line_end = text.find("\n", ends[0])
         end_line_end = end_line_end + 1 if end_line_end != -1 else len(text)
-        new_text = text[:begins[0]] + template + text[end_line_end:]
+        return "present", (begins[0], end_line_end)
+    return "malformed", None
+
+
+def compute_agents_md(consumer_root):
+    """(needs_write, new_text). Never writes."""
+    path = consumer_root / "AGENTS.md"
+    template = (ASSETS_ROOT / "AGENTS-template.md").read_text()
+    if not path.exists():
+        return True, template
+    text = path.read_text()
+    state, span = locate_marked_section(text, AGENTS_BEGIN, AGENTS_END)
+    if state == "absent":
+        new_text = text.rstrip("\n") + "\n\n" + template
+    elif state == "present":
+        start, end = span
+        new_text = text[:start] + template + text[end:]
     else:
-        sys.exit(
-            f"{path}: malformed, unmatched, nested, or duplicate installer "
-            "markers; not modified"
-        )
+        sys.exit(f"{path}: malformed, unmatched, nested, or duplicate installer "
+                 "markers; not modified")
+    return new_text != text, new_text
+
+
+def compute_project_md(consumer_root):
+    path = consumer_root / "PROJECT.md"
+    if path.exists():
+        return False, None
+    return True, (ASSETS_ROOT / "PROJECT-template.md").read_bytes()
+
+
+def compute_adoption_yaml(consumer_root):
+    path = consumer_root / ".agents" / "adoption.yml"
+    if path.exists():
+        return False, None
+    return True, (ASSETS_ROOT / "adoption-template.yml").read_bytes()
+
+
+def stage_first_line_document(consumer_root, doc):
+    """Read-only staging counterpart of apply_first_line_document(), generic
+    across every client's required-first-line document: the
+    (needs_write, new_text, original) install.py stages before
+    confirmation, derived from the shared, checker-owned assessment rather
+    than a separate reread. A symlink, non-regular file, or an ambiguous
+    existing line is a hard stop here, before confirmation — never guessed
+    or repaired. Never writes.
+
+    `original` is the document's exact text at staging time (None when it
+    did not exist) — apply_first_line_document() uses it to detect drift
+    between staging and application."""
+    path = consumer_root / doc["path"]
+    assessment = check_skills.assess_first_line_document(path, doc["required_first_line"])
+    match assessment["state"]:
+        case "unsafe":
+            sys.exit(assessment["detail"])
+        case "correct":
+            return False, None, None
+        case "missing":
+            return True, doc["required_first_line"] + "\n", None
+        case "needs-insertion":
+            original = assessment["existing_text"]
+            return True, doc["required_first_line"] + "\n\n" + original, original
+        case _:
+            raise AssertionError(f"unexpected document-assessment state: "
+                                 f"{assessment['state']!r}")
+
+
+def apply_first_line_document(consumer_root, doc, plan):
+    """Writes the plan already staged by stage_first_line_document()
+    verbatim — never rereads the document to decide what to write. Rereads
+    it once, immediately before writing, only to guard against drift since
+    staging: if it is no longer in the exact state (including having
+    become a symlink or other unsafe entry) the plan was staged against,
+    this stops rather than silently overwriting it or recomputing a new
+    edit."""
+    needs_write, new_text, original = plan
+    if not needs_write:
+        return
+    path = consumer_root / doc["path"]
+    if original is None:
+        if path.exists() or path.is_symlink():
+            sys.exit(f"{path}: now exists; refusing to overwrite a document that "
+                     "changed since the approved plan was staged")
+    else:
+        if path.is_symlink():
+            sys.exit(f"{path}: became a symlink; refusing to write through it")
+        if not path.is_file() or path.read_text() != original:
+            sys.exit(f"{path}: changed since the approved plan was staged; "
+                     "refusing to overwrite")
     path.write_text(new_text)
 
 
-def bootstrap_project_md():
-    """Copy the bundled project template to root PROJECT.md when absent.
-    An existing PROJECT.md is durable consumer configuration and is never
-    overwritten."""
-    path = CONSUMER_ROOT / "PROJECT.md"
-    if path.exists():
-        return
-    path.write_bytes((ASSETS_ROOT / "PROJECT-template.md").read_bytes())
+def client_skills_root_for(consumer_root, client_name):
+    return consumer_root.joinpath(*check_skills.CLIENT_SKILLS_ROOT[client_name])
 
 
-def bootstrap_adoption_yaml():
-    """Copy the bundled adoption template to .agents/adoption.yml when it
-    does not already exist. An existing declaration is durable consumer
-    configuration and is never overwritten. Returns True when a new file
-    was created — the caller must stop before repository acquisition or
-    skill materialization and let the consumer complete the declaration."""
-    if ADOPTION_YAML.exists():
-        return False
-    AGENTS_ROOT.mkdir(parents=True, exist_ok=True)
-    ADOPTION_YAML.write_bytes((ASSETS_ROOT / "adoption-template.yml").read_bytes())
-    return True
+# --- containment: generated-state and staging roots -----------------------
 
 
-# --- generic client-skill exposure ---------------------------------------
-#
-# A client wraps the canonical installed-skill surface, .agents/skills/*; it
-# does not rebuild or reinterpret it. One implementation reconciles every
-# client's skill root to that canonical surface, regardless of which client
-# selects it. A client definition supplies only its own facts: where its
-# skill root lives, and any client-specific governance integration.
+def require_safe_path(consumer_root, target):
+    """sys.exit-based counterpart of check_skills.unsafe_symlink_detail(),
+    for install.py's own mutation-time preflights and pre-destructive
+    revalidation."""
+    try:
+        detail = check_skills.unsafe_symlink_detail(consumer_root, target)
+    except ValueError:
+        sys.exit(f"{target}: is not beneath the consumer root {consumer_root}")
+    if detail is not None:
+        sys.exit(detail)
 
 
-def check_client_skills_preflight(client_skills_root):
-    """Preflight shared by every client, independent of any particular
-    skill name: directory-symlink capability (probed and removed
-    immediately, in an OS temp directory — never under CONSUMER_ROOT), and
-    every path component from CONSUMER_ROOT down to and including
-    client_skills_root is a real, non-symlink entry (and, when it exists,
-    a directory). Checked lexically, one component at a time — a
-    symlinked ancestor is never resolved and followed into its target, so
-    a later mkdir()/symlink() can never write through it, whether that
-    ancestor is dangling or points inside or outside the consumer. Per-
-    skill exposure collisions are checked later, by
-    reconcile_client_skills() itself, once the canonical installed skill
-    set is known — still strictly before any mutation of that root, since
-    that check runs before any symlink is created."""
+def containment_preflight(consumer_root):
+    """Establishes that .agents, .agents/vendor, .agents/skills, and
+    .agents/.tmp are each a real directory or safely absent — never a
+    symlink (dangling included), nor a non-directory standing in for one —
+    before classify() or any staging/fetch may traverse or create anything
+    beneath them. Run once, at the top of every mutating-capable
+    invocation, before any inspection begins."""
+    agents_root = consumer_root / ".agents"
+    for target in (agents_root, agents_root / "vendor", agents_root / "skills",
+                  agents_root / ".tmp"):
+        require_safe_path(consumer_root, target)
+
+
+def safe_vendor_path(vendor_root, key):
+    """check_skills.external_vendor_path(), converted to a hard stop: every
+    install.py call site that resolves a vendor destination for actual
+    mutation must stop rather than let an unsafe path propagate as an
+    uncaught exception."""
+    try:
+        return check_skills.external_vendor_path(vendor_root, key)
+    except ValueError as e:
+        sys.exit(str(e))
+
+
+# --- generic client-skill exposure (mutating) -----------------------------
+
+
+def check_client_skills_preflight(consumer_root, client_skills_root):
+    """Directory-symlink capability (probed under an OS temp directory,
+    never under consumer_root) plus the shared containment walk down to
+    client_skills_root."""
     probe_root = Path(tempfile.mkdtemp(prefix="infurnet-skills-symlink-check-"))
     try:
         target = probe_root / "target"
@@ -156,936 +243,534 @@ def check_client_skills_preflight(client_skills_root):
     finally:
         shutil.rmtree(probe_root, ignore_errors=True)
 
-    try:
-        relative = client_skills_root.relative_to(CONSUMER_ROOT)
-    except ValueError:
-        sys.exit(f"{client_skills_root}: is not beneath the consumer root "
-                  f"{CONSUMER_ROOT}")
-
-    current = CONSUMER_ROOT
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            sys.exit(f"{current}: is a symlink; refusing to write through it")
-        if current.exists() and not current.is_dir():
-            sys.exit(f"{current}: exists but is not a directory")
+    require_safe_path(consumer_root, client_skills_root)
 
 
-def owned_client_exposure(client_skills_root):
-    """{name: (resolved_target, raw_target)} for every symlink directly
-    under client_skills_root whose target names a path beneath
-    SKILLS_ROOT — an installer-owned exposure, identified from its
-    resolved target alone, never its filename. raw_target is the literal
-    symlink text on disk: resolving to the right installed skill is
-    necessary but not sufficient for "correct" — the installer contract
-    also requires that raw text to be the canonical repository-relative
-    form, so callers must compare both. client_skills_root need not
-    exist."""
-    owned = {}
-    if not client_skills_root.is_dir():
-        return owned
-    for entry in client_skills_root.iterdir():
-        if not entry.is_symlink():
-            continue
-        raw_target = os.readlink(entry)
-        resolved = Path(os.path.normpath(str(entry.parent / raw_target)))
-        if resolved != SKILLS_ROOT and resolved.is_relative_to(SKILLS_ROOT):
-            owned[entry.name] = (resolved, raw_target)
-    return owned
-
-
-def reconcile_client_skills(client_skills_root):
-    """The one generic client-skill reconciliation implementation, shared
-    by every client. Derives the desired exposure set directly from the
-    canonical materialization surface, .agents/skills/* — never from an
-    installation-internal provenance collection such as which skills came
-    from root, a dependency, an external source, or a stub — and
-    reconciles client_skills_root to expose exactly that set, one
-    directory symlink per installed skill. An owned link is left alone
-    only when it both resolves to the correct installed skill and its raw
-    on-disk target is already the canonical repository-relative form —
-    resolving correctly is not by itself enough; an owned link that
-    resolves right but is spelled absolute (or otherwise non-canonical) is
-    corrected in place. Never touches client_skills_root itself as a
-    symlink, never copies, never overwrites unrelated or non-owned
-    content, and never inspects a skill's own contents — a desired name
-    colliding with anything else there is a stop condition, checked for
-    every desired name before any symlink in this call is created,
-    corrected, or removed."""
-    desired_names = ({p.name for p in SKILLS_ROOT.iterdir() if p.is_dir()}
-                      if SKILLS_ROOT.is_dir() else set())
-    owned = owned_client_exposure(client_skills_root)
-
-    to_create, to_replace = [], []
-    for name in sorted(desired_names):
-        desired_target = SKILLS_ROOT / name
-        canonical_raw_target = os.path.relpath(desired_target, client_skills_root)
-        if name in owned:
-            resolved, raw_target = owned[name]
-            if resolved == desired_target and raw_target == canonical_raw_target:
-                continue
-            to_replace.append(name)
-            continue
-        link = client_skills_root / name
-        if link.exists() or link.is_symlink():
-            sys.exit(f"{link}: exists and is not an installer-owned "
-                      "exposure symlink; refusing to overwrite")
-        to_create.append(name)
-    to_remove = sorted(set(owned) - desired_names)
+def apply_client_exposure(desired_names, skills_root, client_skills_root, assessment):
+    """Mutates client_skills_root toward `assessment` — an already-computed
+    and (via the transaction's confirmation) approved plan from
+    check_skills.assess_client_exposure(). Never rediscovers ownership to
+    decide what to do: it reassesses the current on-disk state only to
+    guard against having drifted since the plan was approved, and stops
+    rather than silently recomputing or expanding that plan if it has."""
+    current = check_skills.assess_client_exposure(desired_names, skills_root,
+                                                   client_skills_root)
+    if current != assessment:
+        sys.exit(f"{client_skills_root}: exposure state changed since the approved "
+                 "plan was computed; refusing to apply a possibly-stale plan")
 
     client_skills_root.mkdir(parents=True, exist_ok=True)
-    for name in to_replace + to_create:
+    for name in assessment["needs_correction"] + assessment["missing"]:
         link = client_skills_root / name
         if link.is_symlink():
             link.unlink()
-        target = os.path.relpath(SKILLS_ROOT / name, client_skills_root)
+        target = os.path.relpath(skills_root / name, client_skills_root)
         os.symlink(target, link, target_is_directory=True)
-    for name in to_remove:
+    for name in assessment["stale"]:
         (client_skills_root / name).unlink()
 
 
-# --- Claude client ---------------------------------------------------------
+def reconcile_client(consumer_root, skills_root, client_name, plan):
+    """install.py's own per-client wiring: applies plan["exposure"] via the
+    shared generic reconciler at that client's registered skill root, plus
+    its own already-staged governance document content, if any — neither
+    is reassessed or regenerated here."""
+    apply_client_exposure(plan["desired_names"], skills_root,
+                          client_skills_root_for(consumer_root, client_name),
+                          plan["exposure"])
+    doc = check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client_name)
+    if doc is not None and plan["governance"] is not None:
+        apply_first_line_document(consumer_root, doc, plan["governance"])
 
 
-def reconcile_claude_governance():
-    """Claude-specific governance integration: root CLAUDE.md must import
-    "@AGENTS.md" as its first line. Absent: create it as the whole file.
-    Present with that import as its exact first line: preserve
-    byte-for-byte (no write at all — this is what keeps every call here a
-    no-op on an already-wired consumer, in every invocation mode). Present
-    with the import on some other line: stop rather than create a
-    duplicate or move consumer content. Present with no such line: prepend
-    the import and one blank line, otherwise unchanged. Present but not a
-    regular file: stop. A symlink is rejected before any operation that
-    would follow it (exists()/is_file() both follow a link, and exists()
-    is false for a dangling one — either could read or write through to
-    an unintended target) — is_symlink() uses lstat and never follows,
-    so it is safe to check first regardless of whether the target
-    exists."""
-    path = CONSUMER_ROOT / "CLAUDE.md"
-    if path.is_symlink():
-        sys.exit(f"{path}: is a symlink; refusing to read or write through it")
-    if path.exists() and not path.is_file():
-        sys.exit(f"{path}: exists but is not a regular file")
-    if not path.exists():
-        path.write_text(CLAUDE_IMPORT + "\n")
-        return
-
-    text = path.read_text()
-    lines = text.split("\n")
-    if lines[0] == CLAUDE_IMPORT:
-        return
-    if CLAUDE_IMPORT in lines[1:]:
-        sys.exit(f"{path}: contains {CLAUDE_IMPORT!r} but not as the first "
-                  "line; refusing to create a duplicate import")
-    path.write_text(CLAUDE_IMPORT + "\n\n" + text)
+# --- CLI parsing and the flag-compatibility contract ----------------------
 
 
-@dataclass(frozen=True)
-class ClientDefinition:
-    """A client's own facts, and nothing the generic reconciler already
-    owns: where its skill root lives (read at call time, since
-    CONSUMER_ROOT is not yet known when CLIENTS is built), and its
-    client-specific governance integration."""
-    skills_root: Callable[[], Path]
-    governance: Callable[[], None]
+def parse_args(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", required=True, type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--verify", action="store_true")
+    mode.add_argument("--update", action="store_true")
+    mode.add_argument("--repair", action="store_true")
+    parser.add_argument("--target-version", default=None)
+    parser.add_argument("--bindings", type=Path, default=None)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--client", action="append", default=[], choices=SUPPORTED_CLIENTS)
+    args = parser.parse_args(argv)
+
+    if args.target_version is not None and not args.update:
+        parser.error("--target-version is only valid with --update")
+    if args.verify and args.force:
+        parser.error("--force is not valid with --verify")
+    if args.verify and args.bindings is not None:
+        parser.error("--bindings is not valid with --verify")
+    return args
 
 
-CLIENTS = {
-    "claude": ClientDefinition(
-        skills_root=lambda: CONSUMER_ROOT / ".claude" / "skills",
-        governance=reconcile_claude_governance,
-    ),
-}
-SUPPORTED_CLIENTS = tuple(CLIENTS)
+# --- confirmation -----------------------------------------------------
 
 
-# --- adoption.yml ------------------------------------------------------
-
-
-def _unquote(value):
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
-
-
-def read_adoption():
-    """Parse .agents/adoption.yml — a deliberately narrow YAML subset.
-
-    Accepts exactly: the top-level scalar keys source/commit/release, '#'
-    comments, blank lines, and a `skills:` block list (one `- item` per
-    line). Anything else — a nested mapping, a flow-style list or mapping,
-    a block scalar (`|`/`>`), an anchor/alias, an unknown or duplicate key —
-    is a hard parse error, never partially interpreted.
-    """
-    if not ADOPTION_YAML.exists():
-        sys.exit(f"{ADOPTION_YAML} does not exist; a consumer must author it")
-
-    fields = {}
-    skills = []
-    in_skills = False
-
-    for lineno, raw in enumerate(ADOPTION_YAML.read_text().splitlines(), 1):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        if in_skills and raw[:1] in (" ", "\t"):
-            item = re.match(r"^\s*-\s+(.+)$", raw)
-            if not item:
-                sys.exit(f"{ADOPTION_YAML}:{lineno}: expected a '- item' "
-                          f"line under 'skills:', got {raw!r}")
-            skills.append(_unquote(item.group(1).strip()))
-            continue
-        in_skills = False
-
-        m = re.match(r"^([A-Za-z_]+):\s*(.*)$", raw)
-        if not m:
-            sys.exit(f"{ADOPTION_YAML}:{lineno}: unsupported syntax: {raw!r}")
-        key, value = m.group(1), m.group(2).strip()
-
-        if key not in ("source", "commit", "release", "skills"):
-            sys.exit(f"{ADOPTION_YAML}:{lineno}: unsupported key {key!r}")
-        if key in fields:
-            sys.exit(f"{ADOPTION_YAML}:{lineno}: duplicate key {key!r}")
-
-        if key == "skills":
-            if value:
-                sys.exit(f"{ADOPTION_YAML}:{lineno}: 'skills:' must be a "
-                          f"block list (one '- item' per line), not {value!r}")
-            fields["skills"] = True
-            in_skills = True
-            continue
-
-        if value and value[0] in "&*|>{[":
-            sys.exit(f"{ADOPTION_YAML}:{lineno}: unsupported YAML syntax "
-                      f"in value: {value!r}")
-        fields[key] = _unquote(value)
-
-    for required in ("source", "commit", "skills"):
-        if required not in fields:
-            sys.exit(f"{ADOPTION_YAML}: missing required field {required!r}")
-
-    commit = fields["commit"]
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        sys.exit(f"{ADOPTION_YAML}: commit must be a full 40-character "
-                  f"SHA, got {commit!r}")
-
-    return {
-        "pin": commit,
-        "repo": fields["source"],
-        "tag": fields.get("release") or None,
-        "skills": set(skills),
-    }
-
-
-def read_manifest():
-    if not MANIFEST.exists():
-        return None
-    return json.loads(MANIFEST.read_text())
-
-
-def repo_key(url):
-    """A stable "<owner>/<repo>"-shaped manifest key, derived generically
-    from the URL's last two path segments (not GitHub-specific, so it also
-    works for the test harness's local-path fixtures). Does not handle
-    `git@host:owner/repo.git` SSH syntax — not exercised anywhere today."""
-    segments = [s for s in url.rstrip("/").split("/") if s]
-    tail = segments[-2:] if len(segments) >= 2 else segments
-    return re.sub(r"\.git$", "", "/".join(tail))
-
-
-# --- external declarations ----------------------------------------------
-
-FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.S)
-
-
-def frontmatter_block(text):
-    m = FRONTMATTER_RE.match(text)
-    return m.group(1) if m else None
-
-
-def valid_skill_name(name):
-    """Agent Skills naming rule: 1-64 chars, lowercase a-z0-9, hyphens, no
-    leading/trailing/consecutive hyphen. Sourced from the agentskills/
-    agentskills specification, not invented."""
-    return bool(name) and len(name) <= 64 and SKILL_NAME_RE.fullmatch(name) is not None
-
-
-def _unsupported_scalar_syntax(value):
-    """True for a right-hand-side scalar this narrow line parser cannot
-    resolve the same way real YAML (yaml.safe_load, used by validate.py)
-    does: an anchor/alias/flow/block indicator or explicit tag as the
-    leading character (`&`, `*`, `|`, `>`, `{`, `[`, `!foo`, `!!str foo`),
-    or a plain-scalar inline comment (a '#' preceded by whitespace, outside
-    a fully-quoted value). Guessing past any of these risks reading a
-    different value than the validator parsed — e.g.
-    `skill-type: external # note` is the string 'external' in real YAML,
-    but this parser's own comparison would otherwise see
-    'external # note' and reject a descriptor the validator accepts."""
-    if not value:
-        return False
-    if value[0] in "&*|>{[!":
+def confirm(force):
+    if force:
         return True
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return False
-    return re.search(r"(?:^|\s)#", value) is not None
-
-
-def read_metadata_keys(skill_md, keys):
-    """Narrow, fail-closed extraction of specific keys from a SKILL.md's
-    frontmatter `metadata:` block. Returns {key: value} for whichever of
-    `keys` are actually present. A requested key present with unsupported
-    YAML syntax, or duplicated, is a hard error — never partially
-    interpreted. Other metadata keys and their values are not inspected;
-    validating the full skill frontmatter is validate.py's job, not the
-    runtime installer's."""
-    fm = frontmatter_block(skill_md.read_text())
-    if fm is None:
-        return {}
-
-    metadata = {}
-    in_metadata = False
-    for lineno, raw in enumerate(fm.splitlines(), 1):
-        if not raw.strip():
-            continue
-        if in_metadata:
-            if raw[:1] in (" ", "\t"):
-                m = re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*)$", raw)
-                if not m:
-                    sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
-                key, value = m.group(1), m.group(2).strip()
-                if key in keys:
-                    if _unsupported_scalar_syntax(value):
-                        sys.exit(f"{skill_md}:{lineno}: unsupported YAML syntax "
-                                  f"in {key!r}: {value!r}")
-                    if key in metadata:
-                        sys.exit(f"{skill_md}:{lineno}: duplicate key {key!r} in metadata")
-                    metadata[key] = _unquote(value)
-                continue
-            in_metadata = False
-        m = re.match(r"^metadata:(.*)$", raw)
-        if m:
-            if m.group(1).strip():
-                sys.exit(f"{skill_md}:{lineno}: unsupported metadata syntax: {raw!r}")
-            in_metadata = True
-
-    return metadata
-
-
-def read_external_metadata(skill_md):
-    """Narrow, fail-closed extraction of the external-* keys from an
-    installer-owned local descriptor, validated for coherence against its
-    own skill-type. Returns None when the skill declares neither
-    external-* metadata nor skill-type: external — an ordinary root
-    skill, not an external descriptor at all. Never applied to an
-    upstream SKILL.md; those are read by resolve_upstream_skill() instead
-    and carry no such skill-type requirement."""
-    metadata = read_metadata_keys(skill_md, EXTERNAL_KEYS + ("skill-type",))
-    skill_type = metadata.pop("skill-type", None)
-    has_external = any(k in metadata for k in EXTERNAL_KEYS)
-
-    if not has_external and skill_type != "external":
-        return None
-    if skill_type != "external":
-        sys.exit(f"{skill_md}: external-* metadata present but skill-type is "
-                  f"{skill_type!r}, not 'external'")
-    if "external-source" not in metadata:
-        sys.exit(f"{skill_md}: skill-type is 'external' but external-source "
-                  "is missing")
-    return metadata
-
-
-def read_skill_dependencies(skill_md):
-    """Sibling skill names from the skill-dependency metadata field,
-    comma-separated — mirrors tools/validate.py's own check_dependencies
-    parsing exactly. Returns an empty list when absent."""
-    metadata = read_metadata_keys(skill_md, ("skill-dependency",))
-    raw = metadata.get("skill-dependency") or ""
-    return [s.strip() for s in raw.split(",") if s.strip()]
-
-
-def resolve_installation_closure(direct_names, source_root):
-    """Recursively expands skill-dependency from the consumer's directly
-    adopted names, reading from source_root — the pinned skill-library
-    source tree the caller is already using, never a previously materialized
-    consumer directory. Returns the full installation closure as a set;
-    adoption.yml itself is never touched, and closure is never written
-    back to it. Fails closed (before any persistent mutation, in every
-    mode) on a dependency whose sibling skill source does not exist, or on
-    a skill-dependency cycle — both purely local, discoverable-by-
-    inspection problems, matching the same fail-closed philosophy as
-    validate_external_declaration(). A directly adopted name with no
-    source is not an error here — missing_skill_sources() reports that
-    separately, exactly as before dependency closure existed."""
-    closure = set()
-
-    def visit(name, chain):
-        if name in chain:
-            cycle = chain[chain.index(name):] + [name]
-            sys.exit(f"skill-dependency cycle: {' -> '.join(cycle)}")
-        if name in closure:
-            return
-        closure.add(name)
-        skill_md = source_root / "skills" / name / "SKILL.md"
-        if not skill_md.is_file():
-            return
-        for dep in read_skill_dependencies(skill_md):
-            dep_md = source_root / "skills" / dep / "SKILL.md"
-            if not dep_md.is_file():
-                sys.exit(f"{skill_md}: skill-dependency names missing skill {dep!r}")
-            visit(dep, chain + [name])
-
-    for name in sorted(direct_names):
-        visit(name, [])
-
-    return closure
-
-
-def validate_external_declaration(skill_md, metadata):
-    """Mirrors tools/validate.py's check_source/check_commit/check_path
-    shape rules, reimplemented locally: importing validate.py would pull in
-    PyYAML, a new runtime dependency this stdlib-only installer may not
-    add. Fails closed rather than trusting that repository CI already
-    validated this declaration."""
-    findings = []
-    source = metadata.get("external-source")
-    m = GITHUB_SOURCE_RE.fullmatch(source) if isinstance(source, str) else None
-    if not m or m.group(2).endswith(".git") or m.group(1) in (".", "..") \
-            or m.group(2) in (".", ".."):
-        findings.append("external-source must be a canonical GitHub repository "
-                         "URL (https://github.com/<owner>/<repository>)")
-
-    commit = metadata.get("external-commit")
-    if "external-commit" not in metadata:
-        findings.append("external-commit is required when external-source is present")
-    elif not EXTERNAL_COMMIT_RE.fullmatch(commit or ""):
-        findings.append("external-commit must be exactly 40 hexadecimal characters")
-
-    release = metadata.get("external-release") or None
-
-    path = metadata.get("external-path", ".")
-    if path != ".":
-        malformed = (
-            not path
-            or "\\" in path
-            or path.startswith("/")
-            or path.endswith("/")
-            or "//" in path
-            or any(seg in (".", "..") for seg in path.split("/"))
-            or any(ord(c) < 0x20 or ord(c) == 0x7f for c in path)
-        )
-        if malformed:
-            findings.append("external-path must be '.' or a normalized POSIX "
-                             "repository-relative path")
-
-    if findings:
-        sys.exit(f"{skill_md}: " + "; ".join(findings))
-
-    return {"source": source, "commit": commit.lower(), "release": release, "path": path}
-
-
-def discover_external_requirements(desired_names, source_root):
-    """One requirement per currently-desired root skill that declares an
-    external-source. Skills with no source in source_root are skipped —
-    missing_skill_sources() reports those separately.
-
-    A local external descriptor installs the external skill of the same
-    name in its place — it is not a second, differently-named runtime
-    skill. Its own directory name, its own frontmatter `name`, and the
-    name its declaration resolves to must all identify the same skill;
-    any mismatch fails closed here, before the requirement is used for
-    anything, since it is a purely local, already-known-at-parse-time
-    inconsistency."""
-    requirements = []
-    for name in sorted(desired_names):
-        skill_md = source_root / "skills" / name / "SKILL.md"
-        if not skill_md.is_file():
-            continue
-        metadata = read_external_metadata(skill_md)
-        if metadata is None:
-            continue
-        local_name = read_upstream_name(skill_md)
-        if local_name != name:
-            sys.exit(f"{skill_md}: frontmatter name {local_name!r} does not "
-                      f"match its directory {name!r}")
-        decl = validate_external_declaration(skill_md, metadata)
-        exposed = exposed_name_for(decl["source"], decl["path"])
-        if exposed != name:
-            sys.exit(
-                f"{skill_md}: external descriptor {name!r} resolves to a "
-                f"different external skill name {exposed!r} — a local "
-                "external descriptor installs the external skill of the "
-                "same name, never a differently-named alias"
-            )
-        requirements.append({"adapter": name, **decl})
-    return requirements
-
-
-def exposed_name_for(source, path):
-    if path == ".":
-        return GITHUB_SOURCE_RE.fullmatch(source).group(2)
-    return path.rsplit("/", 1)[-1]
-
-
-def dedupe_external_repos(requirements):
-    """{repo_key: {"source", "commit", "adapters"}}, plus a list of
-    blocking repository-revision-conflict findings (same repository
-    required at two different commits)."""
-    repos = {}
-    conflicts = []
-    for req in requirements:
-        key = repo_key(req["source"])
-        existing = repos.get(key)
-        if existing is None:
-            repos[key] = {"source": req["source"], "commit": req["commit"],
-                          "adapters": [req["adapter"]]}
-        elif existing["commit"] != req["commit"]:
-            conflicts.append(
-                f"external repository revision conflict: {key} required at "
-                f"{existing['commit'][:12]} (by {', '.join(existing['adapters'])}) "
-                f"and {req['commit'][:12]} (by {req['adapter']})"
-            )
-        else:
-            existing["adapters"].append(req["adapter"])
-    return repos, conflicts
-
-
-def dedupe_external_skills(requirements):
-    """{exposed_name: {"source", "commit", "path", "repo_key", "adapters"}},
-    plus a list of blocking same-name-different-identity collisions."""
-    skills = {}
-    conflicts = []
-    for req in requirements:
-        name = exposed_name_for(req["source"], req["path"])
-        identity = (req["source"], req["commit"], req["path"])
-        existing = skills.get(name)
-        if existing is None:
-            skills[name] = {"source": req["source"], "commit": req["commit"],
-                            "path": req["path"], "repo_key": repo_key(req["source"]),
-                            "adapters": [req["adapter"]]}
-        elif (existing["source"], existing["commit"], existing["path"]) != identity:
-            conflicts.append(
-                f"external skill collision: {name!r} required as "
-                f"{existing['source']}@{existing['commit'][:12]}:{existing['path']} "
-                f"(by {', '.join(existing['adapters'])}) and "
-                f"{req['source']}@{req['commit'][:12]}:{req['path']} (by {req['adapter']})"
-            )
-        else:
-            existing["adapters"].append(req["adapter"])
-    return skills, conflicts
-
-
-def valid_repo_key(key):
-    """A repo_key is exactly two non-empty path segments, neither of which
-    is '.' or '..' — the only shape external_vendor_path() may safely turn
-    into a filesystem path. Rejects anything with a different segment
-    count (traversal chains, absolute paths, extra segments) as well as a
-    single-dot or double-dot segment."""
-    if not isinstance(key, str):
-        return False
-    parts = key.split("/")
-    if len(parts) != 2:
-        return False
-    owner, repo = parts
-    if not owner or not repo or owner in (".", "..") or repo in (".", ".."):
-        return False
-    return True
-
-
-def external_vendor_path(key):
-    """Resolves a repo_key to its canonical vendor path. The shape check
-    above should already guarantee containment, but a path derived from
-    external or persisted-manifest input is never trusted on syntactic
-    validation alone — resolved containment beneath VENDOR_ROOT is checked
-    independently as a second, unconditional gate. Raises ValueError for a
-    key the caller must treat as malformed, never silently proceeding."""
-    if not valid_repo_key(key):
-        raise ValueError(f"malformed repository key: {key!r}")
-    owner, repo = key.split("/")
-    path = VENDOR_ROOT / owner / repo
-    try:
-        path.resolve().relative_to(VENDOR_ROOT.resolve())
-    except ValueError:
-        raise ValueError(f"repository key escapes the vendor root: {key!r}")
-    return path
-
-
-def check_external_git(path, expected_origin, expected_commit):
-    """Mirrors check_git()'s checks, generalized to any path/identity and
-    reporting instead of raising. Uses `git config --get remote.origin.url`
-    for the literal configured origin rather than `git remote get-url`, so
-    a test harness may rewrite transport via Git `insteadOf` without
-    disturbing what this check reads back."""
-    if not (path / ".git").exists():
-        return [f"{path}: not a git checkout (.git missing)"]
-
-    findings = []
-    head = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"],
-                          capture_output=True, text=True)
-    actual_head = head.stdout.strip()
-    if head.returncode != 0 or actual_head != expected_commit:
-        findings.append(
-            f"{path}: HEAD mismatch: expected={expected_commit[:12]} "
-            f"HEAD={(actual_head or '<unreadable>')[:12]}"
-        )
-
-    detached = subprocess.run(["git", "-C", str(path), "symbolic-ref", "-q", "HEAD"],
-                              capture_output=True, text=True)
-    if detached.returncode == 0:
-        findings.append(
-            f"{path}: HEAD is attached to a branch ({detached.stdout.strip()}); "
-            "expected a detached HEAD"
-        )
-
-    status = subprocess.run(["git", "-C", str(path), "status", "--porcelain"],
-                            capture_output=True, text=True)
-    if status.returncode != 0:
-        findings.append(f"{path}: git status failed: {status.stderr.strip()}")
-    elif status.stdout.strip():
-        findings.append(f"{path}: working tree is dirty")
-
-    origin = subprocess.run(["git", "-C", str(path), "config", "--get",
-                             "remote.origin.url"], capture_output=True, text=True)
-    actual_origin = origin.stdout.strip()
-    if origin.returncode != 0 or actual_origin != expected_origin:
-        findings.append(
-            f"{path}: origin mismatch: expected={expected_origin} "
-            f"origin={actual_origin or '<none>'}"
-        )
-
-    return findings
-
-
-def read_upstream_name(skill_md):
-    """Top-level frontmatter `name:` scalar. Returns None on absence,
-    duplication, or unsupported syntax — the caller treats None as
-    invalid, never as an assumed match."""
-    fm = frontmatter_block(skill_md.read_text())
-    if fm is None:
-        return None
-    name = None
-    for raw in fm.splitlines():
-        if not raw.strip() or raw[:1] in (" ", "\t"):
-            continue
-        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", raw)
-        if not m:
-            continue
-        key, value = m.group(1), m.group(2).strip()
-        if key == "name":
-            if name is not None:
-                return None
-            if value and value[0] in "&*|>{[":
-                return None
-            name = _unquote(value)
-    return name
-
-
-def resolve_upstream_skill(checkout, path, exposed_name):
-    """Resolve external-path inside an external checkout and validate the
-    upstream skill identity against the canonically-derived exposed_name
-    (from exposed_name_for() — the repository directory name for '.', or
-    the path's own basename). Never derived from the physical checkout
-    directory's own name, which may be an ephemeral temp fetch directory.
-    Returns (skill_dir, None) on success, or (None, reason) on failure."""
-    base = (checkout / path).resolve() if path != "." else checkout.resolve()
-    try:
-        base.relative_to(checkout.resolve())
-    except ValueError:
-        return None, f"external-path escapes the checkout: {path!r}"
-
-    skill_md = base / "SKILL.md"
-    if not skill_md.is_file():
-        return None, f"no SKILL.md at external-path {path!r}"
-
-    upstream_name = read_upstream_name(skill_md)
-    if upstream_name is None or not valid_skill_name(upstream_name):
-        return None, f"upstream name {upstream_name!r} does not satisfy the " \
-                     "Agent Skills naming rule"
-    if upstream_name != exposed_name:
-        return None, (f"upstream name {upstream_name!r} does not match the "
-                       f"expected directory name {exposed_name!r}")
-    return base, None
-
-
-def stub_content(name):
-    return (
-        "---\n"
-        f'name: "{name}"\n'
-        f'description: "Fallback stub for external skill {name}."\n'
-        "license: MIT\n"
-        "---\n"
-    )
-
-
-def classify_prior_external(manifest, root_key):
-    """Partition every non-root manifest repository/skill entry into
-    proven / unprovable / malformed. A skill inherits its repository's
-    status once its own record shape is confirmed well-formed. Root-owned
-    entries (real root skills and stubs alike, repository == root_key) are
-    entirely out of scope here — they are never subject to external proof."""
-    repositories = (manifest or {}).get("repositories")
-    repositories = repositories if isinstance(repositories, dict) else {}
-    skills = (manifest or {}).get("skills")
-    skills = skills if isinstance(skills, dict) else {}
-
-    repo_status = {}
-    for rkey, rentry in repositories.items():
-        if rkey == root_key:
-            continue
-        if not isinstance(rentry, dict) or not isinstance(rentry.get("source"), str) \
-                or not isinstance(rentry.get("commit"), str):
-            repo_status[rkey] = ("malformed", "repository record is not a "
-                                  "well-formed {source, commit} object")
-            continue
+    while True:
         try:
-            vendor_path = external_vendor_path(rkey)
-        except ValueError as e:
-            repo_status[rkey] = ("malformed", str(e))
-            continue
-        findings = check_external_git(vendor_path, rentry["source"], rentry["commit"])
-        if findings:
-            repo_status[rkey] = ("unprovable", "; ".join(findings))
-        else:
-            repo_status[rkey] = ("proven", None)
-
-    skill_status = {}
-    for name, entry in skills.items():
-        if not isinstance(entry, dict):
-            skill_status[name] = ("malformed", "manifest entry is not an object")
-            continue
-        rkey = entry.get("repository")
-        if rkey == root_key:
-            continue
-        if not isinstance(rkey, str) or not isinstance(entry.get("source"), str) \
-                or not isinstance(entry.get("mode"), str) \
-                or not isinstance(entry.get("tree_hash"), str):
-            skill_status[name] = ("malformed", "manifest entry is not well-formed")
-            continue
-        if rkey not in repo_status:
-            skill_status[name] = ("malformed", f"references unknown repository {rkey!r}")
-            continue
-        skill_status[name] = repo_status[rkey]
-
-    return repo_status, skill_status
+            response = input("Continue? [Y/n] ")
+        except EOFError:
+            sys.exit("\nno confirmation available; pass --force for non-interactive use")
+        response = response.strip().lower()
+        if response in ("", "y"):
+            return True
+        if response == "n":
+            return False
+        print("Please answer 'y' or 'n'.")
 
 
-# --- vendor git checkout -------------------------------------------------
+# --- bindings: --bindings FILE parsing ------------------------------------
 
 
-def check_git(adoption):
-    """Check the installed Git checkout."""
-    if not (VENDOR / ".git").exists():
-        return ["vendor tree is not a git checkout (.git missing)"]
+def parse_bindings_file(path):
+    """{(section, label): value} from the narrow --bindings structure:
 
-    findings = []
+        bindings:
+          "Section":
+            "Label": "value"
 
-    head = subprocess.run(
-        ["git", "-C", str(VENDOR), "rev-parse", "HEAD"],
-        capture_output=True, text=True,
-    )
-    actual_head = head.stdout.strip()
-    if head.returncode != 0 or actual_head != adoption["pin"]:
-        findings.append(
-            f"HEAD mismatch: adoption.yml={adoption['pin'][:12]} "
-            f"HEAD={(actual_head or '<unreadable>')[:12]}"
-        )
+    Fails closed on invalid YAML, a duplicate key at any level (section or
+    binding label), an unexpected top-level key, wrong nesting, or any
+    value that is not a plain string. An empty or whitespace-only value
+    does not stage a binding decision — check_bindings.evaluate_text()
+    treats either the same way, and this must not compete with that
+    classification."""
+    try:
+        data = check_skills.load_yaml_no_duplicates(path.read_text())
+    except yaml.YAMLError as e:
+        sys.exit(f"{path}: invalid YAML ({check_skills.yaml_error_summary(e)})")
 
-    detached = subprocess.run(
-        ["git", "-C", str(VENDOR), "symbolic-ref", "-q", "HEAD"],
-        capture_output=True, text=True,
-    )
-    if detached.returncode == 0:
-        findings.append(
-            f"HEAD is attached to a branch ({detached.stdout.strip()}); "
-            "expected a detached HEAD"
-        )
+    if not isinstance(data, dict) or set(data) != {"bindings"}:
+        sys.exit(f"{path}: expected the sole top-level key 'bindings'")
 
-    status = subprocess.run(
-        ["git", "-C", str(VENDOR), "status", "--porcelain"],
-        capture_output=True, text=True,
-    )
-    if status.returncode != 0:
-        findings.append(f"git status failed: {status.stderr.strip()}")
-    elif status.stdout.strip():
-        findings.append("vendor working tree is dirty")
+    sections = data["bindings"]
+    if not isinstance(sections, dict):
+        sys.exit(f"{path}: 'bindings' must be a mapping of section name to bindings")
 
-    origin = subprocess.run(
-        ["git", "-C", str(VENDOR), "remote", "get-url", "origin"],
-        capture_output=True, text=True,
-    )
-    actual_origin = origin.stdout.strip()
-    if origin.returncode != 0 or actual_origin != adoption["repo"]:
-        findings.append(
-            f"origin mismatch: adoption.yml={adoption['repo']} "
-            f"origin={actual_origin or '<none>'}"
-        )
+    result = {}
+    for section, labels in sections.items():
+        if not isinstance(section, str):
+            sys.exit(f"{path}: section name {section!r} must be a string")
+        if not isinstance(labels, dict):
+            sys.exit(f"{path}: section {section!r} must be a mapping of binding "
+                     "label to value")
+        for label, value in labels.items():
+            if not isinstance(label, str):
+                sys.exit(f"{path}: binding label {label!r} in section {section!r} "
+                         "must be a string")
+            if not isinstance(value, str):
+                sys.exit(f"{path}: [{section}] {label!r} must be a scalar string "
+                         f"value, got {value!r}")
+            if value.strip():
+                result[(section, label)] = value
 
-    return findings
+    return result
 
 
-def resolve_sha(repo_url, ref):
-    result = subprocess.run(
-        ["git", "ls-remote", repo_url, ref, f"refs/tags/{ref}",
-         f"refs/tags/{ref}^{{}}", f"refs/heads/{ref}"],
-        capture_output=True, text=True,
-    )
-    pairs = [line.split("\t") for line in result.stdout.splitlines()]
-    # An annotated tag resolves to its own object sha unless peeled; a
-    # `^{}` match is the commit that tag points at, which is what
-    # `git checkout <sha>` actually lands on, so prefer it when present.
-    for sha, name in pairs:
-        if name.endswith("^{}"):
-            return sha
-    for sha, name in pairs:
-        return sha
-    sys.exit(f"Could not resolve {ref!r} from {repo_url}")
+def validate_bindings_against_project(consumer_root, supplied, project_text_override=None):
+    """Stop if a supplied (section, label) does not structurally exist in
+    PROJECT.md at all — independent of whether that section is currently
+    applicable."""
+    text = project_text_override or (consumer_root / "PROJECT.md").read_text()
+    sections, lines = check_bindings.parse_project_md(text)
+    by_name = {s["name"]: s for s in sections}
+    for section, label in supplied:
+        s = by_name.get(section)
+        if s is None:
+            sys.exit(f"--bindings: unknown PROJECT.md section {section!r}")
+        table = check_bindings.find_table(lines, s)
+        if table is None or label not in {lbl for _, lbl, _ in table["rows"]}:
+            sys.exit(f"--bindings: unknown binding {label!r} in section {section!r}")
 
 
-def fetch_tree(repo_url, sha, sibling_of):
-    """Clone repo_url at sha into a fresh directory that is a direct
-    sibling of sibling_of (same parent, hence guaranteed same filesystem),
-    so the result can be handed to atomic_replace_dir without an EXDEV
-    risk. Not nested under an intermediate temp directory."""
-    tmp = Path(tempfile.mkdtemp(
-        dir=sibling_of.parent, prefix=f".{sibling_of.name}.fetch-"
-    ))
-    subprocess.run(
-        ["git", "clone", "--quiet", "--no-checkout", repo_url, str(tmp)],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp), "checkout", "--quiet", sha],
-        check=True,
-    )
-    return tmp
-
-
-def check_release(adoption):
-    """A declared release must resolve to the declared commit. Reuses the
-    already-fixed resolve_sha (peels annotated tags). Needs network."""
-    if not adoption["tag"]:
+def bazel_default(section, label, consumer_root):
+    """The only inferred default this workorder authorizes."""
+    if section != "Build authority":
         return None
-    resolved = resolve_sha(adoption["repo"], adoption["tag"])
-    if resolved != adoption["pin"]:
-        return (f"release {adoption['tag']!r} resolves to {resolved[:12]}, "
-                f"not the declared commit {adoption['pin'][:12]}")
+    if (consumer_root / "MODULE.bazel").exists():
+        dep_file = "MODULE.bazel"
+    elif (consumer_root / "WORKSPACE.bazel").exists():
+        dep_file = "WORKSPACE.bazel"
+    elif (consumer_root / "WORKSPACE").exists():
+        dep_file = "WORKSPACE"
+    else:
+        return None
+    if label == "Build system":
+        return "Bazel"
+    if label == "Dependency declaration":
+        return dep_file
     return None
 
 
-def differing_candidate_updater(tree):
-    """The fetched tree's own installer, when it differs from the running one."""
-    path = tree / "skills" / "skill-installer" / "scripts" / "install.py"
-    if not path.is_file():
-        return None
-    if path.read_bytes() == SELF_PATH.read_bytes():
-        return None
-    return path
+def prompt_binding(section, label, default):
+    """A chosen value, "" for an explicit leave-unresolved choice. Raises
+    EOFError when no interactive input is available at all."""
+    suffix = f" [{default}]" if default else ""
+    response = input(f"[{section}] {label}{suffix} "
+                     "(Enter to accept default, '-' to leave unresolved): ").strip()
+    if response == "-":
+        return ""
+    if not response and default:
+        return default
+    return response
 
 
-# --- skill materialization and ownership --------------------------------
+def resolve_bindings(consumer_root, target_inventory, bindings_path, project_text_override=None):
+    """(staged: [(section, label, value)], remaining_unresolved: [(section, label)]).
+    Precedence: existing PROJECT.md value -> --bindings value (when currently
+    unresolved) -> interactive prompt -> unresolved. Nothing is written here."""
+    result = check_bindings.evaluate(consumer_root, inventory=target_inventory,
+                                     text_override=project_text_override)
 
+    supplied = {}
+    if bindings_path is not None:
+        supplied = parse_bindings_file(bindings_path)
+        validate_bindings_against_project(consumer_root, supplied, project_text_override)
 
-def owned_from_manifest(manifest):
-    """{name: repository} for every manifest-owned skill. Anything not the
-    current manifest shape (missing repositories, non-dict skills) yields
-    an empty owned set rather than being misread as ownership data — this
-    is what makes the old IS-3P-04 manifest (a different path, a different
-    shape) harmless on first run after this change. A skill key that fails
-    the Agent Skills naming rule is never added to owned — the manifest
-    key becomes a filesystem path component later, so a traversal or
-    absolute key must fail closed here, before categorize_names() or any
-    cleanup logic can see it."""
-    if not manifest or not isinstance(manifest.get("repositories"), dict):
-        return {}
-    skills = manifest.get("skills")
-    if not isinstance(skills, dict):
-        return {}
-    owned = {}
-    for name, info in skills.items():
-        if isinstance(info, dict) and isinstance(info.get("repository"), str):
-            if not valid_skill_name(name):
-                sys.exit(f"manifest skill name {name!r} does not satisfy "
-                         "the Agent Skills naming rule")
-            owned[name] = info["repository"]
-    return owned
+    resolved_map = {(r["section"], r["binding"]): r["value"] for r in result["resolved"]}
+    for (section, label), value in supplied.items():
+        if (section, label) in resolved_map and resolved_map[(section, label)] != value:
+            sys.exit(f"--bindings supplies [{section}] {label!r} = {value!r}, but "
+                     f"PROJECT.md already records {resolved_map[(section, label)]!r}")
 
-
-def categorize_names(desired, owned):
-    """One pass over desired | owned, classifying each name. `desired` and
-    `owned` are both {name: repo_key} maps, covering root and external
-    names uniformly — a name whose owned key differs from its desired key
-    is a same-name-different-source collision regardless of whether either
-    side is root or external. `owned` must already be pre-filtered by the
-    caller to only the entries this reconciliation pass has authority over
-    (root's own entries, plus external entries proven this run); a name in
-    neither map is never visited, so unrelated .agents/skills/ content, and
-    any not-yet-resolved external name, is preserved by construction."""
-    added, removed, unchanged, collision = set(), set(), set(), set()
-    for name in desired.keys() | owned.keys():
-        if name in desired and name in owned:
-            if owned[name] == desired[name]:
-                unchanged.add(name)
-            else:
-                collision.add(name)
-        elif name in desired:
-            if (SKILLS_ROOT / name).exists():
-                collision.add(name)
-            else:
-                added.add(name)
+    staged, remaining_unresolved = [], []
+    for entry in result["unresolved"]:
+        section, label = entry["section"], entry["binding"]
+        if (section, label) in supplied:
+            staged.append((section, label, supplied[(section, label)]))
+            continue
+        default = bazel_default(section, label, consumer_root)
+        try:
+            value = prompt_binding(section, label, default)
+        except EOFError:
+            sys.exit(f"unresolved binding [{section}] {label!r} and no interactive "
+                     "input is available; supply --bindings to resolve it")
+        if value:
+            staged.append((section, label, value))
         else:
-            removed.add(name)
-    return added, removed, unchanged, collision
+            remaining_unresolved.append((section, label))
+
+    return staged, remaining_unresolved
 
 
-def missing_skill_sources(names, source_root):
-    return sorted(
-        name for name in names
-        if not (source_root / "skills" / name / "SKILL.md").is_file()
+def write_bindings(consumer_root, staged):
+    if not staged:
+        return
+    project_md = consumer_root / "PROJECT.md"
+    text = project_md.read_text()
+    lines = text.splitlines()
+    for section, label, value in staged:
+        located = check_bindings.locate_binding(text, section, label)
+        if located is None:
+            sys.exit(f"PROJECT.md: could not locate binding [{section}] {label!r} to write")
+        line_idx, _ = located
+        lines[line_idx] = check_bindings.replace_binding_line(label, value)
+    new_text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+    # Reparse the staged document before writing it: a label or value
+    # containing a literal pipe must still round-trip as exactly the
+    # intended value, never as extra table columns.
+    for section, label, value in staged:
+        relocated = check_bindings.locate_binding(new_text, section, label)
+        if relocated is None or relocated[1] != value:
+            sys.exit(f"PROJECT.md: staged binding write for [{section}] {label!r} "
+                     "did not reparse to the intended value; refusing to write")
+
+    project_md.write_text(new_text)
+
+
+# --- adoption.yml commit/release rewrite ----------------------------------
+
+
+def _detect_skills_indent(text):
+    """Leading-space count before the '-' of the first skills: list item's
+    dash, for a block-style skills list — None for flow-style or absent.
+    Used only to configure the round-trip dumper's sequence indent so a
+    commit/release edit does not reformat an untouched skills list."""
+    m = re.search(r"^skills:[ \t]*(?:#.*)?$", text, re.M)
+    if not m:
+        return None
+    item = re.search(r"^([ \t]*)-", text[m.end():], re.M)
+    return len(item.group(1)) if item else None
+
+
+def stage_adoption_edit(adoption_yaml, commit, release):
+    """The exact adoption.yml text an --update would write — parsed,
+    produced, and validated in full before any confirmation or mutation, so
+    an unsupported representation is never discovered only after
+    PROJECT.md, AGENTS.md, or adoption state has already been written.
+    Never touches disk itself; the caller writes the returned text verbatim
+    after confirmation, with no recomputation.
+
+    Round-trips through ruamel.yaml so only commit/release change: source,
+    skills, comments, key order, and the document's block-or-flow style
+    survive untouched, and a duplicate key is still rejected. Fails closed
+    (sys.exit, no write) if the edit cannot preserve those contracts."""
+    original_text = adoption_yaml.read_text()
+    original = check_skills.parse_adoption_text(original_text, str(adoption_yaml))
+
+    yaml_rt = YAML(typ="rt")
+    # A source URL or commit line is never line-wrapped: ruamel's default
+    # scalar width would otherwise fold a long, but untouched, source: line
+    # onto a second line, a formatting change this function must not make.
+    yaml_rt.width = 2**30
+    indent = _detect_skills_indent(original_text)
+    if indent is not None:
+        yaml_rt.indent(mapping=2, sequence=indent + 2, offset=indent)
+
+    try:
+        data = yaml_rt.load(io.StringIO(original_text))
+    except YAMLError as e:
+        sys.exit(f"{adoption_yaml}: cannot stage an update "
+                 f"({check_skills.yaml_error_summary(e)})")
+    if not isinstance(data, CommentedMap) or "commit" not in data:
+        sys.exit(f"{adoption_yaml}: cannot stage an update — 'commit' key not "
+                 "found at the top level")
+
+    data["commit"] = commit
+    release_value = release if release else DoubleQuotedScalarString("")
+    if "release" in data:
+        data["release"] = release_value
+    else:
+        data.insert(list(data).index("commit") + 1, "release", release_value)
+
+    out = io.StringIO()
+    yaml_rt.dump(data, out)
+    staged_text = out.getvalue()
+
+    staged = check_skills.parse_adoption_text(staged_text, str(adoption_yaml))
+    if staged["repo"] != original["repo"] or staged["skills"] != original["skills"]:
+        sys.exit(f"{adoption_yaml}: staged update would change 'source' or "
+                 "'skills'; refusing to update")
+    if staged["pin"] != commit or (staged["tag"] or "") != (release or ""):
+        sys.exit(f"{adoption_yaml}: staged update does not reflect the "
+                 "intended commit/release; refusing to update")
+
+    return staged_text
+
+
+# --- state classification --------------------------------------------
+
+
+def independent_damage_findings(findings, root_key):
+    """Findings that, whenever present, always indicate corruption of
+    previously installed content — independent of whether declared intent
+    has also changed: a hash mismatch, unproven external ownership, a
+    materialized skill that has gone missing, or a structurally malformed
+    manifest container. Never collision/missing-source/stale — those are
+    namespace or declaration problems, not corruption of content this
+    installer previously owned, and routing them here would incorrectly
+    suggest --repair can fix an unrelated occupied path (it can't; it hits
+    the same block --repair does today).
+
+    The "manifest" category also carries evaluate()'s own root-identity
+    check, which compares the manifest's recorded commit/source against
+    the CURRENTLY DECLARED adoption target (subject == root_key) — that
+    comparison is exactly as intent-relative as a vendor HEAD or origin
+    mismatch, expected to differ whenever intent changes, and is excluded
+    here for the same reason vendor_previously_damaged() never consults
+    head_matches/origin_matches against a new target. A missing entry for
+    an unchanged root_key is still caught independently, by
+    vendor_previously_damaged()'s own fail-closed manifest-evidence
+    check."""
+    return [f for f in findings
+            if f["category"] in ("hash", "external-ownership")
+            or (f["category"] == "manifest" and f["subject"] != root_key)
+            or (f["category"] == "materialization" and f["severity"] == "damage")]
+
+
+def vendor_previously_damaged(consumer_root, adoption, manifest_path):
+    """Whether the vendor checkout's state contradicts the manifest's own
+    recorded evidence of what was previously installed — checked against
+    that recorded commit and source, never against any newly declared
+    target, so a legitimate adoption.yml edit is never itself treated as
+    damage. All four checkout properties (HEAD, origin, cleanliness,
+    branch attachment) are compared against the manifest's identity: a
+    HEAD or origin that no longer matches what the manifest recorded is
+    exactly as much evidence of corruption as a dirty tree or an attached
+    branch — excluding either would leave that corruption undetected.
+    Malformed or missing manifest evidence for the root itself fails
+    closed (treated as damaged): there is nothing safe to compare
+    against."""
+    manifest_data, manifest_error = check_skills.read_manifest_safe(manifest_path)
+    if manifest_error is not None or manifest_data is None:
+        return True
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    repositories = manifest_data.get("repositories")
+    repo_entry = repositories.get(root_key_) if isinstance(repositories, dict) else None
+    if not isinstance(repo_entry, dict) or not isinstance(repo_entry.get("commit"), str) \
+            or not isinstance(repo_entry.get("source"), str):
+        return True
+    vendor_root = consumer_root / ".agents" / "vendor"
+    try:
+        vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    except ValueError:
+        return True
+    inspected = git_ops.inspect_checkout(vendor, repo_entry["source"], repo_entry["commit"])
+    if not inspected["exists"]:
+        return False  # absence is handled by the manifest/generated-present gate in classify()
+    return not (inspected["head_matches"] and inspected["origin_matches"]
+               and inspected["detached"] and inspected["clean"])
+
+
+def classify(consumer_root, clients, txn, cache):
+    """One of "bootstrap", "adoption-invalid" (not repairable), "damaged"
+    (repairable), "pending-install", "reconcile", "in-sync". txn/cache are
+    this run's transaction-staging state (see ensure_transaction_dir()),
+    threaded through to preview_result() so a candidate it stages here can
+    be reused for promotion in reconcile() rather than fetched again."""
+    adoption_yaml = consumer_root / ".agents" / "adoption.yml"
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    vendor_root = consumer_root / ".agents" / "vendor"
+    skills_root = consumer_root / ".agents" / "skills"
+
+    if not adoption_yaml.exists():
+        return {"state": "bootstrap"}
+
+    adoption, adoption_error = check_skills.read_adoption_safe(adoption_yaml)
+    if adoption is None:
+        return {"state": "adoption-invalid",
+                "reason": adoption_error or f"{adoption_yaml} is malformed"}
+
+    manifest_present = manifest_path.exists()
+    generated_present = (
+        (vendor_root.is_dir() and any(vendor_root.iterdir()))
+        or (skills_root.is_dir() and any(skills_root.iterdir()))
     )
 
+    result = preview_result(consumer_root, adoption, clients, txn, cache)
 
-def tree_hash(directory):
-    """One SHA-256 over every file in the directory, length-prefixed to
-    avoid the path/content boundary ambiguity of raw concatenation. Not a
-    per-file hash map — one hash for the whole skill."""
-    h = hashlib.sha256()
-    for p in sorted(directory.rglob("*")):
-        if p.is_file():
-            rel = str(p.relative_to(directory)).encode()
-            content = p.read_bytes()
-            h.update(len(rel).to_bytes(4, "big"))
-            h.update(rel)
-            h.update(len(content).to_bytes(8, "big"))
-            h.update(content)
-    return h.hexdigest()
+    if not manifest_present and not generated_present:
+        return {"state": "pending-install", "adoption": adoption, "result": result}
+
+    if not manifest_present:
+        return {"state": "damaged", "adoption": adoption, "result": result,
+                "reason": "manifest absent but generated installer state already exists"}
+
+    # Existing installation integrity is assessed before, and independent
+    # of, whether declared intent also changed — a changed pin must never
+    # shortcut past real corruption of what was previously installed (see
+    # vendor_previously_damaged() and independent_damage_findings()).
+    if vendor_previously_damaged(consumer_root, adoption, manifest_path) \
+            or independent_damage_findings(result["findings"],
+                                           check_skills.repo_key(adoption["repo"])):
+        return {"state": "damaged", "adoption": adoption, "result": result,
+                "reason": "existing installation integrity findings exist, "
+                          "independent of any declared intent change"}
+
+    # A root pin change is an intent change even when it leaves every
+    # skill's ownership (name -> repository) exactly as it was — added/
+    # removed/collision/stale only ever compare ownership, never revision.
+    intent_matches = not (result["added"] or result["removed"] or result["collision"]
+                         or result["stale"]) and result["vendor_pin_matches"]
+    # Client-exposure damage is excluded here: it only ever appears when
+    # --client was explicitly passed, and explicit client selection is
+    # itself a standing request to (re)wire that client now, in any mode —
+    # never a reason to block default mode and redirect to --repair.
+    damage_findings = [f for f in result["findings"]
+                       if f["severity"] == "damage" and f["category"] != "client-exposure"]
+
+    if not intent_matches:
+        return {"state": "reconcile", "adoption": adoption, "result": result}
+    if damage_findings:
+        return {"state": "damaged", "adoption": adoption, "result": result,
+                "reason": "declared intent matches the manifest, but integrity "
+                          "findings exist"}
+    return {"state": "in-sync", "adoption": adoption, "result": result}
 
 
-def verify_materialized_skills(manifest):
-    findings = []
-    if not manifest:
-        return findings
-    for name, info in manifest.get("skills", {}).items():
-        dest = SKILLS_ROOT / name
-        if not dest.is_dir():
-            findings.append(f"materialized skill missing: {name}")
-            continue
-        if tree_hash(dest) != info.get("tree_hash"):
-            findings.append(f"materialized skill content mismatch: {name}")
-    return findings
+def print_findings(findings):
+    for f in findings:
+        print(f"  {f['severity'].upper():8} [{f['category']}] {f['subject']}: {f['detail']}")
 
 
-def atomic_replace_dir(new_dir, dest):
-    """Swap new_dir into dest's place. new_dir must already BE a sibling of
-    dest (same parent directory, hence guaranteed same filesystem) — not a
-    subdirectory of one, or the renames below could fail with EXDEV.
+# --- mutation primitives ---------------------------------------------
 
-    Not crash-atomic: there is a brief window, between the two renames,
-    where dest doesn't exist. What this does guarantee: no EXDEV (both
-    renames are same-filesystem by construction), and any *exception*
-    raised by the second rename (disk full, permission error) is caught
-    and rolled back within this call.
-    """
+
+def fetch_tree(repo_url, sha, sibling_of):
+    tmp = Path(tempfile.mkdtemp(dir=sibling_of.parent, prefix=f".{sibling_of.name}.fetch-"))
+    git_ops.acquire_tree(repo_url, sha, tmp)
+    return tmp
+
+
+# --- transaction staging: .agents/.tmp/<transaction-id>/ ------------------
+#
+# One disposable staging root per install.py run, used only to inspect a
+# not-yet-locally-present root revision and construct the complete
+# mutation plan before confirmation. Nothing here is installed state: nothing
+# is promoted until after confirmation, and cleanup removes only this run's
+# own transaction directory, never a broader .agents/.tmp/ sweep.
+
+
+def ensure_transaction_dir(consumer_root, txn):
+    """txn: {"dir": Path|None}. Creates .agents/.tmp/<transaction-id>/ on
+    first actual use only — bootstrap, pending-install, and in-sync runs
+    that never need inspection never touch .agents/.tmp at all. The
+    specific transaction-id path is checked for an unsafe symlink at
+    creation time too, in addition to containment_preflight()'s check of
+    .agents/.tmp itself at the top of the run."""
+    if txn["dir"] is not None:
+        return txn["dir"]
+    tmp_root = consumer_root / ".agents" / ".tmp"
+    txn_dir = tmp_root / uuid.uuid4().hex[:12]
+    require_safe_path(consumer_root, txn_dir)
+    txn_dir.mkdir(parents=True)
+    txn["dir"] = txn_dir
+    return txn_dir
+
+
+def stage_candidate(consumer_root, txn, cache, source, commit):
+    """Acquires (source, commit) into this run's transaction directory
+    exactly once, reusing a prior acquisition of the identical pair within
+    the same run. cache: {(source, commit): Path}."""
+    key = (source, commit)
+    if key not in cache:
+        txn_dir = ensure_transaction_dir(consumer_root, txn)
+        dest = txn_dir / f"candidate-{len(cache)}"
+        git_ops.acquire_tree(source, commit, dest)
+        cache[key] = dest
+    return cache[key]
+
+
+def take_staged_candidate(cache, source, commit):
+    """Removes and returns a staged path from the cache — used immediately
+    before promotion, so no later caller in this same run can be handed a
+    path that promotion is about to rename away."""
+    return cache.pop((source, commit))
+
+
+def cleanup_transaction(txn):
+    """Removes only this run's own transaction directory. If it has been
+    replaced by a symlink since creation, this refuses to remove through
+    it and reports the anomaly instead of silently deleting whatever it
+    now points at."""
+    txn_dir = txn["dir"]
+    if txn_dir is None:
+        return
+    if txn_dir.is_symlink():
+        print(f"NOTE: {txn_dir} became a symlink; not removing it", file=sys.stderr)
+        return
+    if txn_dir.exists():
+        shutil.rmtree(txn_dir, ignore_errors=True)
+
+
+def atomic_replace_dir(new_dir, dest, keep_backup=False):
+    """Atomically replaces dest with new_dir via same-filesystem rename,
+    keeping dest's previous content as a recoverable backup until the
+    rename succeeds. By default the backup is removed immediately once the
+    rename succeeds; keep_backup=True instead returns its path (None when
+    dest did not previously exist) so the caller can defer removal until a
+    later verification step succeeds, and restore it if that verification
+    fails — used for the root vendor swap, whose candidate-manifest
+    verification happens only after control returns to the caller."""
     if new_dir.parent != dest.parent:
         raise ValueError(f"{new_dir} is not a sibling of {dest}")
     backup = dest.parent / f".{dest.name}.bak-{uuid.uuid4().hex[:12]}"
@@ -1098,855 +783,911 @@ def atomic_replace_dir(new_dir, dest):
         if had_dest:
             backup.rename(dest)
         raise
-    if had_dest:
+    if had_dest and not keep_backup:
         shutil.rmtree(backup)
+    return backup if (had_dest and keep_backup) else None
 
 
-def materialize_from(name, source_dir):
-    """Copy source_dir wholesale into .agents/skills/<name>/, atomically.
-    The shared primitive behind root, external, and stub materialization."""
-    SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
-    tmp = SKILLS_ROOT / f".{name}.tmp-{uuid.uuid4().hex[:12]}"
+def materialize_from(name, source_dir, skills_root):
+    skills_root.mkdir(parents=True, exist_ok=True)
+    tmp = skills_root / f".{name}.tmp-{uuid.uuid4().hex[:12]}"
     shutil.copytree(source_dir, tmp)
     try:
-        atomic_replace_dir(tmp, SKILLS_ROOT / name)
+        atomic_replace_dir(tmp, skills_root / name)
     finally:
         if tmp.exists():
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def materialize_skill(name, source_root):
-    materialize_from(name, source_root / "skills" / name)
+def materialize_skill(name, source_root, skills_root):
+    materialize_from(name, source_root / "skills" / name, skills_root)
 
 
-def materialize_stub(name):
-    SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
-    tmp = SKILLS_ROOT / f".{name}.stub-tmp-{uuid.uuid4().hex[:12]}"
-    tmp.mkdir(parents=True)
-    (tmp / "SKILL.md").write_text(stub_content(name))
-    try:
-        materialize_from(name, tmp)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-def remove_skill(name):
-    dest = SKILLS_ROOT / name
+def remove_skill(name, skills_root):
+    dest = skills_root / name
     if dest.exists():
         shutil.rmtree(dest)
 
 
-def swap_vendor_tree(fetched_tree):
-    atomic_replace_dir(fetched_tree, VENDOR)
+def classify_external_action(vendor_root, rkey, info, proven_repo_keys):
+    """(action, detail) for one external repository's vendor destination:
+    "acquire" (nothing usable there yet), "reuse" (an already-correct,
+    proven checkout), or "blocking" (detail explains why — an occupied
+    destination without a proven prior-ownership record, or a malformed
+    key). `proven_repo_keys` is the ownership decision check-skills.py's
+    assess_external_ownership() already made — this never independently
+    re-derives whether an occupied destination may be reused or replaced
+    from its Git identity alone: a destination that exists (a dangling
+    symlink included) without a proven prior-ownership record is blocking,
+    not a candidate for reuse, even when a fresh checkout could plainly be
+    obtained instead.
 
-
-def generate_manifest(adoption, candidate_sha, root_names, ext_repos, ext_skills, stub_names):
-    """Builds the full candidate manifest from scratch. Nothing is carried
-    forward opaquely from the previous manifest: by the time a run reaches
-    this point, every previously-recorded non-root entry has already been
-    classified as proven-and-retained (folded into ext_repos/ext_skills by
-    the caller), cleanup-eligible-and-dropped (simply absent here), or
-    blocking (which would have stopped the run before this call)."""
-    key = repo_key(adoption["repo"])
-    repositories = {key: {"source": adoption["repo"], "commit": candidate_sha}}
-    for rkey, info in ext_repos.items():
-        repositories[rkey] = {"source": info["source"], "commit": info["commit"]}
-
-    skills = {}
-    for name in sorted(root_names):
-        skills[name] = {
-            "repository": key,
-            "source": f"skills/{name}",
-            "mode": COPY_MODE,
-            "tree_hash": tree_hash(SKILLS_ROOT / name),
-        }
-    for name, info in ext_skills.items():
-        skills[name] = {
-            "repository": info["repo_key"],
-            "source": info["path"],
-            "mode": COPY_MODE,
-            "tree_hash": tree_hash(SKILLS_ROOT / name),
-        }
-    for name in sorted(stub_names):
-        skills[name] = {
-            "repository": key,
-            "source": STUB_SOURCE,
-            "mode": STUB_MODE,
-            "tree_hash": tree_hash(SKILLS_ROOT / name),
-        }
-    return {"repositories": repositories, "skills": skills}
-
-
-def generated_paths(root_names, ext_repos, ext_names):
-    paths = [str(VENDOR.relative_to(CONSUMER_ROOT)) + "/"]
-    for rkey in sorted(ext_repos):
-        paths.append(str(external_vendor_path(rkey).relative_to(CONSUMER_ROOT)) + "/")
-    for name in sorted(set(root_names) | set(ext_names)):
-        paths.append(str((SKILLS_ROOT / name).relative_to(CONSUMER_ROOT)) + "/")
-    paths.append(str(MANIFEST.relative_to(CONSUMER_ROOT)))
-    return paths
-
-
-def update_git_exclude(paths):
-    """Best-effort. A missing .git/info/, or malformed existing markers,
-    prints a note and never fails the run."""
-    if not GIT_EXCLUDE.parent.is_dir():
-        print("  NOTE: .git/info does not exist; skipping local exclude update")
-        return
-
+    Pure with respect to the filesystem at call time: both the
+    pre-confirmation action plan and prepare_external_installs()'s own
+    execution call this identically, so a destination unchanged between
+    the two calls always agrees, and one that has changed is caught as
+    drift rather than silently expanding what was approved."""
     try:
-        text = GIT_EXCLUDE.read_text() if GIT_EXCLUDE.exists() else ""
-        block = "\n".join([EXCLUDE_BEGIN] + [f"/{p}" for p in paths] + [EXCLUDE_END]) + "\n"
-
-        begins = [m.start() for m in re.finditer(re.escape(EXCLUDE_BEGIN), text)]
-        ends = [m.start() for m in re.finditer(re.escape(EXCLUDE_END), text)]
-
-        if not begins and not ends:
-            sep = "" if not text or text.endswith("\n") else "\n"
-            new_text = text + sep + block
-        elif len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0]:
-            end_line_end = text.find("\n", ends[0])
-            end_line_end = end_line_end + 1 if end_line_end != -1 else len(text)
-            new_text = text[:begins[0]] + block + text[end_line_end:]
-        else:
-            print("  NOTE: .git/info/exclude has malformed infurnet-skills "
-                  "markers; skipping")
-            return
-
-        GIT_EXCLUDE.write_text(new_text)
-    except OSError as e:
-        print(f"  NOTE: could not update .git/info/exclude: {e}")
+        dest = check_skills.external_vendor_path(vendor_root, rkey)
+    except ValueError as e:
+        return "blocking", str(e)
+    occupied = dest.exists() or dest.is_symlink()
+    if occupied and rkey not in proven_repo_keys:
+        return "blocking", (f"{dest}: exists without a proven prior ownership "
+                            "record; refusing to reuse, replace, or remove it")
+    if occupied and not check_skills.check_external_git(dest, info["source"], info["commit"]):
+        return "reuse", None
+    return "acquire", None
 
 
-# --- external reconciliation (shared by report, apply, and verify) ------
-
-
-def compute_external_state(adoption, manifest, source_root):
-    """Everything report/apply/verify need to reconcile external state:
-    the resolved skill-dependency installation closure, discovered
-    requirements, deduped repository/skill requirements (with blocking
-    conflict findings), prior non-root manifest classification (proven/
-    unprovable/malformed), and the unified add/remove/unchanged/collision
-    sets across root and external names together. Fully local and offline
-    when source_root is the currently-installed VENDOR; reads a freshly
-    fetched tree during report/apply when the root vendor itself doesn't
-    yet match its declared pin."""
-    root_key_ = repo_key(adoption["repo"])
-    closure = resolve_installation_closure(adoption["skills"], source_root)
-    requirements = discover_external_requirements(closure, source_root)
-    ext_repos, repo_conflicts = dedupe_external_repos(requirements)
-    ext_skills, skill_conflicts = dedupe_external_skills(requirements)
-
-    repo_status, skill_status = classify_prior_external(manifest, root_key_)
-
-    # A local external descriptor installs the external skill of the same
-    # name in its place — discover_external_requirements() already enforces
-    # that a requirement's exposed name equals its own declaring adapter's
-    # name, so ext_skills' keys are always a subset of the resolved closure
-    # naming their own declarer. This is never a root-vs-external
-    # collision: the external install simply supersedes the local
-    # descriptor's ownership of that one name.
-    desired = {name: root_key_ for name in closure if name not in ext_skills}
-    for name, info in ext_skills.items():
-        desired[name] = info["repo_key"]
-    # A name with prior unprovable/malformed status is pulled out of normal
-    # reconciliation entirely, regardless of current desire — never silently
-    # added/removed/retained. Only --resolve (apply) or the dedicated report
-    # sections address it.
-    for name, (status, _) in skill_status.items():
-        if status in ("unprovable", "malformed"):
-            desired.pop(name, None)
-
-    manifest_skills = (manifest or {}).get("skills")
-    manifest_skills = manifest_skills if isinstance(manifest_skills, dict) else {}
-    owned = owned_from_manifest(manifest)
-    owned_for_categorize = {}
-    for name, rk in owned.items():
-        entry = manifest_skills.get(name)
-        is_stub = (rk == root_key_ and isinstance(entry, dict)
-                   and entry.get("mode") == STUB_MODE)
-        if is_stub:
-            # A stub is never subject to desired-list removal — it persists
-            # as installer-owned generated state until a real external
-            # install explicitly replaces it. If something currently
-            # desires this name, map it to that same desired key so
-            # categorize_names treats it as trivially satisfiable (never a
-            # collision, even though the stub's directory already exists
-            # on disk) — this is the carve-out that lets a real install
-            # overwrite it freely. If nothing currently desires it, exclude
-            # it entirely so it is never classified as removed either.
-            if name in desired:
-                owned_for_categorize[name] = desired[name]
-            continue
-        if rk == root_key_:
-            owned_for_categorize[name] = root_key_
-        elif skill_status.get(name, (None, None))[0] == "proven":
-            owned_for_categorize[name] = rk
-
-    added, removed, unchanged, collision = categorize_names(desired, owned_for_categorize)
-
-    # categorize_names only compares repository *keys* — a same-repository
-    # commit or external-path change never shows up as added/removed/
-    # collision, since the owning repository hasn't changed. Declaration
-    # satisfaction requires the full identity to match, not just ownership:
-    # an "unchanged" external name whose manifest-recorded source, commit,
-    # or skill source (external-path) no longer matches the current
-    # declaration is stale — proven-and-installed, but not what's
-    # currently declared. --apply already re-fetches/re-materializes every
-    # unchanged name unconditionally, so this never blocks; it only needs
-    # to be visible to --verify and to the report.
-    stale = set()
-    for name in unchanged:
-        info = ext_skills.get(name)
-        if info is None:
-            continue
-        repo_entry = ((manifest or {}).get("repositories") or {}).get(info["repo_key"])
-        skill_entry = manifest_skills.get(name)
-        if not isinstance(repo_entry, dict) or not isinstance(skill_entry, dict):
-            continue
-        if (repo_entry.get("source") != info["source"]
-                or repo_entry.get("commit") != info["commit"]
-                or skill_entry.get("source") != info["path"]):
-            stale.add(name)
-
-    # For report splitting only: which names belong to the root section vs
-    # the external section, independent of add/remove/unchanged/collision.
-    root_names = (closure - set(ext_skills)) | {
-        n for n, k in owned_for_categorize.items() if k == root_key_
-    }
-    ext_names = set(ext_skills) | {
-        n for n, k in owned_for_categorize.items() if k != root_key_
-    }
-
-    unresolved = {name for name, (s, _) in skill_status.items() if s == "unprovable"}
-    malformed = {name for name, (s, _) in skill_status.items() if s == "malformed"}
-
-    seen_repos = {info.get("repository") for info in manifest_skills.values()
-                  if isinstance(info, dict)}
-    orphan_unprovable_repos = {k for k, (s, _) in repo_status.items()
-                               if s == "unprovable" and k not in seen_repos}
-    orphan_malformed_repos = {k for k, (s, _) in repo_status.items()
-                              if s == "malformed" and k not in seen_repos}
-
-    return {
-        "root_key": root_key_,
-        "closure": closure,
-        "requirements": requirements,
-        "ext_repos": ext_repos, "repo_conflicts": repo_conflicts,
-        "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
-        "repo_status": repo_status, "skill_status": skill_status,
-        "added": added, "removed": removed, "unchanged": unchanged, "collision": collision,
-        "stale": stale,
-        "root_names": root_names, "ext_names": ext_names,
-        "unresolved": unresolved, "malformed": malformed,
-        "orphan_unprovable_repos": orphan_unprovable_repos,
-        "orphan_malformed_repos": orphan_malformed_repos,
-    }
-
-
-# --- combined verification ----------------------------------------------
-
-
-def verify_state(adoption, manifest):
-    """Everything --verify checks, fully offline: vendor checkout
-    self-consistency, manifest repository provenance, materialized-skill
-    integrity, and — the part that makes this declaration-satisfaction,
-    not just self-consistency — whether adoption.yml's desired skills (by
-    name and repository) match what the manifest actually owns, whether
-    every declared skill's source exists in the current vendor tree, and
-    the same for every external requirement and every manifest-recorded
-    external repository. Reused verbatim for the post-apply re-verify."""
-    errors = check_git(adoption)
-
-    current_key = repo_key(adoption["repo"])
-    if manifest is None:
-        errors.append("manifest missing — run --apply to generate")
-    else:
-        repo_entry = manifest.get("repositories", {}).get(current_key)
-        if repo_entry is None:
-            errors.append(f"manifest has no repository entry for {current_key!r}")
-        else:
-            if repo_entry.get("source") != adoption["repo"]:
-                errors.append(
-                    f"repository source mismatch: adoption.yml={adoption['repo']} "
-                    f"manifest={repo_entry.get('source')}"
-                )
-            if repo_entry.get("commit") != adoption["pin"]:
-                errors.append(
-                    f"repository commit mismatch: adoption.yml={adoption['pin'][:12]} "
-                    f"manifest={str(repo_entry.get('commit'))[:12]}"
-                )
-
-    errors.extend(verify_materialized_skills(manifest))
-
-    state = compute_external_state(adoption, manifest, VENDOR)
-    for name in sorted(state["added"]):
-        errors.append(f"skill declared but not installed: {name}")
-    for name in sorted(state["removed"]):
-        errors.append(f"skill installed but no longer declared: {name}")
-    for name in sorted(state["collision"]):
-        errors.append(f"skill collision: {name}")
-    for name in sorted(state["stale"]):
-        errors.append(
-            f"external declaration for {name!r} no longer matches installed "
-            "state (source, commit, or external-path changed) — run --apply "
-            "to update"
-        )
-    errors.extend(state["repo_conflicts"])
-    errors.extend(state["skill_conflicts"])
-    for name in missing_skill_sources(state["closure"], VENDOR):
-        errors.append(f"declared skill has no source: {name}")
-    for name in sorted(state["unresolved"]):
-        errors.append(f"unresolved external state for {name!r}: "
-                       f"{state['skill_status'][name][1]}")
-    for name in sorted(state["malformed"]):
-        errors.append(f"malformed external manifest state for {name!r}: "
-                       f"{state['skill_status'][name][1]}")
-    for rkey in sorted(state["orphan_unprovable_repos"]):
-        errors.append(f"unresolved external state for repository {rkey!r}: "
-                       f"{state['repo_status'][rkey][1]}")
-    for rkey in sorted(state["orphan_malformed_repos"]):
-        errors.append(f"malformed external manifest state for repository {rkey!r}: "
-                       f"{state['repo_status'][rkey][1]}")
-
-    return errors
-
-
-# --- governed-file diff reporting (unchanged from prior phases) ---------
-
-
-def collect_governed(tree):
-    """Read the governed files of a tree, keyed by repository-relative path."""
-    patterns = ["skills/*/SKILL.md", "skills/*/references/*.md",
-                "skills/*/scripts/*"]
-    files = {}
-    for pattern in patterns:
-        for p in sorted(tree.glob(pattern)):
-            if p.is_file():
-                files[str(p.relative_to(tree))] = p.read_text()
-    return files
-
-
-def extract_obligations(text):
-    obligations = {}
-    current = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if re.match(r'^#{1,4}\s+', line):
-            heading = stripped.lstrip('#').strip().lower()
-            if any(h in heading for h in OBLIGATION_HEADERS):
-                current = heading
-                obligations[current] = []
-            else:
-                current = None
-        elif current and stripped.startswith('* '):
-            obligations[current].append(stripped)
-    return obligations
-
-
-def diff_obligations(old_text, new_text):
-    old = extract_obligations(old_text)
-    new = extract_obligations(new_text)
-    findings = []
-    for key in sorted(set(old) | set(new)):
-        added = set(new.get(key, [])) - set(old.get(key, []))
-        removed = set(old.get(key, [])) - set(new.get(key, []))
-        if added:
-            findings.append(f"  [{key}] added:")
-            for item in sorted(added):
-                findings.append(f"    + {item}")
-        if removed:
-            findings.append(f"  [{key}] removed:")
-            for item in sorted(removed):
-                findings.append(f"    - {item}")
-    return findings
-
-
-def print_tree_diff(before_files, after_files):
-    before_set, after_set = set(before_files), set(after_files)
-    new_files = after_set - before_set
-    removed_files = before_set - after_set
-    changed_files = {
-        f for f in before_set & after_set if before_files[f] != after_files[f]
-    }
-
-    print("\n--- Inventory changes ---")
-    if new_files:
-        print("Added:")
-        for f in sorted(new_files):
-            print(f"  + {f}")
-    if removed_files:
-        print("Removed:")
-        for f in sorted(removed_files):
-            print(f"  - {f}")
-    if not new_files and not removed_files:
-        print("  None")
-
-    print("\n--- Obligation changes ---")
-    found_obligations = False
-    for f in sorted(changed_files):
-        findings = diff_obligations(before_files[f], after_files[f])
-        if findings:
-            found_obligations = True
-            print(f"\n{f}")
-            for line in findings:
-                print(line)
-    if not found_obligations:
-        print("  None detected")
-
-    print("\n--- Other changed files ---")
-    other_changed = [
-        f for f in changed_files
-        if not diff_obligations(before_files[f], after_files[f])
-    ]
-    if other_changed:
-        for f in sorted(other_changed):
-            print(f"  ~ {f}")
-    else:
-        print("  None")
-
-
-# --- external acquisition and resolution ---------------------------------
-
-
-def check_external_releases(requirements):
-    """A declared release must resolve to its own requirement's commit.
-    Needs network; run in report/apply, never in --verify."""
-    findings = []
-    for req in requirements:
-        if not req["release"]:
-            continue
-        resolved = resolve_sha(req["source"], req["release"])
-        if resolved != req["commit"]:
-            findings.append(
-                f"external release {req['release']!r} (declared by "
-                f"{req['adapter']!r}) resolves to {resolved[:12]}, not the "
-                f"declared commit {req['commit'][:12]}"
-            )
-    return findings
-
-
-def prepare_external_installs(ext_skills, names_needed, temp_registry):
-    """For each name in names_needed (a subset of ext_skills), ensure a
-    checkout exists — reusing an already-matching real vendor checkout, or
-    fetching a fresh sibling temp checkout registered into temp_registry —
-    and resolve+validate its upstream skill directory. Returns
-    (resolved: {name: skill_dir}, checkouts: {repo_key: path},
-    findings: {name: reason}). The caller discharges ownership of a temp
-    checkout it actually swaps into place by removing it from
-    temp_registry; anything left in temp_registry is cleaned up by the
-    caller's own finally block."""
+def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, temp_registry,
+                              proven_repo_keys):
+    """Acquires or reuses each external repository names_needed requires,
+    per classify_external_action()'s decision for each."""
     resolved, checkouts, findings = {}, {}, {}
     for name in sorted(names_needed):
-        info = ext_skills[name]
-        rkey = info["repo_key"]
+        prov = provenance[name]
+        rkey = prov["repo_key"]
+        info = ext_repos[rkey]
         if rkey not in checkouts:
-            try:
-                dest = external_vendor_path(rkey)
-            except ValueError as e:
-                findings[name] = str(e)
+            action, detail = classify_external_action(vendor_root, rkey, info, proven_repo_keys)
+            if action == "blocking":
+                findings[name] = detail
                 continue
-            if dest.exists() and not check_external_git(dest, info["source"], info["commit"]):
+            dest = check_skills.external_vendor_path(vendor_root, rkey)
+            if action == "reuse":
                 checkouts[rkey] = dest
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 tmp = fetch_tree(info["source"], info["commit"], dest)
                 temp_registry.append(tmp)
                 checkouts[rkey] = tmp
-        skill_dir, result = resolve_upstream_skill(checkouts[rkey], info["path"], name)
+        skill_dir, reason = check_skills.resolve_upstream_skill(
+            checkouts[rkey], prov["source"], name)
         if skill_dir is None:
-            findings[name] = result
+            findings[name] = reason
         else:
             resolved[name] = skill_dir
     return resolved, checkouts, findings
 
 
-def parse_resolutions(raw_list):
-    """--resolve NAME=keep|stub, repeatable. Duplicate names are a usage
-    error, not last-one-wins."""
-    resolutions = {}
-    for item in raw_list:
-        m = re.match(r"^(.+)=(keep|stub)$", item)
-        if not m:
-            sys.exit(f"--resolve: expected NAME=keep or NAME=stub, got {item!r}")
-        name, choice = m.group(1), m.group(2)
-        if name in resolutions:
-            sys.exit(f"--resolve: {name!r} named more than once")
-        resolutions[name] = choice
-    return resolutions
+def generate_manifest(adoption, root_key_, materialized, provenance, ext_repos_final, skills_root):
+    repositories = {root_key_: {"source": adoption["repo"], "commit": adoption["pin"]}}
+    for rkey, info in ext_repos_final.items():
+        repositories[rkey] = {"source": info["source"], "commit": info["commit"]}
+    skills = {}
+    for name in sorted(materialized):
+        prov = provenance[name]
+        skills[name] = {
+            "repository": prov["repo_key"],
+            "source": prov["source"],
+            "mode": check_skills.COPY_MODE,
+            "tree_hash": check_skills.tree_hash(skills_root / name),
+        }
+    return {"repositories": repositories, "skills": skills}
+
+
+def reconcile(consumer_root, adoption, result, to_materialize, to_remove, clients,
+             temp_registry, client_plans, txn, cache, root_vendor_plan):
+    """Mutates generated state toward to_materialize/to_remove and returns
+    (candidate_manifest, vendor_backup). Never writes the canonical
+    manifest — the caller verifies and promotes it, and — because
+    vendor_backup is kept rather than deleted here when the root vendor
+    was swapped — restores it if that verification fails.
+
+    root_vendor_plan is the "root_vendor" entry build_action_plan()
+    already put on the approved plan (see root_vendor_state()) — mutate()
+    already compared one fresh reading of the root vendor against it right
+    after confirmation; this repeats that same comparison once more,
+    immediately before the destructive replacement below, to close the gap
+    everything reconcile() does beforehand (external-repository
+    preparation in particular) could otherwise leave open.
+
+    A root revision needing acquisition was already staged into this run's
+    own transaction directory during planning (see preview_result()); this
+    takes that same staged tree rather than fetching it again."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    agents_root = consumer_root / ".agents"
+    vendor_root = agents_root / "vendor"
+    skills_root = agents_root / "skills"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+
+    vendor_matches = root_vendor_state(vendor, adoption)["action"] == "reuse"
+    if vendor_matches:
+        effective_vendor = vendor
+    else:
+        effective_vendor = stage_candidate(consumer_root, txn, cache,
+                                           adoption["repo"], adoption["pin"])
+
+    ext_names_needed = [n for n in to_materialize
+                        if result["provenance"][n]["repo_key"] != root_key_]
+    resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
+        result["external_repos"], result["provenance"], ext_names_needed,
+        vendor_root, temp_registry, set(result["proven_external_repos"]))
+    if upstream_findings:
+        sys.exit("external upstream validation failed during install: "
+                 + "; ".join(f"{n}: {r}" for n, r in sorted(upstream_findings.items())))
+
+    vendor_backup = None
+    if not vendor_matches:
+        staged = take_staged_candidate(cache, adoption["repo"], adoption["pin"])
+        require_safe_path(consumer_root, staged)
+        vendor.parent.mkdir(parents=True, exist_ok=True)
+        promotion_ready = vendor.parent / f".{vendor.name}.promote-{uuid.uuid4().hex[:12]}"
+        try:
+            staged.rename(promotion_ready)
+            # Revalidated immediately before this destructive replacement,
+            # not just once during earlier planning: path/ownership safety
+            # again, and the same root-vendor drift comparison mutate()
+            # already made once after confirmation.
+            vendor = safe_vendor_path(vendor_root, root_key_)
+            fresh_fingerprint = root_vendor_state(vendor, adoption)["fingerprint"]
+            if fresh_fingerprint != root_vendor_plan["fingerprint"]:
+                shutil.rmtree(promotion_ready, ignore_errors=True)
+                sys.exit(f"{vendor}: root-vendor checkout changed since the approved "
+                         "plan was built; refusing to replace it")
+            vendor_backup = atomic_replace_dir(promotion_ready, vendor, keep_backup=True)
+        except Exception:
+            if promotion_ready.exists():
+                shutil.rmtree(promotion_ready, ignore_errors=True)
+            raise
+        effective_vendor = vendor
+
+    for name in to_materialize:
+        prov = result["provenance"][name]
+        if prov["repo_key"] == root_key_:
+            materialize_skill(name, effective_vendor, skills_root)
+        else:
+            materialize_from(name, resolved_dirs[name], skills_root)
+    for name in to_remove:
+        remove_skill(name, skills_root)
+
+    for rkey, checkout in list(ext_checkouts.items()):
+        # Revalidated immediately before this destructive replacement, not
+        # just once during earlier planning.
+        dest = safe_vendor_path(vendor_root, rkey)
+        if checkout != dest:
+            atomic_replace_dir(checkout, dest)
+            temp_registry.remove(checkout)
+
+    materialized_final = (set(result["unchanged"]) | set(result["added"])) - set(to_remove)
+    ext_repos_final = {
+        rkey: info for rkey, info in result["external_repos"].items()
+        if any(result["provenance"].get(n, {}).get("repo_key") == rkey
+              for n in materialized_final)
+    }
+    dropped_repos = set(result["proven_external_repos"]) - set(ext_repos_final)
+    for rkey in sorted(dropped_repos):
+        # Revalidated immediately before this removal, not just once
+        # during earlier planning.
+        shutil.rmtree(safe_vendor_path(vendor_root, rkey), ignore_errors=True)
+
+    candidate_manifest = generate_manifest(
+        adoption, root_key_, materialized_final, result["provenance"],
+        ext_repos_final, skills_root)
+
+    for client in clients:
+        reconcile_client(consumer_root, skills_root, client, client_plans[client])
+
+    return candidate_manifest, vendor_backup
+
+
+def promote_manifest(consumer_root, candidate_manifest, clients):
+    manifest_path = consumer_root / ".agents" / "infurnet-skills.manifest.json"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="infurnet-skills-candidate-"))
+    try:
+        candidate_path = tmp_dir / "candidate-manifest.json"
+        candidate_path.write_text(json.dumps(candidate_manifest, indent=2) + "\n")
+        verify = check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                       manifest_path=candidate_path)
+        failing = [f for f in verify["findings"] if f["severity"] in ("blocking", "damage")]
+        if failing:
+            print("\nCandidate manifest failed integrity verification — the prior "
+                 "manifest is unchanged:")
+            print_findings(failing)
+            return False
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_manifest = manifest_path.with_name(manifest_path.name + f".tmp-{uuid.uuid4().hex[:12]}")
+        tmp_manifest.write_text(json.dumps(candidate_manifest, indent=2) + "\n")
+        os.replace(tmp_manifest, manifest_path)
+        print(f"\nOK — manifest promoted to {manifest_path}")
+        return True
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def generated_paths(consumer_root, candidate_manifest):
+    agents_root = consumer_root / ".agents"
+    vendor_root = agents_root / "vendor"
+    skills_root = agents_root / "skills"
+    manifest_path = agents_root / "infurnet-skills.manifest.json"
+    paths = []
+    for rkey in sorted(candidate_manifest["repositories"]):
+        paths.append(str(safe_vendor_path(vendor_root, rkey)
+                         .relative_to(consumer_root)) + "/")
+    for name in sorted(candidate_manifest["skills"]):
+        paths.append(str((skills_root / name).relative_to(consumer_root)) + "/")
+    paths.append(str(manifest_path.relative_to(consumer_root)))
+    return paths
+
+
+def update_git_exclude(consumer_root, candidate_manifest):
+    """Best-effort. A missing .git/info/, or malformed existing markers,
+    prints a note and never fails the run."""
+    git_exclude = consumer_root / ".git" / "info" / "exclude"
+    if not git_exclude.parent.is_dir():
+        print("  NOTE: .git/info does not exist; skipping local exclude update")
+        return
+    paths = generated_paths(consumer_root, candidate_manifest)
+    try:
+        text = git_exclude.read_text() if git_exclude.exists() else ""
+        block = "\n".join([EXCLUDE_BEGIN] + [f"/{p}" for p in paths] + [EXCLUDE_END]) + "\n"
+        state, span = locate_marked_section(text, EXCLUDE_BEGIN, EXCLUDE_END)
+        if state == "absent":
+            sep = "" if not text or text.endswith("\n") else "\n"
+            new_text = text + sep + block
+        elif state == "present":
+            start, end = span
+            new_text = text[:start] + block + text[end:]
+        else:
+            print("  NOTE: .git/info/exclude has malformed infurnet-skills markers; skipping")
+            return
+        git_exclude.write_text(new_text)
+    except OSError as e:
+        print(f"  NOTE: could not update .git/info/exclude: {e}")
+
+
+# --- mutating-mode orchestration -------------------------------------
+
+
+def preview_result(consumer_root, adoption, clients, txn, cache):
+    """The accurate check-skills.py result for `adoption` — which may
+    describe a hypothetical target (e.g. an --update candidate) that has
+    not been written to adoption.yml. check-skills.py can only see
+    dependency closure and declared-skill sources that already exist in a
+    local checkout, so when the real vendor does not already match
+    `adoption`'s pin, the candidate is staged into this run's own
+    transaction directory first (reusing a prior staging of the identical
+    revision within this run, if any — see stage_candidate()); nothing
+    here is promoted. Always recomputed fresh (never a cached/prior
+    check-skills.py result), so a plan built from this is guaranteed
+    current."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    if not check_skills.check_git(vendor, adoption):
+        return check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                     adoption_override=adoption)
+    staged = stage_candidate(consumer_root, txn, cache, adoption["repo"], adoption["pin"])
+    return check_skills.evaluate(consumer_root, clients=tuple(clients),
+                                 source_root=staged, adoption_override=adoption)
+
+
+def refresh_names_for_vendor_change(consumer_root, adoption, result):
+    """Every root-owned name check-skills.py classified as "unchanged" —
+    not just added/stale/damaged — must still be recopied whenever the
+    vendor tree itself is about to be replaced: "unchanged" means ownership
+    didn't change, not that content at the (possibly new) pin already
+    matches what is on disk now. Returns an empty set when the vendor
+    already matches the declared pin, since then nothing is being
+    replaced."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    if not check_skills.check_git(vendor, adoption):
+        return set()
+    return {n for n in result["unchanged"] if result["provenance"][n]["repo_key"] == root_key_}
+
+
+def mutation_targets(result, repair):
+    stale_names = set(result["stale"])
+    damaged_names = set()
+    if repair:
+        damaged_names = {f["subject"] for f in result["findings"]
+                         if f["category"] in ("hash", "materialization")
+                         and f["severity"] == "damage"}
+    to_materialize = sorted(set(result["added"]) | stale_names | damaged_names)
+    to_remove = sorted(result["removed"])
+    return to_materialize, to_remove
+
+
+def check_client_collision(consumer_root, desired_names, client_skills_root):
+    """Read-only preflight: stops before ANY mutation in the transaction —
+    not partway through reconcile() — if a desired name is occupied by
+    content that is not an installer-owned exposure (an unrelated symlink
+    included: being a symlink at all does not make it installer-owned).
+    Runs the full capability/symlinked-ancestor preflight too, for the same
+    reason. Returns the computed assessment so the exact approved action
+    set can be threaded through to execution unchanged, rather than
+    rediscovered during reconciliation."""
+    check_client_skills_preflight(consumer_root, client_skills_root)
+    skills_root = consumer_root / ".agents" / "skills"
+    assessment = check_skills.assess_client_exposure(desired_names, skills_root,
+                                                      client_skills_root)
+    for name in assessment["occupied"]:
+        link = client_skills_root / name
+        sys.exit(f"{link}: exists and is not an installer-owned exposure "
+                 "symlink; refusing to overwrite")
+    return assessment
+
+
+def collect_blocking(adoption, result):
+    blocking = [f"[{f['category']}] {f['subject']}: {f['detail']}"
+               for f in result["findings"] if f["severity"] == "blocking"]
+    if adoption["tag"]:
+        err = check_update.verify_ref_resolves(adoption["repo"], adoption["tag"], adoption["pin"])
+        if err:
+            blocking.append(f"adoption release: {err}")
+    for req in result["external_requirements"]:
+        if req.get("release"):
+            err = check_update.verify_ref_resolves(req["source"], req["release"], req["commit"])
+            if err:
+                blocking.append(f"external release ({req['adapter']}): {err}")
+    return blocking
+
+
+def root_vendor_state(vendor, adoption):
+    """The root-vendor observations that decide reuse/acquire/replace, and
+    that must not silently change between planning and execution:
+    presence, HEAD, origin, cleanliness, and detached-HEAD status.
+    build_action_plan() captures this once, when the plan is built;
+    mutate() and reconcile() each recompute it later — after confirmation,
+    and again immediately before the destructive replacement itself — and
+    stop rather than proceed when their fresh reading disagrees with the
+    captured one."""
+    inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    if not inspected["exists"]:
+        action = "acquire"
+    elif check_skills.check_git_from(inspected, adoption):
+        action = "replace"
+    else:
+        action = "reuse"
+    fingerprint = (inspected["exists"], inspected["head"], inspected["origin"],
+                  inspected["clean"], inspected["detached"])
+    return {"action": action, "fingerprint": fingerprint}
+
+
+def build_action_plan(consumer_root, adoption, result, mode, version_change,
+                      to_materialize, to_remove, clients, client_plans,
+                      staged, remaining_unresolved):
+    """One explicit representation of every applicable persistent change
+    this transaction will make, built from values already computed before
+    confirmation. print_action_summary() renders exactly this; mutate()'s
+    execution consumes the same to_materialize/to_remove/client_plans/
+    version_change it already had — nothing here is independently
+    recomputed for execution.
+
+    root_vendor_state() captures the root vendor's fingerprint and
+    resulting action (reuse, acquire, or replace) once, here; mutate() and
+    reconcile() each compare a fresh reading against this same capture
+    (see root_vendor_state()'s own docstring) rather than trusting a
+    second, independent classification of their own.
+
+    Each external repository's classify_external_action() call is
+    evaluated fresh here as well as again during reconcile()'s own
+    execution — deliberately: both call identical pure functions against
+    the filesystem, so a destination unchanged between planning and
+    execution always agrees, and reconcile()'s own path-safety
+    revalidation catches one that changed."""
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    root_vendor_state_ = root_vendor_state(vendor, adoption)
+
+    ext_names = [n for n in to_materialize if result["provenance"][n]["repo_key"] != root_key_]
+    ext_repo_keys_needed = sorted({result["provenance"][n]["repo_key"] for n in ext_names})
+    proven = set(result["proven_external_repos"])
+    ext_changes = []
+    for rkey in ext_repo_keys_needed:
+        info = result["external_repos"][rkey]
+        action, detail = classify_external_action(vendor_root, rkey, info, proven)
+        ext_changes.append({"repo_key": rkey, "source": info["source"],
+                            "commit": info["commit"], "action": action, "detail": detail})
+
+    materialized_final = (set(result["unchanged"]) | set(result["added"])) - set(to_remove)
+    kept_repo_keys = {result["provenance"][n]["repo_key"] for n in materialized_final
+                      if result["provenance"][n]["repo_key"] != root_key_}
+    ext_removed = sorted(proven - kept_repo_keys)
+
+    any_generated_change = bool(to_materialize or to_remove or ext_changes or ext_removed
+                                or root_vendor_state_["action"] != "reuse")
+
+    return {
+        "mode": mode,
+        "version_change": version_change,
+        "root_vendor": {"repo": adoption["repo"], "commit": adoption["pin"],
+                        "action": root_vendor_state_["action"],
+                        "fingerprint": root_vendor_state_["fingerprint"]},
+        "external_vendors": {"changes": ext_changes, "removed": ext_removed},
+        "skills": {"materialize": to_materialize, "remove": to_remove},
+        "manifest": "promote candidate after verification",
+        "clients": clients,
+        "client_plans": client_plans,
+        "bindings": {"staged": staged, "remaining_unresolved": remaining_unresolved},
+        "git_exclude": "update generated section (best-effort)" if any_generated_change else None,
+    }
+
+
+def print_action_summary(plan):
+    root_vendor = plan["root_vendor"]
+    print(f"Root repository: {root_vendor['repo']} @ {root_vendor['commit'][:12]} "
+         f"({root_vendor['action']})")
+
+    version_change = plan["version_change"]
+    if version_change is not None:
+        print("\nDownload:")
+        print(f"  {version_change['current_pin'][:12]} -> "
+             f"{version_change['target_commit'][:12]}")
+        print("\nInstall/update:")
+        print(f"  adoption.yml commit: {version_change['current_pin']} -> "
+             f"{version_change['target_commit']}")
+        print(f"  adoption.yml release: {version_change['current_release'] or '(blank)'} -> "
+             f"{version_change['target_release'] or '(blank)'}")
+
+    to_materialize = plan["skills"]["materialize"]
+    to_remove = plan["skills"]["remove"]
+    heading = "Repair:" if plan["mode"] == "repair" else "Install/update:"
+    if to_materialize and version_change is None:
+        print(f"\n{heading}")
+    elif to_materialize:
+        print()
+    for name in to_materialize:
+        print(f"  + {name}")
+    if to_remove:
+        print("\nRemove:")
+        for name in to_remove:
+            print(f"  - {name}")
+
+    ext = plan["external_vendors"]
+    if ext["changes"] or ext["removed"]:
+        print("\nExternal repositories:")
+        for change in ext["changes"]:
+            verb = "reuse" if change["action"] == "reuse" else "acquire"
+            print(f"  {verb} {change['repo_key']} @ {change['source']} "
+                 f"({change['commit'][:12]})")
+        for rkey in ext["removed"]:
+            print(f"  remove {rkey}")
+
+    if plan["clients"]:
+        print(f"\nReconcile client exposure: {', '.join(plan['clients'])}")
+        for client in plan["clients"]:
+            exposure = plan["client_plans"][client]["exposure"]
+            for name in exposure["needs_correction"] + exposure["missing"]:
+                print(f"  [{client}] link {name}")
+            for name in exposure["stale"]:
+                print(f"  [{client}] remove stale link {name}")
+            governance = plan["client_plans"][client]["governance"]
+            if governance is not None and governance[0]:
+                print(f"  [{client}] governance document: create or update")
+
+    bindings = plan["bindings"]
+    if bindings["staged"] or bindings["remaining_unresolved"]:
+        print("\nBindings:")
+        for section, label, value in bindings["staged"]:
+            print(f"  [{section}] {label} = {value}")
+        for section, label in bindings["remaining_unresolved"]:
+            print(f"  [{section}] {label}: remains unresolved")
+
+    if plan["git_exclude"] is not None:
+        print(f"\nGit exclude: {plan['git_exclude']}")
+
+
+def mutate(args, consumer_root, clients, adoption, result, mode, txn, cache, version_change=None):
+    """`adoption` and `result` describe exactly the state this transaction
+    targets: the real, on-disk adoption for default/repair, or the
+    not-yet-written --update target for update (version_change carries the
+    exact fields that will be written). `result` must already be
+    check-skills.py's accurate result for that same `adoption` (see
+    preview_result()) — computed once, shown, confirmed, and executed
+    unchanged, so an approved plan can never silently diverge from what
+    actually runs. txn/cache are this run's transaction-staging state."""
+    blocking = collect_blocking(adoption, result)
+    if blocking:
+        print("Blocked:")
+        for b in blocking:
+            print(f"  {b}")
+        return 1
+
+    # Staged, validated, and retained before any output or confirmation —
+    # see stage_adoption_edit() — so an unsupported adoption.yml
+    # representation is never discovered only after other durable state has
+    # already been written.
+    staged_adoption_text = None
+    if version_change is not None:
+        staged_adoption_text = stage_adoption_edit(
+            consumer_root / ".agents" / "adoption.yml",
+            version_change["target_commit"], version_change["target_release"])
+
+    repair = (mode == "repair")
+    to_materialize, to_remove = mutation_targets(result, repair)
+    to_materialize = sorted(set(to_materialize)
+                            | refresh_names_for_vendor_change(consumer_root, adoption, result))
+    target_inventory = set(result["unchanged"]) | set(result["added"])
+
+    # Client collisions, capability problems, and Claude governance staging
+    # are all computed before any other mutation in this transaction begins
+    # — never discovered or generated partway through reconcile(), after
+    # vendor/skill changes already happened. Each client's complete plan
+    # (exposure assessment plus any staged governance content) is threaded
+    # through to reconcile() unchanged, never rediscovered there.
+    client_plans = {}
+    for client in clients:
+        exposure = check_client_collision(consumer_root, target_inventory,
+                                          client_skills_root_for(consumer_root, client))
+        governance_doc = check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client)
+        governance = (stage_first_line_document(consumer_root, governance_doc)
+                     if governance_doc else None)
+        client_plans[client] = {"desired_names": target_inventory,
+                                "exposure": exposure, "governance": governance}
+
+    # Every mutating invocation, not only the one-shot bootstrap that creates
+    # adoption.yml itself, ensures these two durable consumer files exist —
+    # matching the prior always-on bootstrap behavior.
+    agents_needs_write, agents_new_text = compute_agents_md(consumer_root)
+    project_needs_write, project_new_bytes = compute_project_md(consumer_root)
+    project_text_override = (project_new_bytes.decode() if project_needs_write else None)
+
+    staged, remaining_unresolved = resolve_bindings(consumer_root, target_inventory,
+                                                     args.bindings, project_text_override)
+
+    if agents_needs_write or project_needs_write:
+        print("Bootstrap:")
+        if project_needs_write:
+            print(f"  create {consumer_root / 'PROJECT.md'}")
+        if agents_needs_write:
+            agents_md = consumer_root / "AGENTS.md"
+            print(f"  {'create' if not agents_md.exists() else 'update'} {agents_md}")
+        print()
+    plan = build_action_plan(consumer_root, adoption, result, mode, version_change,
+                             to_materialize, to_remove, clients, client_plans,
+                             staged, remaining_unresolved)
+    print_action_summary(plan)
+
+    if not confirm(args.force):
+        print("\nCancelled — no changes made.")
+        return 0
+
+    # Immediately after confirmation and before any durable mutation below
+    # (PROJECT.md, AGENTS.md, adoption.yml, then reconcile()): the root
+    # vendor's state is reread and compared against what build_action_plan()
+    # captured. A checkout that changed while the confirmation prompt was
+    # open — dirtied, moved to a different HEAD or origin, or newly
+    # occupying a destination the plan found absent — invalidates the
+    # approved plan; this never recomputes a new action or silently expands
+    # what was approved. safe_vendor_path() also revalidates path/ownership
+    # safety, regardless of --force (which only ever suppressed the Y/n
+    # prompt above, never this check).
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    if root_vendor_state(vendor, adoption)["fingerprint"] != plan["root_vendor"]["fingerprint"]:
+        sys.exit(f"{vendor}: root-vendor checkout changed since the approved plan was "
+                 "built; rerun to review the current state")
+
+    if project_needs_write:
+        (consumer_root / "PROJECT.md").write_bytes(project_new_bytes)
+    if agents_needs_write:
+        (consumer_root / "AGENTS.md").write_text(agents_new_text)
+
+    if version_change is not None:
+        # The confirmed version change is durable before reconciliation
+        # begins: if reconciliation fails partway, the approved desired
+        # state survives and --repair can continue toward it. adoption/
+        # result/to_materialize/to_remove were already computed against
+        # this exact target (see run_update()), and staged_adoption_text was
+        # already staged and validated above — both are written/used exactly
+        # as computed, never recomputed here.
+        (consumer_root / ".agents" / "adoption.yml").write_text(staged_adoption_text)
+
+    temp_registry = []
+    try:
+        candidate_manifest, vendor_backup = reconcile(
+            consumer_root, adoption, result, to_materialize, to_remove, clients,
+            temp_registry, client_plans, txn, cache, plan["root_vendor"])
+    finally:
+        for tmp in temp_registry:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    promoted = promote_manifest(consumer_root, candidate_manifest, clients)
+
+    # The root vendor's previous checkout is kept as a recoverable backup,
+    # not deleted, until candidate-manifest verification above actually
+    # succeeds — atomic_replace_dir(keep_backup=True) in reconcile() made
+    # this possible. This restores root-vendor consistency specifically; it
+    # does not roll back already-materialized skills or external-repo
+    # changes from earlier in this same transaction, which is not
+    # implemented and is not promised here.
+    if vendor_backup is not None:
+        if promoted:
+            shutil.rmtree(vendor_backup, ignore_errors=True)
+        else:
+            root_key_ = check_skills.repo_key(adoption["repo"])
+            vendor = check_skills.external_vendor_path(
+                consumer_root / ".agents" / "vendor", root_key_)
+            if not vendor.is_symlink() and vendor.exists():
+                shutil.rmtree(vendor, ignore_errors=True)
+            vendor_backup.rename(vendor)
+
+    if not promoted:
+        return 1
+
+    write_bindings(consumer_root, staged)
+    update_git_exclude(consumer_root, candidate_manifest)
+
+    final_bindings = check_bindings.evaluate(consumer_root)
+    if not final_bindings["ok"]:
+        print("\nProject bindings need attention:")
+        check_bindings.print_human(final_bindings)
+    return 0 if final_bindings["ok"] else 1
+
+
+def run_bootstrap(consumer_root, clients, force):
+    agents_root = consumer_root / ".agents"
+    adoption_yaml = agents_root / "adoption.yml"
+    project_md = consumer_root / "PROJECT.md"
+    agents_md = consumer_root / "AGENTS.md"
+
+    for client in clients:
+        check_client_skills_preflight(consumer_root, client_skills_root_for(consumer_root, client))
+
+    agents_needs_write, agents_new_text = compute_agents_md(consumer_root)
+    project_needs_write, project_new_bytes = compute_project_md(consumer_root)
+    adoption_needs_write, adoption_new_bytes = compute_adoption_yaml(consumer_root)
+    governance_plans = {
+        client: (doc, stage_first_line_document(consumer_root, doc))
+        for client in clients
+        for doc in [check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client)]
+        if doc is not None
+    }
+
+    print("Bootstrap:")
+    if adoption_needs_write:
+        print(f"  create {adoption_yaml}")
+    if project_needs_write:
+        print(f"  create {project_md}")
+    if agents_needs_write:
+        print(f"  {'create' if not agents_md.exists() else 'update'} {agents_md}")
+    for doc, (needs_write, _, _) in governance_plans.values():
+        if needs_write:
+            doc_path = consumer_root / doc["path"]
+            print(f"  {'create' if not doc_path.exists() else 'update'} {doc_path}")
+    for client in clients:
+        print(f"  create {client_skills_root_for(consumer_root, client)} (client skill root)")
+
+    if not confirm(force):
+        print("\nCancelled — no changes made.")
+        return 0
+
+    if adoption_needs_write:
+        agents_root.mkdir(parents=True, exist_ok=True)
+        adoption_yaml.write_bytes(adoption_new_bytes)
+    if project_needs_write:
+        project_md.write_bytes(project_new_bytes)
+    if agents_needs_write:
+        agents_md.write_text(agents_new_text)
+    for doc, plan in governance_plans.values():
+        apply_first_line_document(consumer_root, doc, plan)
+    for client in clients:
+        client_skills_root_for(consumer_root, client).mkdir(parents=True, exist_ok=True)
+
+    print(f"\nCreated {adoption_yaml} from the bundled template.")
+    print("Complete the adoption declaration, then re-run the installer.")
+    return 0
+
+
+def run_verify(consumer_root, clients):
+    skills_result = check_skills.evaluate(consumer_root, clients=tuple(clients))
+    check_skills.print_human(skills_result)
+    print()
+    bindings_result = check_bindings.evaluate(consumer_root)
+    check_bindings.print_human(bindings_result)
+    return 0 if (skills_result["ok"] and bindings_result["ok"]) else 1
+
+
+def print_update_summary(update_result):
+    """The complete pre-confirmation --update comparison: everything
+    check_update.evaluate() already computed against the resolved target,
+    not just governed-file counts. Never invents a summary or evaluation —
+    every line here is a value check-update.py itself returned."""
+    inv = update_result["inventory_diff"] or {}
+    print(f"\nGoverned-file inventory: +{len(inv.get('added', []))} "
+         f"-{len(inv.get('removed', []))} ~{len(inv.get('changed', []))}")
+    for path in inv.get("added", []):
+        print(f"  + {path}")
+    for path in inv.get("removed", []):
+        print(f"  - {path}")
+    for path in inv.get("changed", []):
+        print(f"  ~ {path}")
+
+    if update_result["obligation_diff"]:
+        print("\nObligation changes:")
+        for f, sections in sorted(update_result["obligation_diff"].items()):
+            print(f"  {f}")
+            for key, delta in sections.items():
+                for item in delta["added"]:
+                    print(f"    [{key}] + {item}")
+                for item in delta["removed"]:
+                    print(f"    [{key}] - {item}")
+
+    ext = update_result["external_diff"] or {}
+    if ext.get("repos_added") or ext.get("repos_removed") or ext.get("repos_changed"):
+        print("\nExternal repositories:")
+        for rkey in ext.get("repos_added", []):
+            print(f"  + {rkey}")
+        for rkey in ext.get("repos_removed", []):
+            print(f"  - {rkey}")
+        for change in ext.get("repos_changed", []):
+            print(f"  ~ {change['repo_key']}: "
+                 f"{change['before']['source']} @ {change['before']['commit'][:12]} -> "
+                 f"{change['after']['source']} @ {change['after']['commit'][:12]}")
+
+    if ext.get("skill_path_changed"):
+        print("\nExternal skill path changes:")
+        for change in ext["skill_path_changed"]:
+            print(f"  ~ {change['name']}: {change['before']} -> {change['after']}")
+
+    if ext.get("conflicts"):
+        print("\nConflicts:")
+        for c in ext["conflicts"]:
+            print(f"  {c}")
+
+    if update_result["candidate_installer_changed"]:
+        print("\nNOTE: the target ships a different install.py; this report may omit "
+             "changes only that installer can see.")
+
+
+def run_update(args, consumer_root, clients, classification, txn, cache):
+    if classification["state"] == "damaged":
+        print(f"Damaged managed state: {classification['reason']}")
+        print_findings([f for f in classification["result"]["findings"]
+                        if f["severity"] in ("damage", "blocking")])
+        print("\n--update requires a coherent installation; run install.py --repair first.")
+        return 1
+
+    adoption = classification["adoption"]
+
+    target_version = args.target_version
+    if target_version is None:
+        discovery = check_update.evaluate(consumer_root)
+        if not discovery["ok"]:
+            print_findings(discovery["findings"])
+            return 1
+        print("Discoverable refs:")
+        for ref in discovery["discoverable_refs"] or []:
+            print(f"  {ref['sha'][:12]}  {ref['name']}")
+        print(f"Remote HEAD: {(discovery['remote_head'] or '<unknown>')[:12]}")
+        try:
+            target_version = input("\nTarget ref/tag to update to: ").strip()
+        except EOFError:
+            sys.exit("--update requires --target-version when no interactive input "
+                     "is available")
+        if not target_version:
+            sys.exit("no target selected; re-run with --target-version")
+
+    # Resolving to an immutable commit is metadata-only (git ls-remote),
+    # never a download — done up front so the one candidate acquisition
+    # below can be shared with preview_result()'s own use of the identical
+    # (source, commit) pair further down, instead of each fetching it
+    # separately.
+    target_commit = check_update.resolve_sha(adoption["repo"], target_version)
+    staged_candidate = stage_candidate(consumer_root, txn, cache, adoption["repo"], target_commit)
+
+    update_result = check_update.evaluate(consumer_root, target_version=target_version,
+                                          candidate_tree=staged_candidate)
+    if not update_result["ok"]:
+        print_findings(update_result["findings"])
+        return 1
+
+    version_change = {
+        "current_pin": adoption["pin"],
+        "current_release": adoption["tag"] or "",
+        "target_commit": update_result["target_commit"],
+        "target_release": update_result["target_release"] or "",
+    }
+
+    print(f"\nDiffers from current: {update_result['differs_from_current']}")
+    print_update_summary(update_result)
+
+    # The action set install.py plans, shows, and executes is computed
+    # against the resolved TARGET — same source/skills, the new pin/release
+    # — not against the current adoption; otherwise the plan a human
+    # approves could differ from what actually installs (e.g. the target's
+    # dependency closure or external requirements changed). preview_result()
+    # reuses the same staged candidate above (identical (source, commit)
+    # key) rather than fetching it a second time.
+    target_adoption = dict(adoption)
+    target_adoption["pin"] = update_result["target_commit"]
+    target_adoption["tag"] = update_result["target_release"] or None
+    target_result = preview_result(consumer_root, target_adoption, clients, txn, cache)
+
+    return mutate(args, consumer_root, clients, target_adoption, target_result,
+                 mode="update", txn=txn, cache=cache, version_change=version_change)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--root", required=True, type=Path,
-        help="path to the consuming repository; the installer's own "
-             "location and the caller's working directory carry no "
-             "authority over the target",
-    )
-    parser.add_argument("--candidate", default=None)
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--verify", action="store_true")
-    parser.add_argument(
-        "--resolve", action="append", default=[],
-        help="NAME=keep|stub — resolve one currently-unresolved external "
-             "skill; only valid together with --apply",
-    )
-    parser.add_argument(
-        "--client", action="append", default=[], choices=SUPPORTED_CLIENTS,
-        help="request a supported client's discovery and governance wiring; "
-             "repeatable; no repository content ever selects a client",
-    )
-    args = parser.parse_args()
-
-    global CONSUMER_ROOT, AGENTS_ROOT, ADOPTION_YAML, SKILLS_ROOT, MANIFEST
-    global GIT_EXCLUDE, VENDOR_ROOT, VENDOR
-    CONSUMER_ROOT = args.root.resolve()
-    AGENTS_ROOT = CONSUMER_ROOT / ".agents"
-    ADOPTION_YAML = AGENTS_ROOT / "adoption.yml"
-    SKILLS_ROOT = AGENTS_ROOT / "skills"
-    MANIFEST = AGENTS_ROOT / "infurnet-skills.manifest.json"
-    GIT_EXCLUDE = CONSUMER_ROOT / ".git" / "info" / "exclude"
-    VENDOR_ROOT = AGENTS_ROOT / "vendor"
-    selected_clients = [CLIENTS[name] for name in dict.fromkeys(args.client)]
-
-    bootstrap_agents_md()
-    bootstrap_project_md()
-    for client in selected_clients:
-        check_client_skills_preflight(client.skills_root())
-    for client in selected_clients:
-        client.governance()
-        client.skills_root().mkdir(parents=True, exist_ok=True)
-    if bootstrap_adoption_yaml():
-        print(f"Created {ADOPTION_YAML} from the bundled template.")
-        print("Complete the adoption declaration, then re-run the installer.")
-        return
-
-    if args.resolve and not args.apply:
-        sys.exit("--resolve is only valid together with --apply")
-    resolutions = parse_resolutions(args.resolve)
-
-    adoption = read_adoption()
-    try:
-        VENDOR = external_vendor_path(repo_key(adoption["repo"]))
-    except ValueError as e:
-        sys.exit(str(e))
-    print(f"Declared pin (adoption.yml): {adoption['pin'][:12]}")
-
-    manifest = read_manifest()
-    print("\n--- Integrity check ---")
-    integrity_errors = verify_state(adoption, manifest)
-    if integrity_errors:
-        for e in integrity_errors:
-            print(f"  FAIL: {e}")
-    else:
-        print("  OK — adoption.yml, vendor tree, manifest, and materialized "
-              "skills agree")
+    args = parse_args(sys.argv[1:])
+    consumer_root = args.root.resolve()
+    clients = list(dict.fromkeys(args.client))
 
     if args.verify:
-        sys.exit(1 if integrity_errors else 0)
+        return run_verify(consumer_root, clients)
 
-    vendor_matches = not check_git(adoption)
+    containment_preflight(consumer_root)
 
-    declared_tree = None
-    ext_temp_dirs = []
+    # This run's own disposable inspection-staging state (see
+    # ensure_transaction_dir()) — created lazily, never written to disk at
+    # all unless a candidate actually needs staging, and removed here
+    # whether the run completes, is cancelled, or fails.
+    txn = {"dir": None}
+    cache = {}
     try:
-        if vendor_matches:
-            print(f"\nVendor tree already at declared commit "
-                  f"{adoption['pin'][:12]}.")
-            effective_vendor = VENDOR
-        else:
-            print(f"\nFetching declared commit {adoption['pin'][:12]}...")
-            VENDOR.parent.mkdir(parents=True, exist_ok=True)
-            declared_tree = fetch_tree(adoption["repo"], adoption["pin"], VENDOR)
-            effective_vendor = declared_tree
+        classification = classify(consumer_root, clients, txn, cache)
+        state = classification["state"]
 
-            newer_updater = differing_candidate_updater(declared_tree)
-            if newer_updater is not None:
-                print(
-                    "\n  NOTE: the declared commit ships a different\n"
-                    "  install.py, and this report comes from the\n"
-                    "  installed one. It may omit changes only the declared\n"
-                    "  installer can see. Read that script's diff before\n"
-                    "  approving --apply — it takes effect once it becomes\n"
-                    "  the installed installer after --apply."
-                )
+        if state == "adoption-invalid":
+            sys.exit(f"{classification['reason']} — fix adoption.yml directly and "
+                     "re-run (this is not repairable by --repair)")
 
-            print_tree_diff(collect_governed(VENDOR), collect_governed(declared_tree))
+        if state == "bootstrap":
+            if args.update or args.repair:
+                sys.exit("no adoption.yml yet; run the installer without --update or "
+                         "--repair to bootstrap first")
+            return run_bootstrap(consumer_root, clients, args.force)
 
-        if args.candidate:
-            print(f"\n--- Candidate preview: {args.candidate} "
-                  "(exploratory; does not affect --apply) ---")
-            candidate_sha = resolve_sha(adoption["repo"], args.candidate)
-            print(f"Resolves to: {candidate_sha[:12]}")
-            candidate_tree = fetch_tree(adoption["repo"], candidate_sha, VENDOR)
-            try:
-                newer_updater = differing_candidate_updater(candidate_tree)
-                if newer_updater is not None:
-                    print(
-                        "\n  NOTE: the candidate ref ships a different\n"
-                        "  install.py, and this preview comes from the\n"
-                        "  installed one. It may omit changes only the candidate\n"
-                        "  installer can see. Read that script's diff before\n"
-                        "  deciding whether to adopt this candidate."
-                    )
+        if args.repair:
+            return mutate(args, consumer_root, clients, classification["adoption"],
+                         classification["result"], mode="repair", txn=txn, cache=cache)
 
-                print_tree_diff(collect_governed(effective_vendor),
-                                 collect_governed(candidate_tree))
-            finally:
-                shutil.rmtree(candidate_tree, ignore_errors=True)
+        if args.update:
+            return run_update(args, consumer_root, clients, classification, txn, cache)
 
-        release_error = check_release(adoption)
-        if release_error:
-            print(f"\n  FAIL: {release_error}")
+        # default mode
+        if state == "damaged":
+            print(f"Damaged managed state: {classification['reason']}")
+            print_findings([f for f in classification["result"]["findings"]
+                            if f["severity"] in ("damage", "blocking")])
+            print("\nRun install.py --repair to reconstruct generated state.")
+            return 1
 
-        state = compute_external_state(adoption, manifest, effective_vendor)
-        missing_sources = missing_skill_sources(state["closure"], effective_vendor)
-        ext_release_errors = check_external_releases(state["requirements"])
+        if state == "in-sync" and not clients and not args.bindings:
+            bindings_result = check_bindings.evaluate(consumer_root)
+            if bindings_result["ok"]:
+                print("Already reconciled.")
+                return 0
+            print("Installation is reconciled; applicable project bindings need attention:")
+            check_bindings.print_human(bindings_result)
+            return 1
 
-        root_added = state["added"] & state["root_names"]
-        root_removed = state["removed"] & state["root_names"]
-        root_unchanged = state["unchanged"] & state["root_names"]
-        root_collision = state["collision"] & state["root_names"]
-
-        ext_added = state["added"] & state["ext_names"]
-        ext_removed = state["removed"] & state["ext_names"]
-        ext_unchanged = state["unchanged"] & state["ext_names"]
-        ext_collision = state["collision"] & state["ext_names"]
-
-        print("\n--- Skill adoption ---")
-        if root_added:
-            print("Added:")
-            for name in sorted(root_added):
-                print(f"  + {name}")
-        if root_removed:
-            print("Removed:")
-            for name in sorted(root_removed):
-                print(f"  - {name}")
-        if root_unchanged:
-            print("Unchanged:")
-            for name in sorted(root_unchanged):
-                print(f"  = {name}")
-        if root_collision:
-            print("Collisions (blocking):")
-            for name in sorted(root_collision):
-                print(f"  ! {name}")
-        if missing_sources:
-            print("Missing sources (blocking):")
-            for name in missing_sources:
-                print(f"  ? {name}")
-        if not (root_added or root_removed or root_unchanged or root_collision
-                or missing_sources):
-            print("  None")
-
-        dropped_repos_preview = {
-            rkey for rkey, (status, _) in state["repo_status"].items()
-            if status == "proven"
-        } - set(state["ext_repos"])
-
-        print("\n--- External repositories ---")
-        if state["ext_repos"]:
-            print("Added/retained:")
-            for rkey in sorted(state["ext_repos"]):
-                print(f"  = {rkey}")
-        if dropped_repos_preview:
-            print("Removed:")
-            for rkey in sorted(dropped_repos_preview):
-                print(f"  - {rkey}")
-        if state["repo_conflicts"]:
-            print("Collisions (blocking):")
-            for c in state["repo_conflicts"]:
-                print(f"  ! {c}")
-        if not (state["ext_repos"] or dropped_repos_preview or state["repo_conflicts"]):
-            print("  None")
-
-        ext_stale = ext_unchanged & state["stale"]
-        ext_retained = ext_unchanged - ext_stale
-
-        print("\n--- External skills ---")
-        if ext_added:
-            print("Added:")
-            for name in sorted(ext_added):
-                print(f"  + {name}")
-        if ext_removed:
-            print("Removed:")
-            for name in sorted(ext_removed):
-                print(f"  - {name}")
-        if ext_retained:
-            print("Retained:")
-            for name in sorted(ext_retained):
-                print(f"  = {name}")
-        if ext_stale:
-            print("Update needed (declaration changed since last install):")
-            for name in sorted(ext_stale):
-                print(f"  ~ {name}")
-        if ext_collision or state["skill_conflicts"]:
-            print("Collisions (blocking):")
-            for name in sorted(ext_collision):
-                print(f"  ! {name}")
-            for c in state["skill_conflicts"]:
-                print(f"  ! {c}")
-        if not (ext_added or ext_removed or ext_unchanged or ext_collision
-                or state["skill_conflicts"]):
-            print("  None")
-
-        if state["malformed"] or state["orphan_malformed_repos"]:
-            print("\n--- Malformed external manifest state (blocking) ---")
-            for name in sorted(state["malformed"]):
-                print(f"  ! skill {name!r}: {state['skill_status'][name][1]}")
-            for rkey in sorted(state["orphan_malformed_repos"]):
-                print(f"  ! repository {rkey!r}: {state['repo_status'][rkey][1]}")
-
-        if state["unresolved"] or state["orphan_unprovable_repos"]:
-            print("\n--- Unresolved external state (blocking) ---")
-            for name in sorted(state["unresolved"]):
-                print(f"  ! {name}: {state['skill_status'][name][1]}")
-                print(f"      resolve with: --apply --resolve {name}=keep")
-                print(f"      resolve with: --apply --resolve {name}=stub")
-            for rkey in sorted(state["orphan_unprovable_repos"]):
-                print(f"  ! repository {rkey!r}: {state['repo_status'][rkey][1]}")
-
-        # Resolve and validate every desired external skill's upstream
-        # identity — in every mode, per the report-only contract: this may
-        # use network access and temporary checkouts, always cleaned up.
-        resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
-            state["ext_skills"], ext_added | ext_unchanged, ext_temp_dirs
-        )
-        if upstream_findings:
-            print("\n--- External upstream validation (blocking) ---")
-            for name in sorted(upstream_findings):
-                print(f"  ! {name}: {upstream_findings[name]}")
-
-        print("\n--- Update procedure ---")
-        print("1. Edit .agents/adoption.yml to declare the desired "
-              "commit/release/skills.")
-        print("2. Review the inventory, obligation, and skill-adoption "
-              "changes above.")
-        print("3. Identify affected consumer bindings and governance.")
-        print("4. Obtain deciding authority approval.")
-
-        if args.apply:
-            print("5. Applying update...")
-
-            unaddressed_resolve = set(resolutions) - state["unresolved"]
-            if unaddressed_resolve:
-                sys.exit(
-                    "--resolve named a skill that is not currently unresolved: "
-                    + ", ".join(sorted(unaddressed_resolve))
-                )
-            still_unresolved = state["unresolved"] - set(resolutions)
-            kept = {n for n, c in resolutions.items() if c == "keep"}
-            to_stub = {n for n, c in resolutions.items() if c == "stub"}
-
-            blocking = (
-                list(missing_sources)
-                + [f"skill collision: {n}" for n in sorted(root_collision | ext_collision)]
-                + list(state["repo_conflicts"])
-                + list(state["skill_conflicts"])
-                + [f"{n}: {r}" for n, r in sorted(upstream_findings.items())]
-                + list(ext_release_errors)
-                + [f"malformed external manifest state for skill {n!r}: "
-                   f"{state['skill_status'][n][1]}" for n in sorted(state["malformed"])]
-                + [f"malformed external manifest state for repository {r!r}: "
-                   f"{state['repo_status'][r][1]}"
-                   for r in sorted(state["orphan_malformed_repos"])]
-                + [f"unresolved external state for {n!r} (use --resolve {n}=keep "
-                   f"or --resolve {n}=stub)" for n in sorted(still_unresolved)]
-                + [f"unresolved external state for repository {r!r}"
-                   for r in sorted(state["orphan_unprovable_repos"])]
-                + [f"{n}: kept — apply intentionally deferred, no mutation"
-                   for n in sorted(kept)]
-            )
-            if release_error:
-                blocking.append(release_error)
-            if blocking:
-                print("  BLOCKED — not applying:")
-                for b in blocking:
-                    print(f"    {b}")
-                sys.exit(1)
-
-            if not vendor_matches:
-                swap_vendor_tree(declared_tree)
-                declared_tree = None  # consumed; nothing left to clean up
-
-            for name in sorted(root_added | root_unchanged):
-                materialize_skill(name, VENDOR)
-            for name in sorted(root_removed):
-                remove_skill(name)
-
-            for name in sorted(ext_added | ext_unchanged):
-                materialize_from(name, resolved_dirs[name])
-            for name in sorted(to_stub):
-                materialize_stub(name)
-            for name in sorted(ext_removed):
-                remove_skill(name)
-
-            for rkey, checkout in list(ext_checkouts.items()):
-                dest = external_vendor_path(rkey)
-                if checkout != dest:
-                    atomic_replace_dir(checkout, dest)
-                    ext_temp_dirs.remove(checkout)
-
-            ext_final = {n: state["ext_skills"][n] for n in (ext_added | ext_unchanged)}
-            ext_repos_final = {
-                rkey: info for rkey, info in state["ext_repos"].items()
-                if any(v["repo_key"] == rkey for v in ext_final.values())
-            }
-            dropped_repos = {
-                rkey for rkey, (status, _) in state["repo_status"].items()
-                if status == "proven"
-            } - set(ext_repos_final)
-            for rkey in sorted(dropped_repos):
-                shutil.rmtree(external_vendor_path(rkey), ignore_errors=True)
-
-            root_final_names = root_added | root_unchanged
-            candidate_manifest = generate_manifest(
-                adoption, adoption["pin"], root_final_names,
-                ext_repos_final, ext_final, to_stub,
-            )
-
-            print("6. Verifying resulting state...")
-            final_errors = verify_state(adoption, candidate_manifest)
-            if final_errors:
-                print("  INTEGRITY FAILURES after apply:")
-                for e in final_errors:
-                    print(f"    {e}")
-                sys.exit(1)
-
-            for client in selected_clients:
-                reconcile_client_skills(client.skills_root())
-
-            tmp_manifest = MANIFEST.with_name(
-                MANIFEST.name + f".tmp-{uuid.uuid4().hex[:12]}"
-            )
-            tmp_manifest.write_text(json.dumps(candidate_manifest, indent=2) + "\n")
-            os.replace(tmp_manifest, MANIFEST)
-            print(f"  OK — installation matches adoption.yml at "
-                  f"{adoption['pin'][:12]}")
-
-            # Commit point above; best-effort local Git exclusion only —
-            # a failure here cannot turn a successful apply into a failure.
-            update_git_exclude(generated_paths(
-                root_final_names, ext_repos_final, set(ext_final) | to_stub
-            ))
-        else:
-            print("5. Re-run with --apply to install the declared commit "
-                  "and skills.")
-            print("6. Run consumer validation after apply.")
+        # state in ("pending-install", "reconcile"), or "in-sync" with an
+        # explicitly requested client still needing (re)wiring or an
+        # explicitly supplied --bindings file still needing to be validated
+        # and applied.
+        return mutate(args, consumer_root, clients, classification["adoption"],
+                     classification["result"], mode="default", txn=txn, cache=cache)
     finally:
-        if declared_tree is not None and declared_tree.exists():
-            shutil.rmtree(declared_tree, ignore_errors=True)
-        for tmp in ext_temp_dirs:
-            if tmp.exists():
-                shutil.rmtree(tmp, ignore_errors=True)
-        # An owner directory created only to stage a temp fetch (report-only
-        # inspection, or an apply that ended up blocked) never persists
-        # empty — nothing was actually installed there.
-        if VENDOR_ROOT.is_dir():
-            for owner_dir in VENDOR_ROOT.iterdir():
-                if owner_dir.is_dir() and not any(owner_dir.iterdir()):
-                    owner_dir.rmdir()
+        cleanup_transaction(txn)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

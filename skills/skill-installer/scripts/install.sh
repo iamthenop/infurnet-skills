@@ -62,8 +62,16 @@ for candidate in python3 python; do
 done
 [ -n "$PY" ] || fail "no supported Python interpreter found (requires Python >= 3.12; tried: python3, python)"
 
-# --- delegate --------------------------------------------------------------
-
 SCRIPT_DIR=$(resolve_dir "$0")
+
+# --- dependency preflight ---------------------------------------------------
+# Confirms the selected interpreter can import the installer's bundled
+# runtime dependencies. Never installs anything; a missing dependency is a
+# preflight failure naming scripts/requirements.txt.
+
+"$PY" -c 'import yaml, markdown_it, ruamel.yaml' >/dev/null 2>&1 \
+    || fail "missing installer runtime dependency; install with: pip install -r $SCRIPT_DIR/requirements.txt (in an isolated virtual environment)"
+
+# --- delegate --------------------------------------------------------------
 
 exec "$PY" "$SCRIPT_DIR/install.py" --root "$CONSUMER_ROOT" "$@"

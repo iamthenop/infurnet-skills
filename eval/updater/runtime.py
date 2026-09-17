@@ -2,8 +2,11 @@
 """Regression harness for the runtime/client-integration layer around
 skills/skill-installer/scripts/install.py: install.sh/.ps1 (each owning its
 own runtime preflight directly — there is no standalone runtime-check
-script), and install.py's generic client-skill reconciliation plus its
-explicit `--client claude` integration.
+script), install.py's generic client-skill reconciliation plus its explicit
+`--client claude` integration, and the Phase 3 installer-orchestration
+contract — the mode/modifier CLI, the confirmation gate, and the three
+checker scripts (check-skills.py, check-bindings.py, check-update.py) that
+install.py calls rather than reimplements.
 
 Each regression builds temporary fixture repositories and a temporary copy
 of the installer package where argument forwarding must be proven without
@@ -24,6 +27,11 @@ POSIX coverage carries the full battery on every platform this suite runs
 on. The PATH-based interpreter/git-availability/single-selection cases are
 POSIX-only: they depend on shell PATH lookup semantics this suite does not
 reimplement for PowerShell's separate command-resolution rules.
+
+Every install.py invocation in this suite passes an explicit stdin
+`input_text` (default `""`, i.e. immediate EOF) so confirmation-prompt
+behavior is deterministic rather than accidentally inheriting the test
+runner's own stdin.
 """
 import importlib.util
 import json
@@ -40,6 +48,9 @@ SCRIPTS_DIR = REPO_ROOT / "skills" / "skill-installer" / "scripts"
 INSTALL_PY = SCRIPTS_DIR / "install.py"
 INSTALL_SH = SCRIPTS_DIR / "install.sh"
 INSTALL_PS1 = SCRIPTS_DIR / "install.ps1"
+CHECK_SKILLS_PY = SCRIPTS_DIR / "check-skills.py"
+CHECK_BINDINGS_PY = SCRIPTS_DIR / "check-bindings.py"
+CHECK_UPDATE_PY = SCRIPTS_DIR / "check-update.py"
 
 FIXTURE_SKILL = "---\nname: {name}\ndescription: Fixture.\nlicense: MIT\n---\nFixture.\n"
 
@@ -119,12 +130,122 @@ def write_adoption(consumer, upstream, sha, adopted):
     ]) + "\n")
 
 
-def run_install(consumer, args, env=None):
+def run_install(consumer, args, env=None, input_text=""):
+    """input_text defaults to "" (immediate EOF on any confirmation or
+    binding prompt) so every call is deterministic unless a test explicitly
+    supplies interactive answers."""
     proc = subprocess.run(
         [sys.executable, str(INSTALL_PY), "--root", str(consumer), *args],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, input=input_text,
     )
     return proc.returncode, proc.stdout + proc.stderr
+
+
+def run_check(script, args, input_text="", env=None):
+    proc = subprocess.run([sys.executable, str(script), *args],
+                          capture_output=True, text=True, input=input_text, env=env)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def run_check_json(script, args, env=None):
+    code, out, err = run_check(script, [*args, "--json"], env=env)
+    try:
+        return code, json.loads(out), err
+    except json.JSONDecodeError:
+        return code, None, err
+
+
+def answers(*lines):
+    """Deterministic multi-prompt stdin: one line per input() call the
+    subprocess is expected to make, in order."""
+    return "\n".join(lines) + "\n"
+
+
+def git_rewrite_env(rewrites):
+    """{canonical_url: local_path} -> env with GIT_CONFIG_COUNT/KEY/VALUE
+    insteadOf rewrites, so a test can point a GitHub-shaped external-source
+    at a local fixture repo. Production code always clones/fetches the
+    literal canonical URL; Git records that literal URL as remote.origin.url
+    regardless of this transport-only rewrite."""
+    env = dict(os.environ)
+    if rewrites:
+        env["GIT_CONFIG_COUNT"] = str(len(rewrites))
+        for i, (canonical, local) in enumerate(rewrites.items()):
+            env[f"GIT_CONFIG_KEY_{i}"] = f"url.{local}.insteadOf"
+            env[f"GIT_CONFIG_VALUE_{i}"] = canonical
+    return env
+
+
+def make_external_fixture(base):
+    """upstream's "widget" skill is a local external descriptor pointing —
+    via a github-shaped URL, git-rewritten to a local path for this test
+    process only — at a second upstream repository's own "widget" skill."""
+    upstream, sha = make_upstream(base)
+    ext_upstream = base / "ext-upstream"
+    ext_upstream.mkdir(parents=True)
+    run_git(["init", "-q"], ext_upstream)
+    write(ext_upstream / "skills" / "widget" / "SKILL.md", FIXTURE_SKILL.format(name="widget"))
+    run_git(["add", "-A"], ext_upstream)
+    run_git(["commit", "-q", "-m", "init"], ext_upstream)
+    ext_sha = run_git(["rev-parse", "HEAD"], ext_upstream)
+
+    canonical_url = "https://github.com/example/ext-upstream"
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\n"
+        "name: widget\n"
+        "description: External descriptor fixture.\n"
+        "license: MIT\n"
+        "metadata:\n"
+        "  skill-type: external\n"
+        f"  external-source: {canonical_url}\n"
+        f"  external-commit: {ext_sha}\n"
+        "  external-path: skills/widget\n"
+        "---\n"
+        "External descriptor fixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add widget descriptor"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    env = git_rewrite_env({canonical_url: str(ext_upstream)})
+    return upstream, new_sha, ext_upstream, ext_sha, env
+
+
+def write_adoption_file(consumer, upstream, sha, adopted, release=""):
+    write(consumer / ".agents" / "adoption.yml", "\n".join([
+        f"source: {upstream.as_posix()}", f"commit: {sha}", f'release: "{release}"',
+        "skills:", *(f"  - {name}" for name in adopted),
+    ]) + "\n")
+
+
+def full_install(base, skills=("alpha",), name="full-install"):
+    """A fresh upstream and consumer, fully installed via default mode with
+    --force. Returns (upstream, sha, consumer)."""
+    upstream, sha = make_upstream(base)
+    consumer = base / name
+    write_adoption(consumer, upstream, sha, skills)
+    code, out = run_install(consumer, ["--force"])
+    assert code == 0, out
+    return upstream, sha, consumer
+
+
+def render_project_md(sections):
+    lines = ["# PROJECT.md — repository bindings\n"]
+    for s in sections:
+        lines.append(f"\n## {s['name']}\n")
+        if s.get("applies_to"):
+            lines.append(f"\n<!-- Applies when `{s['applies_to']}` is installed. -->\n")
+        if s.get("no_table"):
+            lines.append("\nNo table here.\n")
+            continue
+        lines.append("\n| Binding | Value |\n| :--- | :--- |\n")
+        for label, value in s.get("rows", []):
+            lines.append(f"| {label} | {value} |\n")
+    return "".join(lines)
+
+
+def write_project_md(consumer, sections):
+    write(consumer / "PROJECT.md", render_project_md(sections))
 
 
 def load_install_module():
@@ -135,6 +256,16 @@ def load_install_module():
     behavior that cannot be forced through the real filesystem (no host
     running this suite is actually symlink-incapable)."""
     spec = importlib.util.spec_from_file_location("install_under_test", INSTALL_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_check_update_module():
+    """A fresh, unexecuted-as-main import of check-update.py, for a test
+    that needs to call its functions directly with a mocked check_skills —
+    a subprocess invocation would not see the mock."""
+    spec = importlib.util.spec_from_file_location("check_update_under_test", CHECK_UPDATE_PY)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -344,10 +475,98 @@ def test_wrapper_selects_interpreter_once(results, workdir, target):
         target.install_cmd(probe_dir, consumer, ["--probe-exit", "0"]), env=env)
     results.check(f"{label} interpreter-selection-once run exits zero", code == 0, out)
     invocations = counter_file.read_text().splitlines() if counter_file.exists() else []
-    version_probes = [line for line in invocations if line.startswith("-c ")]
+    # A dependency preflight probe (a second, distinct `-c` call on the same
+    # already-selected interpreter) is expected and intentional — only a
+    # second *version-check* probe would mean the interpreter was
+    # rediscovered rather than reused.
+    version_probes = [line for line in invocations
+                      if line.startswith("-c ") and "version_info" in line]
+    dependency_probes = [line for line in invocations
+                         if line.startswith("-c ") and "import yaml" in line]
     results.check(f"{label} exactly one version-check probe (no duplicate search loop)",
                   len(version_probes) == 1,
                   f"recorded invocations: {invocations!r}")
+    results.check(f"{label} exactly one dependency preflight probe",
+                  len(dependency_probes) == 1,
+                  f"recorded invocations: {invocations!r}")
+
+
+APPROVED_THIRD_PARTY_IMPORTS = {"yaml", "markdown_it", "ruamel"}
+
+
+def test_dependency_import_completeness(results, workdir):
+    """Every direct third-party import across the four installer entry
+    points is one of the three approved dependencies, and every approved
+    dependency is actually declared in the bundled requirements file —
+    scripts/requirements.txt is the complete declaration in both
+    directions."""
+    import ast
+
+    requirements_text = (SCRIPTS_DIR / "requirements.txt").read_text()
+    declared = {line.split("==")[0].strip().lower()
+               for line in requirements_text.splitlines()
+               if line.strip() and not line.strip().startswith("#")}
+    results.check("requirements.txt declares exactly the three approved dependencies",
+                  declared == {"pyyaml", "markdown-it-py", "ruamel.yaml"}, declared)
+
+    found = set()
+    for script in (INSTALL_PY, CHECK_SKILLS_PY, CHECK_BINDINGS_PY, CHECK_UPDATE_PY):
+        tree = ast.parse(script.read_text(), filename=str(script))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    found.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module.split(".")[0])
+    third_party = found - set(sys.stdlib_module_names)
+    results.check(
+        "the only third-party imports across all four entry points are the "
+        "three approved dependencies",
+        third_party == APPROVED_THIRD_PARTY_IMPORTS, third_party)
+
+
+def test_wrapper_missing_dependency_diagnostic(results, workdir):
+    """A selected interpreter that cannot import the bundled dependencies is
+    a preflight failure naming scripts/requirements.txt — never an attempt
+    to install anything."""
+    probe_dir = make_probe_scripts_dir(workdir / "missing-dep-probe")
+    consumer = make_git_repo(workdir / "missing-dep-consumer")
+    fake = workdir / "missing-dep-fakebin"
+    fake.mkdir(parents=True, exist_ok=True)
+    write(fake / "python3", (
+        "#!/bin/sh\n"
+        'if [ "$1" = "-c" ]; then\n'
+        '    case "$2" in\n'
+        '        *version_info*) exit 0 ;;\n'
+        '        *) exit 1 ;;\n'
+        '    esac\n'
+        'fi\n'
+        'exit 1\n'
+    ))
+    (fake / "python3").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake}:{os.environ.get('PATH', '')}")
+
+    code, out = run_proc(PosixTarget().install_cmd(probe_dir, consumer, []), env=env)
+    results.check("missing dependency — nonzero exit", code != 0, out)
+    results.check("missing dependency — probe install.py never ran",
+                  probe_argv(out) is None, out)
+    results.check("missing dependency — diagnostic names requirements.txt",
+                  "requirements.txt" in out, out)
+    results.check("missing dependency — diagnostic is advisory only (tells the user "
+                  "to run pip themselves; the wrapper never runs it)",
+                  "pip install" in out, out)
+
+
+def test_ps1_prefers_path_interpreter_over_launcher(results, workdir):
+    """install.ps1's interpreter candidates must try 'python'/'python3'
+    (PATH-resolved, so an activated virtual environment's own interpreter is
+    found) before the 'py' launcher (which resolves independent of PATH and
+    would otherwise bypass an activated environment)."""
+    text = INSTALL_PS1.read_text()
+    python_idx = text.index("Exe = 'python'")
+    launcher_idx = text.index("Exe = 'py'")
+    results.check("install.ps1 tries 'python' before the 'py' launcher",
+                  python_idx < launcher_idx, text)
 
 
 # --- generic client-skill exposure regressions (in-process) ---------------
@@ -362,9 +581,25 @@ def make_client_reconciler_env(base):
     consumer_root = base / "consumer"
     skills_root = consumer_root / ".agents" / "skills"
     skills_root.mkdir(parents=True)
-    module.CONSUMER_ROOT = consumer_root
-    module.SKILLS_ROOT = skills_root
-    return module, skills_root
+    return module, consumer_root, skills_root
+
+
+def reconcile_generic(module, consumer_root, skills_root, client_skills_root):
+    """Test-only convenience reproducing install.py's real assess-then-
+    apply sequence in one call, against a synthetic discovery root — the
+    same shared, generic reconciliation algorithm the production
+    transaction flow now computes before confirmation and applies after,
+    exercised directly without a full install.py transaction."""
+    module.check_client_skills_preflight(consumer_root, client_skills_root)
+    desired = ({p.name for p in skills_root.iterdir() if p.is_dir()}
+              if skills_root.is_dir() else set())
+    assessment = module.check_skills.assess_client_exposure(desired, skills_root,
+                                                            client_skills_root)
+    for name in assessment["occupied"]:
+        link = client_skills_root / name
+        sys.exit(f"{link}: exists and is not an installer-owned exposure "
+                 "symlink; refusing to overwrite")
+    module.apply_client_exposure(desired, skills_root, client_skills_root, assessment)
 
 
 def install_canonical_skill(skills_root, name, content="Fixture.\n"):
@@ -380,12 +615,12 @@ def stopped_with_system_exit(fn):
 
 
 def test_generic_exposure_created(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-created")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-created")
     install_canonical_skill(skills_root, "alpha")
     install_canonical_skill(skills_root, "beta")
-    client_root = module.CONSUMER_ROOT / "some-client" / "skills"
+    client_root = consumer_root / "some-client" / "skills"
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
 
     for name in ("alpha", "beta"):
         link = client_root / name
@@ -408,14 +643,14 @@ def test_generic_exposure_created(results, workdir):
 
 
 def test_generic_exposure_retained_unchanged(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-retained")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-retained")
     install_canonical_skill(skills_root, "alpha")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
-    module.reconcile_client_skills(client_root)
+    client_root = consumer_root / "client" / "skills"
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     inode_before = os.lstat(client_root / "alpha").st_ino
     raw_target_before = os.readlink(client_root / "alpha")
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — correct owned exposure left unchanged (same inode)",
         os.lstat(client_root / "alpha").st_ino == inode_before, "")
@@ -430,15 +665,15 @@ def test_generic_exposure_absolute_target_normalized(results, workdir):
     the canonical repository-relative form, is not "already correct" —
     the installer contract requires the relative representation, not just
     correct resolution. Reconciliation must rewrite it in place."""
-    module, skills_root = make_client_reconciler_env(workdir / "generic-absolute")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-absolute")
     install_canonical_skill(skills_root, "alpha", "Fixture v1.\n")
     before_contents = (skills_root / "alpha" / "SKILL.md").read_text()
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
     client_root.mkdir(parents=True)
     os.symlink(str(skills_root / "alpha"), client_root / "alpha", target_is_directory=True)
     raw_before = os.readlink(client_root / "alpha")
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
 
     expected_raw_target = os.path.relpath(skills_root / "alpha", client_root)
     results.check(
@@ -457,17 +692,17 @@ def test_generic_exposure_absolute_target_normalized(results, workdir):
 
 
 def test_generic_exposure_removed_when_skill_removed(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-removed")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-removed")
     install_canonical_skill(skills_root, "alpha")
     install_canonical_skill(skills_root, "beta")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
-    module.reconcile_client_skills(client_root)
+    client_root = consumer_root / "client" / "skills"
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — both present before removal",
         (client_root / "alpha").is_symlink() and (client_root / "beta").is_symlink(), "")
 
     shutil.rmtree(skills_root / "beta")
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — stale exposure removed once the canonical skill is gone",
         not (client_root / "beta").exists(), "")
@@ -476,15 +711,15 @@ def test_generic_exposure_removed_when_skill_removed(results, workdir):
 
 
 def test_generic_exposure_corrected(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-corrected")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-corrected")
     install_canonical_skill(skills_root, "alpha")
     install_canonical_skill(skills_root, "not-alpha")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
     client_root.mkdir(parents=True)
     os.symlink(os.path.relpath(skills_root / "not-alpha", client_root),
                client_root / "alpha", target_is_directory=True)
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check(
         "generic exposure — owned exposure with the wrong target is corrected",
         (client_root / "alpha" / "SKILL.md").read_text()
@@ -492,16 +727,16 @@ def test_generic_exposure_corrected(results, workdir):
 
 
 def test_generic_exposure_preserves_unrelated(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-unrelated")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-unrelated")
     install_canonical_skill(skills_root, "alpha")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
     write(client_root / "notes.txt", "unrelated file\n")
     write(client_root / "scratch" / "data.txt", "unrelated dir\n")
     outside_target = workdir / "generic-unrelated" / "outside"
     outside_target.mkdir(parents=True)
     os.symlink(outside_target, client_root / "external", target_is_directory=True)
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check("generic exposure — unrelated file preserved",
                   (client_root / "notes.txt").read_text() == "unrelated file\n", "")
     results.check("generic exposure — unrelated directory preserved",
@@ -514,12 +749,12 @@ def test_generic_exposure_preserves_unrelated(results, workdir):
 
 
 def test_generic_exposure_collision_blocks(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-collision")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-collision")
     install_canonical_skill(skills_root, "alpha")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
     write(client_root / "alpha", "unmanaged file\n")
 
-    stopped = stopped_with_system_exit(lambda: module.reconcile_client_skills(client_root))
+    stopped = stopped_with_system_exit(lambda: reconcile_generic(module, consumer_root, skills_root, client_root))
     results.check("generic exposure — desired-name collision stops", stopped, "")
     results.check(
         "generic exposure — colliding content untouched",
@@ -528,12 +763,12 @@ def test_generic_exposure_collision_blocks(results, workdir):
 
 
 def test_generic_exposure_canonical_contents_unchanged(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-untouched")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-untouched")
     install_canonical_skill(skills_root, "alpha", "Fixture v1.\n")
     before = (skills_root / "alpha" / "SKILL.md").read_text()
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
 
-    module.reconcile_client_skills(client_root)
+    reconcile_generic(module, consumer_root, skills_root, client_root)
     results.check("generic exposure — canonical skill contents unchanged",
                   (skills_root / "alpha" / "SKILL.md").read_text() == before, "")
 
@@ -541,26 +776,26 @@ def test_generic_exposure_canonical_contents_unchanged(results, workdir):
 def test_generic_preflight_capability_unavailable_blocks(results, workdir):
     """No development or CI host running this suite is actually
     symlink-incapable, so the OS-level failure is simulated in-process."""
-    module, skills_root = make_client_reconciler_env(workdir / "generic-capability")
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-capability")
+    client_root = consumer_root / "client" / "skills"
     with mock.patch.object(module.os, "symlink", side_effect=OSError("simulated: unsupported")):
         stopped = stopped_with_system_exit(
-            lambda: module.check_client_skills_preflight(client_root))
+            lambda: module.check_client_skills_preflight(consumer_root, client_root))
     results.check("generic preflight — capability-unavailable stops", stopped, "")
     results.check("generic preflight — no client root created",
                   not client_root.exists(), "")
 
 
 def test_generic_preflight_client_root_symlink_blocks(results, workdir):
-    module, skills_root = make_client_reconciler_env(workdir / "generic-root-symlink")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-root-symlink")
     elsewhere = workdir / "generic-root-symlink" / "elsewhere"
     elsewhere.mkdir(parents=True)
-    client_root = module.CONSUMER_ROOT / "client" / "skills"
+    client_root = consumer_root / "client" / "skills"
     client_root.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(elsewhere, client_root, target_is_directory=True)
 
     stopped = stopped_with_system_exit(
-        lambda: module.check_client_skills_preflight(client_root))
+        lambda: module.check_client_skills_preflight(consumer_root, client_root))
     results.check("generic preflight — client skill root itself a symlink stops", stopped, "")
 
 
@@ -570,18 +805,18 @@ def test_generic_preflight_ancestor_symlink_blocks(results, workdir):
     never be resolved and followed into its target: no exposure surface
     may appear there, and the canonical installed-skill surface must be
     left untouched."""
-    module, skills_root = make_client_reconciler_env(workdir / "generic-ancestor-symlink")
+    module, consumer_root, skills_root = make_client_reconciler_env(workdir / "generic-ancestor-symlink")
     install_canonical_skill(skills_root, "alpha")
     before = (skills_root / "alpha" / "SKILL.md").read_text()
     elsewhere = workdir / "generic-ancestor-symlink" / "elsewhere"
     elsewhere.mkdir(parents=True)
-    ancestor = module.CONSUMER_ROOT / "some-client"
+    ancestor = consumer_root / "some-client"
     ancestor.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(elsewhere, ancestor, target_is_directory=True)
     client_root = ancestor / "skills"
 
     stopped = stopped_with_system_exit(
-        lambda: module.check_client_skills_preflight(client_root))
+        lambda: module.check_client_skills_preflight(consumer_root, client_root))
     results.check("generic preflight — symlinked ancestor of client root stops", stopped, "")
     results.check(
         "generic preflight — no exposure created through the symlinked ancestor",
@@ -600,13 +835,13 @@ def test_generic_preflight_ancestor_symlink_blocks(results, workdir):
 
 def test_no_client_no_mutation(results, workdir):
     """--client omitted must leave every Claude filesystem surface alone,
-    even across a real materializing --apply."""
+    even across a real materializing default-mode install."""
     base = workdir / "no-client"
     upstream, sha = make_upstream(base)
     consumer = base / "consumer"
     write_adoption(consumer, upstream, sha, ["alpha"])
-    code, out = run_install(consumer, ["--apply"])
-    results.check("no --client — apply exits zero", code == 0, out)
+    code, out = run_install(consumer, ["--force"])
+    results.check("no --client — install exits zero", code == 0, out)
     results.check("no --client — CLAUDE.md not created", not (consumer / "CLAUDE.md").exists(), out)
     results.check("no --client — .claude/ not created", not (consumer / ".claude").exists(), out)
 
@@ -619,8 +854,8 @@ def test_claude_selects_claude_skills_root(results, workdir):
     upstream, sha = make_upstream(base)
     consumer = base / "consumer"
     write_adoption(consumer, upstream, sha, ["alpha"])
-    code, out = run_install(consumer, ["--apply", "--client", "claude"])
-    results.check("claude wiring — apply exits zero", code == 0, out)
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("claude wiring — install exits zero", code == 0, out)
     link = consumer / ".claude" / "skills" / "alpha"
     results.check("claude wiring — .claude/skills/alpha is a symlink", link.is_symlink(), out)
     results.check(
@@ -632,7 +867,7 @@ def test_claude_selects_claude_skills_root(results, workdir):
 def test_claude_md_created(results, workdir):
     consumer = workdir / "claude-md-created"
     consumer.mkdir(parents=True)
-    code, out = run_install(consumer, ["--client", "claude"])
+    code, out = run_install(consumer, ["--client", "claude", "--force"])
     results.check("--client claude, fresh — exits zero", code == 0, out)
     claude_md = consumer / "CLAUDE.md"
     results.check("--client claude, fresh — CLAUDE.md created", claude_md.exists(), out)
@@ -648,7 +883,7 @@ def test_claude_md_import_prepended(results, workdir):
     consumer = workdir / "claude-md-prepend"
     consumer.mkdir(parents=True)
     write(consumer / "CLAUDE.md", "# My guide\nSome text\n")
-    code, out = run_install(consumer, ["--client", "claude"])
+    code, out = run_install(consumer, ["--client", "claude", "--force"])
     results.check("existing CLAUDE.md, no import — exits zero", code == 0, out)
     results.check("existing CLAUDE.md, no import — import prepended, content preserved",
                   (consumer / "CLAUDE.md").read_text()
@@ -660,7 +895,7 @@ def test_claude_md_correct_import_unchanged(results, workdir):
     consumer.mkdir(parents=True)
     content = "@AGENTS.md\n\nExtra notes.\n"
     write(consumer / "CLAUDE.md", content)
-    code, out = run_install(consumer, ["--client", "claude"])
+    code, out = run_install(consumer, ["--client", "claude", "--force"])
     results.check("existing correct CLAUDE.md — exits zero", code == 0, out)
     results.check("existing correct CLAUDE.md — byte-unchanged",
                   (consumer / "CLAUDE.md").read_text() == content, out)
@@ -716,17 +951,3106 @@ def test_claude_md_dangling_symlink_blocks(results, workdir):
                   not target.exists(), out)
 
 
+def test_agents_md_malformed_markers_blocks(results, workdir):
+    """Unmatched, nested, or duplicate installer markers in AGENTS.md must
+    block the whole transaction — the opposite failure policy from a
+    malformed .git/info/exclude, which only produces a note."""
+    module = load_install_module()
+    base = workdir / "agents-md-malformed"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "AGENTS.md", (
+        f"Existing content.\n{module.AGENTS_BEGIN}\nstale\n{module.AGENTS_END}\n"
+        f"{module.AGENTS_BEGIN}\nduplicate\n{module.AGENTS_END}\n"
+    ))
+    before = (consumer / "AGENTS.md").read_text()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("AGENTS.md duplicate markers — nonzero exit", code != 0, out)
+    results.check("AGENTS.md duplicate markers — file byte-unchanged",
+                  (consumer / "AGENTS.md").read_text() == before, out)
+    results.check("AGENTS.md duplicate markers — no other mutation began",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_agents_md_marker_replacement_preserves_surrounding_content(results, workdir):
+    module = load_install_module()
+    base = workdir / "agents-md-replace"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "AGENTS.md", (
+        f"# Repo AGENTS.md\n\nBefore.\n\n{module.AGENTS_BEGIN}\nstale installer content\n"
+        f"{module.AGENTS_END}\n\nAfter.\n"
+    ))
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("AGENTS.md marker replacement — install exits zero", code == 0, out)
+    after_text = (consumer / "AGENTS.md").read_text()
+    results.check("AGENTS.md marker replacement — content before the section preserved",
+                  "Before." in after_text, after_text)
+    results.check("AGENTS.md marker replacement — content after the section preserved",
+                  "After." in after_text, after_text)
+    results.check("AGENTS.md marker replacement — stale content inside replaced",
+                  "stale installer content" not in after_text, after_text)
+
+
+def test_git_exclude_malformed_markers_notes_and_skips(results, workdir):
+    """A malformed .git/info/exclude marker must not block the transaction
+    — only a note, and the file is left byte-unchanged — the opposite
+    failure policy from malformed AGENTS.md markers, which is a hard
+    stop."""
+    module = load_install_module()
+    base = workdir / "git-exclude-malformed"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    make_git_repo(consumer)
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    exclude_path = consumer / ".git" / "info" / "exclude"
+    write(exclude_path,
+         f"{module.EXCLUDE_BEGIN}\nstale\n{module.EXCLUDE_BEGIN}\nagain\n{module.EXCLUDE_END}\n")
+    before = exclude_path.read_text()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("git exclude malformed markers — install still exits zero", code == 0, out)
+    results.check("git exclude malformed markers — a note is printed",
+                  "malformed infurnet-skills markers" in out, out)
+    results.check("git exclude malformed markers — file left byte-unchanged",
+                  exclude_path.read_text() == before, out)
+
+
+def test_git_exclude_created_then_updated_in_place(results, workdir):
+    """A first mutating install creates the marked exclude block in a git
+    consumer repository; a later mutation updates that same block in
+    place rather than duplicating it."""
+    module = load_install_module()
+    base = workdir / "git-exclude-lifecycle"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    make_git_repo(consumer)
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    exclude_path = consumer / ".git" / "info" / "exclude"
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("git exclude lifecycle — install exits zero", code == 0, out)
+    first_text = exclude_path.read_text()
+    results.check(
+        "git exclude lifecycle — marked block created",
+        module.EXCLUDE_BEGIN in first_text and "/.agents/skills/alpha/" in first_text,
+        first_text)
+
+    code2, out2 = run_install(consumer, ["--repair", "--force"])
+    results.check("git exclude lifecycle — repair exits zero", code2 == 0, out2)
+    second_text = exclude_path.read_text()
+    results.check("git exclude lifecycle — block updated in place, not duplicated",
+                  second_text.count(module.EXCLUDE_BEGIN) == 1, second_text)
+
+
 def test_claude_permission_settings_untouched(results, workdir):
     base = workdir / "permission-settings"
     upstream, sha = make_upstream(base)
     consumer = base / "consumer"
     write_adoption(consumer, upstream, sha, ["alpha"])
-    code, out = run_install(consumer, ["--apply", "--client", "claude"])
-    results.check("permission settings — apply exits zero", code == 0, out)
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("permission settings — install exits zero", code == 0, out)
     results.check("permission settings — .claude/settings.json never created",
                   not (consumer / ".claude" / "settings.json").exists(), out)
     results.check("permission settings — .claude/settings.local.json never created",
                   not (consumer / ".claude" / "settings.local.json").exists(), out)
+
+
+CLAUDE_DOC = {"path": "CLAUDE.md", "required_first_line": "@AGENTS.md"}
+
+
+def test_claude_governance_four_states(results, workdir):
+    """check_skills.assess_first_line_document() must distinguish exactly
+    the four required states, as one generic implementation shared by
+    every client with a required-first-line document — not a Claude-
+    specific procedure — between the checker's findings and install.py's
+    staging."""
+    module = load_install_module()
+    base = workdir / "claude-governance-states"
+
+    def assess(root):
+        return module.check_skills.assess_first_line_document(
+            root / CLAUDE_DOC["path"], CLAUDE_DOC["required_first_line"])
+
+    correct = base / "correct"
+    write(correct / "CLAUDE.md", "@AGENTS.md\n\nExtra notes.\n")
+    results.check("claude governance — correct import detected",
+                  assess(correct)["state"] == "correct", "")
+
+    missing = base / "missing"
+    missing.mkdir(parents=True)
+    results.check("claude governance — missing file detected",
+                  assess(missing)["state"] == "missing", "")
+
+    needs_insertion = base / "needs-insertion"
+    write(needs_insertion / "CLAUDE.md", "Some existing notes.\n")
+    assessment = assess(needs_insertion)
+    results.check("claude governance — needs-insertion detected",
+                  assessment["state"] == "needs-insertion", assessment)
+    results.check("claude governance — needs-insertion carries the existing text",
+                  assessment["existing_text"] == "Some existing notes.\n", assessment)
+
+    ambiguous = base / "ambiguous"
+    write(ambiguous / "CLAUDE.md", "Some notes.\n@AGENTS.md\n")
+    results.check(
+        "claude governance — import present but not first line is unsafe/ambiguous",
+        assess(ambiguous)["state"] == "unsafe", "")
+
+    symlink_root = base / "symlink"
+    symlink_root.mkdir(parents=True)
+    target = base / "symlink-target.md"
+    write(target, "@AGENTS.md\n")
+    os.symlink(target, symlink_root / "CLAUDE.md")
+    results.check("claude governance — symlink is unsafe",
+                  assess(symlink_root)["state"] == "unsafe", "")
+
+    results.check(
+        "claude governance — no Claude-specific assessment procedure remains "
+        "(assess_first_line_document is the only implementation, driven by "
+        "the CLIENT_GOVERNANCE_DOCUMENTS registry)",
+        not hasattr(module.check_skills, "assess_claude_governance")
+        and not hasattr(module.check_skills, "check_claude_governance")
+        and not hasattr(module, "compute_claude_governance")
+        and not hasattr(module, "apply_claude_governance")
+        and module.check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get("claude") == CLAUDE_DOC,
+        "")
+
+
+class _StubArgs:
+    def __init__(self, bindings, force, target_version=None):
+        self.bindings = bindings
+        self.force = force
+        self.target_version = target_version
+
+
+def test_claude_governance_staged_once_not_reassessed(results, workdir):
+    """stage_first_line_document() — install.py's own pre-confirmation
+    staging step — must be called exactly once for the whole mutate()
+    transaction. apply_first_line_document() must write that staged plan
+    verbatim rather than independently rereading, reassessing, or
+    regenerating the edit after confirmation. (The separate post-mutation
+    check_skills verification pass legitimately reassesses the document too
+    — that is a different step, "Verify", not a second "stage".)"""
+    module = load_install_module()
+    base = workdir / "claude-governance-once"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, ["claude"], txn, cache)
+
+    call_count = {"n": 0}
+    real_stage = module.stage_first_line_document
+
+    def counting_stage(consumer_root_arg, doc_arg):
+        call_count["n"] += 1
+        return real_stage(consumer_root_arg, doc_arg)
+
+    with mock.patch.object(module, "stage_first_line_document", side_effect=counting_stage):
+        code = module.mutate(
+            _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+            classification["adoption"], classification["result"], mode="default",
+            txn=txn, cache=cache)
+    results.check("claude governance — install exits zero", code == 0, "")
+    results.check(
+        "claude governance — staged exactly once for the whole transaction "
+        "(never reassessed a second time to decide what to write)",
+        call_count["n"] == 1, call_count)
+    results.check(
+        "claude governance — CLAUDE.md written with the staged import",
+        (consumer_root / "CLAUDE.md").read_text().split("\n")[0] == "@AGENTS.md", "")
+
+
+def test_first_line_document_apply_guard_stops_on_symlink_drift(results, workdir):
+    """apply_first_line_document() must reread the document immediately
+    before writing only to guard against drift since staging — if the
+    document was replaced with a symlink in the meantime, this must stop
+    rather than write through it or recompute a new edit."""
+    module = load_install_module()
+    base = workdir / "governance-apply-guard-symlink"
+    consumer_root = base / "consumer"
+    consumer_root.mkdir(parents=True)
+
+    plan = module.stage_first_line_document(consumer_root, CLAUDE_DOC)
+    results.check("document apply guard setup — missing file staged for creation",
+                  plan[0] is True and plan[2] is None, plan)
+
+    target = base / "elsewhere.md"
+    write(target, "unrelated\n")
+    os.symlink(target, consumer_root / "CLAUDE.md")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_first_line_document(consumer_root, CLAUDE_DOC, plan))
+    results.check("document apply guard — stops rather than writing through the symlink",
+                  stopped, "")
+    results.check(
+        "document apply guard — the symlink and its target are left untouched",
+        os.path.realpath(consumer_root / "CLAUDE.md") == os.path.realpath(target)
+        and target.read_text() == "unrelated\n", "")
+
+
+def test_first_line_document_apply_guard_stops_on_content_drift(results, workdir):
+    """The same guard must also fire when the document still exists as a
+    regular file but its content changed since staging — never silently
+    overwriting it with the staged edit computed against the old content."""
+    module = load_install_module()
+    base = workdir / "governance-apply-guard-content"
+    consumer_root = base / "consumer"
+    write(consumer_root / "CLAUDE.md", "Some existing notes.\n")
+
+    plan = module.stage_first_line_document(consumer_root, CLAUDE_DOC)
+    results.check("content drift setup — needs-insertion staged",
+                  plan[0] is True and plan[2] == "Some existing notes.\n", plan)
+
+    write(consumer_root / "CLAUDE.md", "Different notes now.\n")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_first_line_document(consumer_root, CLAUDE_DOC, plan))
+    results.check("content drift — apply stops rather than overwriting", stopped, "")
+    results.check("content drift — the changed content is left exactly as it is",
+                  (consumer_root / "CLAUDE.md").read_text() == "Different notes now.\n", "")
+
+
+# --- Phase 3: installer orchestration, mode/modifier CLI, checkers --------
+
+
+def test_removed_flags_rejected(results, workdir):
+    consumer = workdir / "removed-flags"
+    consumer.mkdir(parents=True)
+    for flag in (["--apply"], ["--candidate", "main"], ["--resolve", "x=keep"]):
+        code, out = run_install(consumer, flag)
+        results.check(f"removed flag {flag[0]} — rejected rather than silently accepted",
+                      code != 0 and "unrecognized arguments" in out, out)
+
+
+def test_invalid_flag_combinations_rejected(results, workdir):
+    consumer = workdir / "invalid-combos"
+    consumer.mkdir(parents=True)
+    combos = [
+        ["--verify", "--update"],
+        ["--verify", "--repair"],
+        ["--update", "--repair"],
+        ["--verify", "--force"],
+        ["--verify", "--bindings", "x.yml"],
+        ["--verify", "--target-version", "v1"],
+        ["--repair", "--target-version", "v1"],
+        ["--target-version", "v1"],
+    ]
+    for combo in combos:
+        code, out = run_install(consumer, combo)
+        results.check(f"invalid combination {combo} — rejected before mutation", code != 0, out)
+
+
+def test_bootstrap_confirm_and_cancel(results, workdir):
+    consumer = workdir / "bootstrap-cycle"
+    consumer.mkdir(parents=True)
+
+    code, out = run_install(consumer, [])
+    results.check("bootstrap — EOF without --force stops before mutation", code != 0, out)
+    results.check("bootstrap — EOF leaves adoption.yml absent",
+                  not (consumer / ".agents" / "adoption.yml").exists(), out)
+
+    code, out = run_install(consumer, [], input_text=answers("n"))
+    results.check("bootstrap — 'n' exits cleanly", code == 0, out)
+    results.check("bootstrap — 'n' leaves adoption.yml absent",
+                  not (consumer / ".agents" / "adoption.yml").exists(), out)
+    results.check("bootstrap — 'n' leaves PROJECT.md absent",
+                  not (consumer / "PROJECT.md").exists(), out)
+    results.check("bootstrap — 'n' leaves AGENTS.md absent",
+                  not (consumer / "AGENTS.md").exists(), out)
+
+    code, out = run_install(consumer, [], input_text=answers("y"))
+    results.check("bootstrap — 'y' exits zero", code == 0, out)
+    results.check("bootstrap — 'y' creates adoption.yml",
+                  (consumer / ".agents" / "adoption.yml").exists(), out)
+    results.check("bootstrap — 'y' creates PROJECT.md", (consumer / "PROJECT.md").exists(), out)
+    results.check("bootstrap — 'y' creates AGENTS.md", (consumer / "AGENTS.md").exists(), out)
+
+
+def test_pending_install_after_bootstrap_completion(results, workdir):
+    base = workdir / "post-bootstrap-install"
+    consumer = base / "consumer"
+    consumer.mkdir(parents=True)
+    run_install(consumer, [], input_text=answers("y"))
+
+    upstream, sha = make_upstream(base)
+    write_adoption_file(consumer, upstream, sha, ["alpha"])
+    code, out = run_install(consumer, ["--force"])
+    results.check("post-bootstrap install — exits zero, not misclassified as damaged",
+                  code == 0, out)
+    results.check("post-bootstrap install — alpha materialized",
+                  (consumer / ".agents" / "skills" / "alpha").is_dir(), out)
+
+
+def test_adoption_present_no_manifest_generated_state_is_damaged(results, workdir):
+    base = workdir / "partial-damaged"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    (consumer / ".agents" / "infurnet-skills.manifest.json").unlink()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("manifest removed, generated state present — reported damaged", code != 0, out)
+    results.check("manifest removed — directs to --repair rather than silently reinstalling",
+                  "--repair" in out, out)
+    results.check("manifest removed — install.py did not fabricate a new manifest itself",
+                  not (consumer / ".agents" / "infurnet-skills.manifest.json").exists(), out)
+
+
+def test_manifest_present_malformed_adoption_not_bootstrap(results, workdir):
+    base = workdir / "malformed-adoption"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    malformed = "not: valid: yaml: at all\n"
+    write(consumer / ".agents" / "adoption.yml", malformed)
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("malformed adoption with manifest present — nonzero exit", code != 0, out)
+    results.check("malformed adoption — not silently replaced by the bootstrap template",
+                  (consumer / ".agents" / "adoption.yml").read_text() == malformed, out)
+
+    repair_code, repair_out = run_install(consumer, ["--repair", "--force"])
+    results.check("malformed adoption — --repair also refuses (not repairable)",
+                  repair_code != 0, repair_out)
+
+
+def test_default_mode_reconciles_changed_intent_and_no_silent_repair(results, workdir):
+    base = workdir / "reconcile-vs-damage"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    write_adoption_file(consumer, upstream, sha, ["alpha", "beta"])
+    code, out = run_install(consumer, ["--force"])
+    results.check("manually changed intent — default mode installs beta",
+                  code == 0 and (consumer / ".agents" / "skills" / "beta").is_dir(), out)
+
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+    code, out = run_install(consumer, ["--force"])
+    results.check("same-intent damage — default mode blocks rather than silently fixing",
+                  code != 0, out)
+    results.check("same-intent damage — content not silently repaired",
+                  (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text()
+                  == "corrupted\n", out)
+    results.check("same-intent damage — directs to --repair", "--repair" in out, out)
+
+
+def test_same_pin_reconciliation_is_noop(results, workdir):
+    base = workdir / "same-pin-noop"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_before = (consumer / ".agents" / "infurnet-skills.manifest.json").read_text()
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("same-pin re-run — exits zero", code == 0, out)
+    results.check("same-pin re-run — reports already reconciled", "Already reconciled" in out, out)
+    results.check("same-pin re-run — manifest byte-unchanged",
+                  (consumer / ".agents" / "infurnet-skills.manifest.json").read_text()
+                  == manifest_before, out)
+
+
+def test_verify_noninteractive_offline_nonmutating(results, workdir):
+    base = workdir / "verify-clean"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    before = (consumer / ".agents" / "infurnet-skills.manifest.json").read_text()
+
+    code, out = run_install(consumer, ["--verify"])
+    results.check("verify on healthy install — exits zero", code == 0, out)
+    results.check("verify — manifest byte-unchanged",
+                  (consumer / ".agents" / "infurnet-skills.manifest.json").read_text() == before, out)
+
+
+def test_verify_fails_on_skill_failure(results, workdir):
+    base = workdir / "verify-skill-fail"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    code, out = run_install(consumer, ["--verify"])
+    results.check("verify fails on skill-integrity corruption", code != 0, out)
+
+
+def test_verify_fails_on_binding_failure(results, workdir):
+    base = workdir / "verify-binding-fail"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha",
+         "rows": [("Widget size", "*not yet defined*"), ("Widget color", "")]},
+    ])
+
+    code, out = run_install(consumer, ["--verify"])
+    results.check("verify fails when an applicable binding is unresolved", code != 0, out)
+    results.check(
+        "verify fails when an applicable binding is merely an empty cell (RC8.3)",
+        "Widget color" in out, out)
+
+
+def test_verify_client_checks_without_mutating(results, workdir):
+    base = workdir / "verify-client"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    code, out = run_install(consumer, ["--verify", "--client", "claude"])
+    results.check("verify --client claude on unwired repo — reports failure", code != 0, out)
+    results.check("verify --client claude — does not create CLAUDE.md",
+                  not (consumer / "CLAUDE.md").exists(), out)
+    results.check("verify --client claude — does not create .claude/",
+                  not (consumer / ".claude").exists(), out)
+
+    code2, out2 = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("install --client claude wires it", code2 == 0, out2)
+    code3, out3 = run_install(consumer, ["--verify", "--client", "claude"])
+    results.check("verify --client claude on wired repo — exits zero", code3 == 0, out3)
+
+
+def materialize_from_upstream(skills_root, upstream, name):
+    dest = skills_root / name
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(upstream / "skills" / name, dest)
+
+
+def test_check_skills_detects_corruption_classes(results, workdir):
+    base = workdir / "check-skills-corruption"
+    upstream, sha, consumer = full_install(base, ["alpha", "beta"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    skills_root = consumer / ".agents" / "skills"
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("check-skills — clean install reports ok", code == 0 and result["ok"], err)
+
+    shutil.rmtree(skills_root / "alpha")
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — missing materialized skill detected",
+        code != 0 and any(f["category"] == "materialization" and f["subject"] == "alpha"
+                          for f in result["findings"]),
+        json.dumps(result))
+    materialize_from_upstream(skills_root, upstream, "alpha")
+
+    write(skills_root / "alpha" / "SKILL.md", "corrupted\n")
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — hash-corrupt (drifted) skill detected",
+        code != 0 and any(f["category"] == "hash" and f["subject"] == "alpha"
+                          for f in result["findings"]),
+        json.dumps(result))
+    materialize_from_upstream(skills_root, upstream, "alpha")
+
+    write_adoption_file(consumer, upstream, sha, ["alpha"])
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — extra (no-longer-declared, installer-owned) skill detected",
+        code != 0 and "beta" in result["removed"],
+        json.dumps(result))
+    write_adoption_file(consumer, upstream, sha, ["alpha", "beta"])
+
+    manifest_backup = manifest_path.read_text()
+    write(manifest_path, "{not valid json")
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("check-skills — malformed manifest JSON detected",
+                  code != 0 and not result["manifest_valid"], json.dumps(result))
+    write(manifest_path, manifest_backup)
+
+    manifest = json.loads(manifest_path.read_text())
+    root_key = next(iter(manifest["repositories"]))
+    manifest["repositories"][root_key]["commit"] = "0" * 40
+    write(manifest_path, json.dumps(manifest))
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — wrong pin (manifest/adoption commit mismatch) detected",
+        code != 0 and any(f["category"] == "manifest" for f in result["findings"]),
+        json.dumps(result))
+    write(manifest_path, manifest_backup)
+
+    shutil.rmtree(consumer / ".agents" / "vendor")
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — missing vendor checkout detected",
+        code != 0 and any(f["category"] == "vendor" for f in result["findings"]),
+        json.dumps(result))
+    results.check(
+        "check-skills — damaged managed state remains managed, reported with findings",
+        len(result["findings"]) > 0, "")
+
+
+def test_candidate_manifest_verification_and_promotion(results, workdir):
+    base = workdir / "candidate-manifest"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    canonical_before = manifest_path.read_text()
+
+    candidate = json.loads(canonical_before)
+    candidate["skills"]["alpha"]["tree_hash"] = "0" * 64
+    candidate_path = consumer / ".agents" / "candidate-test.json"
+    write(candidate_path, json.dumps(candidate))
+
+    code, result, err = run_check_json(
+        CHECK_SKILLS_PY, ["--root", str(consumer), "--manifest", str(candidate_path)])
+    results.check(
+        "check-skills --manifest <candidate> — rejects a hash-mismatched candidate",
+        code != 0 and any(f["category"] == "hash" for f in result["findings"]),
+        json.dumps(result))
+    results.check(
+        "check-skills --manifest <candidate> — never touches the canonical manifest",
+        manifest_path.read_text() == canonical_before, "")
+
+    code, result, err = run_check_json(
+        CHECK_SKILLS_PY, ["--root", str(consumer), "--manifest", str(manifest_path)])
+    results.check("check-skills --manifest <matching-candidate> — accepted",
+                  code == 0 and result["ok"], json.dumps(result))
+
+
+def test_successful_skill_integrity_promotes_despite_unresolved_binding(results, workdir):
+    base = workdir / "interactive-unresolved-binding"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", "*not yet defined*")]},
+    ])
+
+    code, out = run_install(consumer, [], input_text=answers("-", "y"))
+    results.check("explicit interactive leave-unresolved — completes, exits non-zero",
+                  code != 0, out)
+    results.check("explicit interactive leave-unresolved — manifest is still promoted",
+                  (consumer / ".agents" / "infurnet-skills.manifest.json").exists(), out)
+    results.check("explicit interactive leave-unresolved — alpha actually materialized",
+                  (consumer / ".agents" / "skills" / "alpha").is_dir(), out)
+    results.check("explicit interactive leave-unresolved — reports the unresolved binding",
+                  "Widget" in out, out)
+
+
+def test_binding_prompt_eof_stops_without_mutation(results, workdir):
+    base = workdir / "binding-eof-stop"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", "*not yet defined*")]},
+    ])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("EOF at unresolved binding prompt — stops before any mutation", code != 0, out)
+    results.check("EOF at unresolved binding prompt — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+    results.check("EOF at unresolved binding prompt — no manifest written",
+                  not (consumer / ".agents" / "infurnet-skills.manifest.json").exists(), out)
+
+
+def test_check_bindings_applicability_and_unresolved(results, workdir):
+    """RC8.3: an empty or whitespace-only binding cell must be reported
+    unresolved exactly like the *not yet defined* marker — a blank cell is
+    not a decision, and neither is a cell containing only whitespace."""
+    consumer = workdir / "check-bindings-applicability"
+    write_project_md(consumer, [
+        {"name": "Unannotated", "rows": [("Foo", "*not yet defined*")]},
+        {"name": "Not applicable here", "applies_to": "other-skill",
+         "rows": [("Bar", "*not yet defined*")]},
+        {"name": "Applicable", "applies_to": "alpha",
+         "rows": [("Baz", "*not yet defined*"), ("Qux", "already-set"),
+                  ("Empty", ""), ("Whitespace", "   ")]},
+    ])
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "Fixture.\n")
+
+    code, result, err = run_check_json(CHECK_BINDINGS_PY, ["--root", str(consumer)])
+    results.check("check-bindings — unannotated section ignored",
+                  "Unannotated" not in result["applicable_sections"], json.dumps(result))
+    results.check("check-bindings — annotated section for an uninstalled skill ignored",
+                  "Not applicable here" not in result["applicable_sections"], json.dumps(result))
+    results.check("check-bindings — annotated section for an installed skill is applicable",
+                  "Applicable" in result["applicable_sections"], json.dumps(result))
+    results.check(
+        "check-bindings — *not yet defined* binding reported unresolved",
+        any(u["section"] == "Applicable" and u["binding"] == "Baz" for u in result["unresolved"]),
+        json.dumps(result))
+    results.check(
+        "check-bindings — already-defined binding reported resolved",
+        any(r["section"] == "Applicable" and r["binding"] == "Qux" and r["value"] == "already-set"
+            for r in result["resolved"]),
+        json.dumps(result))
+    results.check(
+        "check-bindings — empty table cell reported unresolved",
+        any(u["section"] == "Applicable" and u["binding"] == "Empty"
+            for u in result["unresolved"]),
+        json.dumps(result))
+    results.check(
+        "check-bindings — whitespace-only table cell reported unresolved",
+        any(u["section"] == "Applicable" and u["binding"] == "Whitespace"
+            for u in result["unresolved"]),
+        json.dumps(result))
+    results.check("check-bindings — exits non-zero when an applicable binding is unresolved",
+                  code != 0, "")
+
+
+def test_check_bindings_malformed_section(results, workdir):
+    consumer = workdir / "check-bindings-malformed"
+    write_project_md(consumer, [{"name": "Broken", "applies_to": "alpha", "no_table": True}])
+
+    code, result, err = run_check_json(
+        CHECK_BINDINGS_PY, ["--root", str(consumer), "--skill", "alpha"])
+    results.check(
+        "check-bindings — missing table under an applicable section is malformed",
+        code != 0 and any(m["section"] == "Broken" for m in result["malformed"]),
+        json.dumps(result))
+
+
+def test_check_bindings_target_inventory_override(results, workdir):
+    consumer = workdir / "check-bindings-target"
+    write_project_md(consumer, [
+        {"name": "Applicable", "applies_to": "not-yet-installed",
+         "rows": [("Baz", "*not yet defined*")]},
+    ])
+    code, result, err = run_check_json(
+        CHECK_BINDINGS_PY, ["--root", str(consumer), "--skill", "not-yet-installed"])
+    results.check(
+        "check-bindings --skill — evaluates a target inventory before materialization",
+        "Applicable" in result["applicable_sections"], json.dumps(result))
+
+
+def test_empty_and_whitespace_bindings_enter_resolution_flow(results, workdir):
+    """RC8.3: an empty or whitespace-only PROJECT.md binding cell must be
+    treated exactly like the *not yet defined* marker by a mutating
+    install run — with no interactive input and no --bindings supply, it
+    stops before any mutation rather than treating blank as already
+    decided."""
+    for label, cell_value in (("empty", ""), ("whitespace-only", "   ")):
+        base = workdir / f"binding-{label.replace(' ', '-')}-stop"
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        write_project_md(consumer, [
+            {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", cell_value)]},
+        ])
+
+        code, out = run_install(consumer, ["--force"])
+        results.check(
+            f"{label} binding cell — stops before any mutation, same as the marker",
+            code != 0 and not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_bindings_whitespace_supply_does_not_resolve(results, workdir):
+    """RC8.3: a whitespace-only value, whether supplied via --bindings or
+    typed interactively, must not resolve a binding — it remains
+    unresolved exactly as if nothing had been supplied at all."""
+    base = workdir / "bindings-whitespace-supply"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget": "   "\n')
+
+    code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+    results.check(
+        "whitespace-only --bindings value — does not resolve the binding; "
+        "stops before any mutation",
+        code != 0 and not (consumer / ".agents" / "skills").exists(), out)
+
+    code2, out2 = run_install(consumer, [], input_text=answers("   ", "y"))
+    results.check(
+        "whitespace-only interactive input — does not resolve the binding either",
+        code2 != 0 and "Widget" in out2, out2)
+
+
+def test_bindings_file_valid_fills_unresolved(results, workdir):
+    base = workdir / "bindings-file-valid"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+
+    code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+    results.check("--bindings fills an unresolved binding — exits zero", code == 0, out)
+    project_text = (consumer / "PROJECT.md").read_text()
+    results.check("--bindings fills an unresolved binding — PROJECT.md updated",
+                  "| Widget size | Large |" in project_text, project_text)
+
+
+def test_bindings_file_rejects_malformed_content(results, workdir):
+    """Schema- and duplicate-key-level rejection under real YAML parsing.
+    Flow-style mappings and anchors are no longer special-cased failures —
+    a real parser resolves them to the exact same structure as their block
+    equivalents — so those two cases moved to
+    test_bindings_file_accepts_real_yaml_syntax below instead of being
+    listed as malformed here."""
+    base = workdir / "bindings-file-malformed"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+
+    cases = {
+        "unknown-section": 'bindings:\n  "Nope":\n    "X": "Y"\n',
+        "unknown-binding": 'bindings:\n  "Widgets":\n    "Nope": "Y"\n',
+        "duplicate-section": ('bindings:\n  "Widgets":\n    "Widget size": "A"\n'
+                              '  "Widgets":\n    "Widget size": "B"\n'),
+        "duplicate-binding": ('bindings:\n  "Widgets":\n    "Widget size": "A"\n'
+                              '    "Widget size": "B"\n'),
+        "second-top-level-key": ('bindings:\n  "Widgets":\n    "Widget size": "A"\n'
+                                 'other: 1\n'),
+        "invalid-yaml-syntax": 'bindings:\n  "Widgets:\n    "Widget size": "A"\n',
+        "non-string-value": 'bindings:\n  "Widgets":\n    "Widget size": ["A", "B"]\n',
+        "bindings-not-a-mapping": 'bindings: not-a-mapping\n',
+        "section-not-a-mapping": 'bindings:\n  "Widgets": "not-a-mapping"\n',
+    }
+    before = (consumer / "PROJECT.md").read_text()
+    for name, content in cases.items():
+        bindings_file = base / f"bindings-{name}.yml"
+        write(bindings_file, content)
+        code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+        results.check(f"--bindings {name} — rejected before mutation", code != 0, out)
+        results.check(
+            f"--bindings {name} — PROJECT.md byte-unchanged by the rejected file",
+            (consumer / "PROJECT.md").read_text() == before, out)
+
+
+def test_bindings_file_accepts_real_yaml_syntax(results, workdir):
+    """A real YAML parser resolves flow-style mappings and anchors to
+    exactly the same structure as their block-style equivalents — these are
+    no longer rejected the way the old hand-written line parser rejected
+    them (it simply could not handle them safely)."""
+    base = workdir / "bindings-file-real-yaml"
+    upstream, sha = make_upstream(base)
+
+    for name, content in (
+        ("flow-style", 'bindings:\n  "Widgets": {"Widget size": "Large"}\n'),
+        ("anchor", 'bindings:\n  "Widgets": &w\n    "Widget size": "Large"\n'),
+    ):
+        consumer = base / f"consumer-{name}"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        write_project_md(consumer, [
+            {"name": "Widgets", "applies_to": "alpha",
+             "rows": [("Widget size", "*not yet defined*")]},
+        ])
+        bindings_file = base / f"bindings-{name}.yml"
+        write(bindings_file, content)
+
+        code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+        results.check(f"--bindings {name} syntax — accepted, exits zero", code == 0, out)
+        results.check(
+            f"--bindings {name} syntax — binding applied",
+            "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out)
+
+
+def test_check_bindings_ignores_fenced_examples(results, workdir):
+    """A heading, applicability comment, or table that only appears inside a
+    fenced code block must never become a real section or binding —
+    markdown-it-py tokenizes fence content as a single opaque block, unlike
+    a line-by-line regex scan."""
+    base = workdir / "bindings-fenced-examples"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write(consumer / "PROJECT.md", (
+        "# PROJECT.md\n\n"
+        "## Real section\n\n"
+        "<!-- Applies when `alpha` is installed. -->\n\n"
+        "| Binding | Value |\n| :--- | :--- |\n| Widget size | Large |\n\n"
+        "## Fenced example\n\n"
+        "```\n"
+        "## Fake section\n"
+        "<!-- Applies when `alpha` is installed. -->\n"
+        "| Binding | Value |\n| :--- | :--- |\n| x | y |\n"
+        "```\n"
+    ))
+    code, result, err = run_check_json(CHECK_BINDINGS_PY, ["--root", str(consumer),
+                                                          "--skill", "alpha"])
+    results.check("fenced example — real section still resolved",
+                  {"section": "Real section", "binding": "Widget size", "value": "Large"}
+                  in result["resolved"], err)
+    results.check("fenced example — fake section never appears as applicable",
+                  "Fenced example" not in result["applicable_sections"], err)
+
+
+def test_check_bindings_escaped_pipe_round_trips(results, workdir):
+    """A binding value containing a literal pipe must round-trip through a
+    write as exactly that value, in exactly two table columns — not split
+    into extra columns by an unescaped '|'."""
+    base = workdir / "bindings-escaped-pipe"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "a|b|c"\n')
+
+    before_lines = (consumer / "PROJECT.md").read_text().splitlines()
+    code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+    results.check("escaped-pipe value — install exits zero", code == 0, out)
+
+    after_text = (consumer / "PROJECT.md").read_text()
+    code2, result2, err2 = run_check_json(CHECK_BINDINGS_PY, ["--root", str(consumer),
+                                                             "--skill", "alpha"])
+    results.check(
+        "escaped-pipe value — reparses to exactly the intended value, not extra columns",
+        {"section": "Widgets", "binding": "Widget size", "value": "a|b|c"}
+        in result2["resolved"], err2)
+    after_lines = after_text.splitlines()
+    unrelated_changed = [
+        i for i, (b, a) in enumerate(zip(before_lines, after_lines))
+        if b != a and "Widget size" not in b
+    ]
+    results.check("escaped-pipe value — unrelated PROJECT.md content preserved",
+                  not unrelated_changed, (before_lines, after_lines))
+
+
+def test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir):
+    base = workdir / "bindings-file-precedence"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "Large")]},
+    ])
+    before = (consumer / "PROJECT.md").read_text()
+
+    matching = base / "matching.yml"
+    write(matching, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+    code, out = run_install(consumer, ["--bindings", str(matching), "--force"])
+    results.check("--bindings matching an existing value — no-op, exits zero", code == 0, out)
+    results.check("--bindings matching an existing value — PROJECT.md unchanged",
+                  (consumer / "PROJECT.md").read_text() == before, out)
+
+    conflicting = base / "conflicting.yml"
+    write(conflicting, 'bindings:\n  "Widgets":\n    "Widget size": "Small"\n')
+    code2, out2 = run_install(consumer, ["--bindings", str(conflicting), "--force"])
+    results.check("--bindings conflicting with an existing value — refuses, nonzero exit",
+                  code2 != 0, out2)
+    results.check("--bindings conflicting with an existing value — PROJECT.md unchanged",
+                  (consumer / "PROJECT.md").read_text() == before, out2)
+
+
+def test_bindings_staged_until_final_confirmation(results, workdir):
+    base = workdir / "bindings-staged"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+    before = (consumer / "PROJECT.md").read_text()
+
+    code, out = run_install(consumer, ["--bindings", str(bindings_file)], input_text=answers("n"))
+    results.check("declining final confirmation — exits zero (clean cancel)", code == 0, out)
+    results.check("declining final confirmation — staged binding never written",
+                  (consumer / "PROJECT.md").read_text() == before, out)
+    results.check("declining final confirmation — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_bazel_defaults_precedence_and_scope(results, workdir):
+    for marker, expected_dep in (
+        ("MODULE.bazel", "MODULE.bazel"),
+        ("WORKSPACE.bazel", "WORKSPACE.bazel"),
+        ("WORKSPACE", "WORKSPACE"),
+    ):
+        base = workdir / f"bazel-default-{marker}"
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        write_project_md(consumer, [
+            {"name": "Build authority", "applies_to": "alpha", "rows": [
+                ("Build system", "*not yet defined*"),
+                ("Dependency declaration", "*not yet defined*"),
+            ]},
+        ])
+        write(consumer / marker, "")
+        code, out = run_install(consumer, [], input_text=answers("", "", "y"))
+        results.check(f"{marker} — install exits zero", code == 0, out)
+        project_text = (consumer / "PROJECT.md").read_text()
+        results.check(f"{marker} — proposes Build system = Bazel",
+                      "| Build system | Bazel |" in project_text, project_text)
+        results.check(f"{marker} — proposes Dependency declaration = {expected_dep}",
+                      f"| Dependency declaration | {expected_dep} |" in project_text, project_text)
+
+    base = workdir / "bazel-default-precedence"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Build authority", "applies_to": "alpha", "rows": [
+            ("Build system", "*not yet defined*"),
+            ("Dependency declaration", "*not yet defined*"),
+        ]},
+    ])
+    write(consumer / "WORKSPACE", "")
+    write(consumer / "MODULE.bazel", "")
+    code, out = run_install(consumer, [], input_text=answers("", "", "y"))
+    results.check(
+        "MODULE.bazel present with WORKSPACE — MODULE.bazel wins precedence",
+        code == 0 and "| Dependency declaration | MODULE.bazel |" in
+        (consumer / "PROJECT.md").read_text(), out)
+
+    base2 = workdir / "no-other-default"
+    upstream2, sha2 = make_upstream(base2)
+    consumer2 = base2 / "consumer"
+    write_adoption(consumer2, upstream2, sha2, ["alpha"])
+    write_project_md(consumer2, [
+        {"name": "Other section", "applies_to": "alpha",
+         "rows": [("Some binding", "*not yet defined*")]},
+    ])
+    code2, out2 = run_install(consumer2, [], input_text=answers("", "y"))
+    results.check(
+        "no default proposed for a non-Build-authority binding — blank leaves it unresolved",
+        code2 != 0 and "Some binding" in out2, out2)
+
+
+def test_check_update_no_mutation_and_cleanup(results, workdir):
+    base = workdir / "check-update-clean"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    vendor_root = consumer / ".agents" / "vendor"
+    before_entries = sorted(str(p) for p in vendor_root.rglob("*"))
+
+    code, result, err = run_check_json(CHECK_UPDATE_PY, ["--root", str(consumer)])
+    results.check("check-update — direct invocation exits zero for a valid adoption",
+                  code == 0, err)
+    after_entries = sorted(str(p) for p in vendor_root.rglob("*"))
+    results.check("check-update — no durable consumer mutation (vendor tree unchanged)",
+                  before_entries == after_entries, "")
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+    run_git(["tag", "v1.0.0"], upstream)
+
+    code2, result2, err2 = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", new_sha])
+    results.check("check-update --target-version <sha> — resolves to the full commit",
+                  code2 == 0 and result2["target_commit"] == new_sha, err2)
+    results.check("check-update — non-tag target leaves release blank",
+                  result2["target_release"] == "", json.dumps(result2))
+    stray_temp_dirs = [p for p in vendor_root.iterdir()
+                       if p.name.startswith(".check-update-fetch-")]
+    results.check("check-update — temporary inspection checkout cleaned up",
+                  not stray_temp_dirs, str(stray_temp_dirs))
+
+    code3, result3, err3 = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", "v1.0.0"])
+    results.check("check-update — exact tag target populates release",
+                  code3 == 0 and result3["target_release"] == "v1.0.0", json.dumps(result3))
+    results.check("check-update — exact tag target resolves to the tagged commit",
+                  result3["target_commit"] == new_sha, json.dumps(result3))
+
+
+def test_check_update_obligation_lists_and_fenced_examples(results, workdir):
+    """Ordered and unordered obligation lists are recognized as real
+    markdown-it-py list items, and heading/list text that only appears
+    inside a fenced code block is never collected."""
+    base = workdir / "check-update-obligations"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\n"
+        "# Alpha\n\n## Must not\n\n* do the bad thing\n\n"
+        "```\n## Must not\n* fenced bad thing\n```\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "v1 obligations"], upstream)
+    v1_sha = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption(consumer, upstream, v1_sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("obligations fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\n"
+        "# Alpha\n\n## Must not\n\n"
+        "* do the bad thing\n- do another bad thing\n1. do a third bad thing\n\n"
+        "```\n## Must not\n* fenced bad thing\n```\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "v2 obligations"], upstream)
+    v2_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", v2_sha])
+    results.check("check-update — exits zero", code == 0, err)
+    obligations = result["obligation_diff"].get("skills/alpha/SKILL.md", {})
+    added = obligations.get("must not", {}).get("added", [])
+    results.check("obligations — unordered '-' item recognized",
+                  "do another bad thing" in added, json.dumps(result))
+    results.check("obligations — ordered '1.' item recognized",
+                  "do a third bad thing" in added, json.dumps(result))
+    results.check("obligations — fenced example never collected as a real obligation",
+                  "fenced bad thing" not in added, json.dumps(result))
+
+
+def test_check_update_inventory_includes_nested_and_binary_files(results, workdir):
+    """collect_governed()'s inventory reaches every regular file under a
+    skill bundle — nested references and assets, not just SKILL.md and a
+    flat scripts/ listing — and compares binary content by bytes, never by
+    decoding it as text."""
+    base = workdir / "check-update-nested-binary"
+    upstream, sha = make_upstream(base)
+    write(upstream / "skills" / "alpha" / "references" / "nested" / "deep.md", "v1\n")
+    (upstream / "skills" / "alpha" / "assets").mkdir(parents=True, exist_ok=True)
+    (upstream / "skills" / "alpha" / "assets" / "image.bin").write_bytes(b"\x89PNG\x00\x01v1")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add nested/binary content"], upstream)
+    v1_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, v1_sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("nested/binary fixture — v1 install exits zero", code0 == 0, out0)
+
+    (upstream / "skills" / "alpha" / "assets" / "image.bin").write_bytes(b"\x89PNG\x00\x01v2")
+    write(upstream / "skills" / "alpha" / "references" / "nested" / "new.md", "new\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "change binary, add nested file"], upstream)
+    v2_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", v2_sha])
+    results.check("nested/binary inventory diff — exits zero, no crash on binary content",
+                  code == 0, err)
+    inv = result["inventory_diff"]
+    results.check("nested/binary inventory diff — new nested reference file detected",
+                  "skills/alpha/references/nested/new.md" in inv["added"], json.dumps(inv))
+    results.check("nested/binary inventory diff — changed binary asset detected by bytes",
+                  "skills/alpha/assets/image.bin" in inv["changed"], json.dumps(inv))
+
+
+def test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir):
+    """A symlink inside a skill bundle that resolves outside it must stop
+    the comparison outright rather than silently reading outside the
+    authorized inventory."""
+    base = workdir / "check-update-unsafe-symlink"
+    upstream, sha = make_upstream(base)
+    outside = base / "outside-secret"
+    outside.mkdir(parents=True)
+    write(outside / "passwd", "secret\n")
+    os_symlink_relative = os.path.relpath(outside, upstream / "skills" / "alpha" / "scripts")
+    (upstream / "skills" / "alpha" / "scripts").mkdir(parents=True, exist_ok=True)
+    os.symlink(os_symlink_relative, upstream / "skills" / "alpha" / "scripts" / "evil-link")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add unsafe symlink"], upstream)
+    unsafe_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("unsafe-symlink fixture — clean v1 install exits zero", code0 == 0, out0)
+
+    code, out, err = run_check(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", unsafe_sha])
+    results.check("unsafe symlink in candidate bundle — nonzero exit, not a crash",
+                  code != 0, out + err)
+    results.check("unsafe symlink in candidate bundle — diagnostic mentions the symlink",
+                  "symlink" in (out + err).lower(), out + err)
+
+
+def test_check_update_rejects_symlinked_bundle_root(results, workdir):
+    """A skills/<name> bundle ROOT that is itself a symlink must be
+    rejected before any traversal — is_dir() alone would silently accept a
+    directory symlink, unlike an unsafe symlink found *within* an accepted
+    bundle (the case above)."""
+    base = workdir / "check-update-symlink-bundle-root"
+    upstream, sha = make_upstream(base)
+    outside = base / "outside-bundle"
+    outside.mkdir(parents=True)
+    write(outside / "SKILL.md", FIXTURE_SKILL.format(name="evil-alias"))
+    os.symlink(outside, upstream / "skills" / "evil-alias", target_is_directory=True)
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add symlinked bundle root"], upstream)
+    unsafe_sha = run_git(["rev-parse", "HEAD"], upstream)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("symlinked bundle root fixture — clean v1 install exits zero", code0 == 0, out0)
+
+    code, out, err = run_check(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", unsafe_sha])
+    results.check("symlinked bundle root — nonzero exit, not a crash", code != 0, out + err)
+    results.check("symlinked bundle root — diagnostic mentions the symlink",
+                  "symlink" in (out + err).lower(), out + err)
+
+
+def test_check_update_ls_remote_failure_surfaced(results, workdir):
+    """A failed `git ls-remote` (an unreachable or invalid source) must
+    surface as a clear failure — never silently look like a successful
+    discovery that simply found zero refs."""
+    base = workdir / "ls-remote-failure"
+    consumer = base / "consumer"
+    bogus_source = str(base / "does-not-exist-as-a-repo")
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {bogus_source}\n"
+        "commit: 1234567890abcdef1234567890abcdef12345678\n"
+        "skills:\n  - alpha\n"
+    ))
+
+    code, out, err = run_check(CHECK_UPDATE_PY, ["--root", str(consumer)])
+    results.check("check-update discovery against an unreachable source — nonzero exit",
+                  code != 0, out + err)
+    results.check(
+        "check-update discovery against an unreachable source — surfaces the git "
+        "failure rather than an empty successful discovery",
+        "ls-remote" in (out + err) or "failed" in (out + err).lower(), out + err)
+
+
+def test_update_requires_explicit_target_no_latest_selection(results, workdir):
+    base = workdir / "update-no-target"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+
+    code, out = run_install(consumer, ["--update"])
+    results.check("--update with no target, non-interactive — fails rather than picking one",
+                  code != 0, out)
+    results.check("--update with no target — adoption.yml unchanged",
+                  sha in (consumer / ".agents" / "adoption.yml").read_text(), out)
+
+    code2, out2 = run_install(consumer, ["--update"], input_text=answers(""))
+    results.check("--update with no target, blank interactive answer — fails, no target chosen",
+                  code2 != 0, out2)
+
+
+def test_update_changes_only_commit_and_release(results, workdir):
+    """Also covers RC8.1's root-vendor disclosure for --update: the plan
+    must show the root repository moving to the target revision as a
+    replacement, distinctly from the Install/update: adoption.yml summary
+    that already reports the same commit change."""
+    base = workdir / "update-fields-only"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", new_sha, "--force"])
+    results.check("--update to a new commit — exits zero", code == 0, out)
+    results.check(
+        "--update — plan discloses the root-vendor replacement for the target revision",
+        f"Root repository: {upstream.as_posix()} @ {new_sha[:12]} (replace)" in out, out)
+    after_adoption = (consumer / ".agents" / "adoption.yml").read_text()
+    results.check("--update — source: line unchanged",
+                  f"source: {upstream.as_posix()}" in after_adoption, after_adoption)
+    results.check("--update — skills: block unchanged",
+                  "skills:\n  - alpha" in after_adoption, after_adoption)
+    results.check("--update — commit changed to the new sha",
+                  f"commit: {new_sha}" in after_adoption, after_adoption)
+    results.check("--update — delta not installed (skills: intent untouched)",
+                  not (consumer / ".agents" / "skills" / "delta").exists(), out)
+
+
+def test_update_preserves_comments_and_flow_style(results, workdir):
+    """--update's adoption.yml edit round-trips through a real YAML
+    round-trip library: comments and a flow-style skills list survive
+    untouched, and only commit/release change."""
+    base = workdir / "update-preserves-style"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write(consumer / ".agents" / "adoption.yml", (
+        "# Adoption declaration\n"
+        f"source: {upstream.as_posix()}\n"
+        "# pin\n"
+        f"commit: {sha}\n"
+        'release: ""\n'
+        "skills: [alpha]\n"
+    ))
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("flow-style fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", new_sha, "--force"])
+    results.check("--update with comments/flow-style — exits zero", code == 0, out)
+    after = (consumer / ".agents" / "adoption.yml").read_text()
+    results.check("--update — leading comment preserved",
+                  "# Adoption declaration" in after, after)
+    results.check("--update — comment above commit: preserved",
+                  "# pin" in after, after)
+    results.check("--update — flow-style skills list preserved, not reformatted to block",
+                  "skills: [alpha]" in after, after)
+    results.check("--update — commit changed to the new sha",
+                  f"commit: {new_sha}" in after, after)
+
+
+def test_update_inserts_missing_release_field(results, workdir):
+    """An adoption.yml with no release: key at all gets one inserted by
+    --update, without disturbing source/skills or existing comments."""
+    base = workdir / "update-inserts-release"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        "skills:\n  - alpha\n"
+    ))
+    code0, out0 = run_install(consumer, ["--force"])
+    results.check("no-release fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    run_git(["tag", "v9.9.9"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", "v9.9.9", "--force"])
+    results.check("--update inserting a missing release: field — exits zero", code == 0, out)
+    after = (consumer / ".agents" / "adoption.yml").read_text()
+    results.check("--update — release: inserted with the resolved tag",
+                  "release: v9.9.9" in after, after)
+    results.check("--update — source: still unchanged",
+                  f"source: {upstream.as_posix()}" in after, after)
+    results.check("--update — skills: block still unchanged",
+                  "skills:\n  - alpha" in after, after)
+
+
+def test_stage_adoption_edit_refuses_on_contract_violation(results, workdir):
+    """stage_adoption_edit()'s own defense-in-depth check — comparing the
+    staged document's re-parsed source/skills against the original's —
+    refuses to return a staged text (and so install.py never writes one) if
+    that comparison ever fails, exercised directly since a real document
+    that defeats both the PyYAML and ruamel.yaml parsers identically is not
+    otherwise constructible."""
+    base = workdir / "stage-adoption-contract"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+
+    install_module = load_install_module()
+    real_parse = install_module.check_skills.parse_adoption_text
+    calls = {"n": 0}
+
+    def fake_parse(text, label):
+        calls["n"] += 1
+        result = real_parse(text, label)
+        if calls["n"] == 2:
+            result = dict(result, skills=["a-different-skill"])
+        return result
+
+    adoption_path = consumer / ".agents" / "adoption.yml"
+    with mock.patch.object(install_module.check_skills, "parse_adoption_text",
+                          side_effect=fake_parse):
+        refused = stopped_with_system_exit(
+            lambda: install_module.stage_adoption_edit(
+                adoption_path, "a3f9b2c1d4e5f60718293a4b5c6d7e8f90a1b2c3", ""))
+    results.check(
+        "stage_adoption_edit — refuses (SystemExit, nonzero) when the staged "
+        "document's skills would differ from the original's",
+        refused, calls)
+    results.check("stage_adoption_edit — refusing this way never touches adoption.yml",
+                  adoption_path.read_text() == (
+                      f"source: {upstream.as_posix()}\ncommit: {sha}\nrelease: \"\"\n"
+                      "skills:\n  - alpha\n"),
+                  adoption_path.read_text())
+
+
+def test_update_blocked_by_current_damage(results, workdir):
+    base = workdir / "update-blocked-by-damage"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", new_sha, "--force"])
+    results.check("--update blocked by existing damage — nonzero exit", code != 0, out)
+    results.check("--update blocked by existing damage — directs to --repair",
+                  "--repair" in out, out)
+    results.check("--update blocked by existing damage — adoption.yml unchanged",
+                  sha in (consumer / ".agents" / "adoption.yml").read_text(), out)
+
+
+def test_fully_supplied_update_runs_noninteractive(results, workdir):
+    base = workdir / "update-fully-supplied"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+
+    code, out = run_install(consumer, [
+        "--update", "--target-version", new_sha, "--bindings", str(bindings_file), "--force",
+    ])
+    results.check("fully supplied --update — runs to completion with no interactive input",
+                  code == 0, out)
+    results.check("fully supplied --update — commit updated",
+                  new_sha in (consumer / ".agents" / "adoption.yml").read_text(), out)
+    results.check("fully supplied --update — binding applied",
+                  "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out)
+
+
+def test_update_summary_shows_external_repo_source_changed(results, workdir):
+    """An external repository must be classified (and displayed) as changed
+    when its source differs, even when its commit does not — the
+    dedupe-by-repo_key comparison cannot rely on commit alone. The
+    github.com-only external-source schema makes a same-key, different-source
+    pair unconstructible through normal adoption end to end, so the target
+    side is real and the current side's recorded source is substituted
+    directly, exercising exactly the comparison this workorder corrected."""
+    base = workdir / "update-external-source-changed"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external source-changed fixture — install exits zero", code0 == 0, out0)
+
+    check_update_module = load_check_update_module()
+    real_evaluate = check_update_module.check_skills.evaluate
+
+    def fake_evaluate(root, *args, **kwargs):
+        state = real_evaluate(root, *args, **kwargs)
+        key = "example/ext-upstream"
+        if key in state["external_repos"]:
+            state = dict(state)
+            state["external_repos"] = dict(state["external_repos"])
+            state["external_repos"][key] = dict(
+                state["external_repos"][key],
+                source="https://github.com/example/ext-upstream-renamed")
+        return state
+
+    with mock.patch.object(check_update_module.check_skills, "evaluate",
+                          side_effect=fake_evaluate):
+        result = check_update_module.evaluate(consumer, target_version=new_sha)
+    changed = result["external_diff"]["repos_changed"]
+    results.check(
+        "external repo changed on source alone (same commit) — detected",
+        any(c["repo_key"] == "example/ext-upstream"
+           and c["before"]["source"] == "https://github.com/example/ext-upstream-renamed"
+           and c["after"]["source"] == "https://github.com/example/ext-upstream"
+           and c["before"]["commit"] == c["after"]["commit"]
+           for c in changed),
+        json.dumps(changed))
+
+
+def test_update_summary_shows_external_skill_path_changed(results, workdir):
+    """An external skill whose upstream path moves (same exposed name, same
+    repository) must be reported as a distinct external skill path change,
+    separate from repository-level added/removed/changed reporting."""
+    base = workdir / "update-external-path-changed"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external path-changed fixture — install exits zero", code0 == 0, out0)
+
+    write(ext_upstream / "nested" / "widget" / "SKILL.md",
+         FIXTURE_SKILL.format(name="widget"))
+    run_git(["add", "-A"], ext_upstream)
+    run_git(["commit", "-q", "-m", "move widget"], ext_upstream)
+    new_ext_sha = run_git(["rev-parse", "HEAD"], ext_upstream)
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: External descriptor fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/ext-upstream\n"
+        f"  external-commit: {new_ext_sha}\n"
+        "  external-path: nested/widget\n---\nExternal descriptor fixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget moved upstream"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, result, err = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", new_sha], env=env)
+    results.check("external skill path change — check-update exits zero", code == 0, err)
+    path_changes = result["external_diff"]["skill_path_changed"]
+    results.check(
+        "external skill path change — reported with before/after paths",
+        any(c["name"] == "widget" and c["before"] == "skills/widget"
+           and c["after"] == "nested/widget" for c in path_changes),
+        json.dumps(path_changes))
+
+
+def test_repair_preserves_adoption_and_restores_damage(results, workdir):
+    base = workdir / "repair-basic"
+    upstream, sha, consumer = full_install(base, ["alpha", "beta"])
+    adoption_before = (consumer / ".agents" / "adoption.yml").read_text()
+
+    shutil.rmtree(consumer / ".agents" / "skills" / "alpha")
+    write(consumer / ".agents" / "skills" / "beta" / "SKILL.md", "corrupted\n")
+
+    code, out = run_install(consumer, ["--repair", "--force"])
+    results.check("--repair — exits zero", code == 0, out)
+    results.check("--repair — adoption.yml byte-unchanged",
+                  (consumer / ".agents" / "adoption.yml").read_text() == adoption_before, out)
+    results.check(
+        "--repair — restores a missing materialized skill",
+        (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text()
+        == (upstream / "skills" / "alpha" / "SKILL.md").read_text(), out)
+    results.check(
+        "--repair — restores drifted content",
+        (consumer / ".agents" / "skills" / "beta" / "SKILL.md").read_text()
+        == (upstream / "skills" / "beta" / "SKILL.md").read_text(), out)
+
+
+def test_repair_refuses_unowned_collision_and_malformed_adoption(results, workdir):
+    base = workdir / "repair-refuses"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    write_adoption_file(consumer, upstream, sha, ["alpha", "beta"])
+    write(consumer / ".agents" / "skills" / "beta" / "SKILL.md", "unmanaged\n")
+
+    code, out = run_install(consumer, ["--repair", "--force"])
+    results.check("--repair refuses an unowned collision — nonzero exit", code != 0, out)
+    results.check(
+        "--repair refuses an unowned collision — content untouched",
+        (consumer / ".agents" / "skills" / "beta" / "SKILL.md").read_text() == "unmanaged\n", out)
+
+    write(consumer / ".agents" / "adoption.yml", "not valid at all\n")
+    code2, out2 = run_install(consumer, ["--repair", "--force"])
+    results.check("--repair refuses malformed durable adoption intent — nonzero exit",
+                  code2 != 0, out2)
+
+
+def test_removal_shown_and_confirmation_semantics(results, workdir):
+    base = workdir / "removal-and-confirm"
+    upstream, sha, consumer = full_install(base, ["alpha", "beta"])
+    write_adoption_file(consumer, upstream, sha, ["alpha"])
+
+    code, out = run_install(consumer, [], input_text=answers("n"))
+    results.check("removal proposed, 'n' — cancels cleanly, exits zero", code == 0, out)
+    results.check("removal proposed, 'n' — beta not removed",
+                  (consumer / ".agents" / "skills" / "beta").is_dir(), out)
+    results.check("removal proposed — shown in the summary before the prompt",
+                  "beta" in out and "Remove" in out, out)
+
+    code2, out2 = run_install(consumer, [], input_text=answers("maybe", "n"))
+    results.check("invalid confirmation input reprompts rather than acting",
+                  "Please answer" in out2, out2)
+    results.check("invalid-then-'n' — still cancels cleanly", code2 == 0, out2)
+    results.check("invalid-then-'n' — beta still not removed",
+                  (consumer / ".agents" / "skills" / "beta").is_dir(), out2)
+
+    code3, out3 = run_install(consumer, [], input_text=answers(""))
+    results.check("empty confirmation input — proceeds", code3 == 0, out3)
+    results.check("empty confirmation input — beta actually removed",
+                  not (consumer / ".agents" / "skills" / "beta").exists(), out3)
+
+
+def test_confirmation_eof_and_force(results, workdir):
+    base = workdir / "confirm-eof-force"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_adoption_file(consumer, upstream, sha, ["alpha", "beta"])
+
+    code, out = run_install(consumer, [])
+    results.check("EOF at confirmation, no --force — stops before mutation", code != 0, out)
+    results.check("EOF at confirmation — nothing materialized",
+                  not (consumer / ".agents" / "skills" / "beta").exists(), out)
+    results.check("EOF at confirmation — mentions --force", "--force" in out, out)
+
+    code2, out2 = run_install(consumer, ["--force"])
+    results.check("--force — proceeds without any interactive input", code2 == 0, out2)
+    results.check("--force — beta materialized",
+                  (consumer / ".agents" / "skills" / "beta").is_dir(), out2)
+
+
+def test_force_does_not_bypass_validation_or_ownership(results, workdir):
+    base = workdir / "force-does-not-bypass"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    write_adoption_file(consumer, upstream, sha, ["alpha", "beta"])
+    write(consumer / ".agents" / "skills" / "beta" / "SKILL.md", "unmanaged\n")
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("--force does not bypass an unowned collision", code != 0, out)
+    results.check(
+        "--force does not overwrite the colliding content",
+        (consumer / ".agents" / "skills" / "beta" / "SKILL.md").read_text() == "unmanaged\n", out)
+
+    code2, out2 = run_install(consumer, ["--update", "--force"])
+    results.check("--force does not invent a missing --update target", code2 != 0, out2)
+
+
+def test_client_behavior_across_repair_and_update(results, workdir):
+    base = workdir / "client-repair-update"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("client wiring via default mode — exits zero", code == 0, out)
+
+    (consumer / ".claude" / "skills" / "alpha").unlink()
+    code2, out2 = run_install(consumer, ["--repair", "--force", "--client", "claude"])
+    results.check("--repair --client claude — restores client exposure too", code2 == 0, out2)
+    results.check("--repair --client claude — exposure link restored",
+                  (consumer / ".claude" / "skills" / "alpha").is_symlink(), out2)
+
+    write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+    code3, out3 = run_install(consumer, ["--update", "--target-version", new_sha,
+                                         "--force", "--client", "claude"])
+    results.check("--update --client claude — exits zero", code3 == 0, out3)
+    results.check("--update --client claude — exposure still correct",
+                  (consumer / ".claude" / "skills" / "alpha").is_symlink(), out3)
+
+
+def test_external_skill_lifecycle(results, workdir):
+    base = workdir / "external-lifecycle"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("external skill — install exits zero", code == 0, out)
+    results.check(
+        "external skill — materialized from the external repo",
+        (consumer / ".agents" / "skills" / "widget" / "SKILL.md").read_text()
+        == (ext_upstream / "skills" / "widget" / "SKILL.md").read_text(), out)
+
+    code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check("external skill — check-skills reports ok", code2 == 0 and result2["ok"], err2)
+
+    # A materialized skill gone missing, with the external vendor checkout
+    # itself still intact and provable, is ordinary repairable damage.
+    shutil.rmtree(consumer / ".agents" / "skills" / "widget")
+    code3, result3, err3 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "external skill — missing materialized external skill detected",
+        code3 != 0 and any(f["category"] == "materialization" and f["subject"] == "widget"
+                          for f in result3["findings"]),
+        json.dumps(result3))
+
+    code4, out4 = run_install(consumer, ["--repair", "--force"], env=env)
+    results.check(
+        "external skill — --repair rematerializes it from the still-valid external checkout",
+        code4 == 0, out4)
+    results.check(
+        "external skill — content restored after repair",
+        (consumer / ".agents" / "skills" / "widget" / "SKILL.md").read_text()
+        == (ext_upstream / "skills" / "widget" / "SKILL.md").read_text(), out4)
+
+    # The external vendor checkout itself becoming unprovable (its .git
+    # destroyed) is a different case: ownership that cannot be proven
+    # remains a hard stop even under --repair, exactly like an unowned
+    # collision. --resolve's old keep/stub escape hatch is retired with no
+    # replacement, so this now always requires a human to fix it by hand.
+    ext_vendor = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    shutil.rmtree(ext_vendor / ".git")
+    code5, result5, err5 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "external skill — corrupted external vendor reported as an external-ownership finding",
+        code5 != 0 and any(f["category"] == "external-ownership" for f in result5["findings"]),
+        json.dumps(result5))
+    results.check("external skill — damaged managed state still reported with findings",
+                  len(result5["findings"]) > 0, "")
+
+    code6, out6 = run_install(consumer, ["--repair", "--force"], env=env)
+    results.check(
+        "external skill — --repair refuses unprovable external ownership rather than "
+        "silently re-fetching over it",
+        code6 != 0, out6)
+
+
+def test_external_unmanifested_destination_blocks_matching_identity(results, workdir):
+    """A destination directory for a newly declared external dependency
+    that already exists — with no manifest record at all — must block the
+    operation even when its Git identity happens to match the declared
+    source/commit exactly. A matching origin and HEAD are evidence of
+    checkout integrity, never proof that the installer owns the
+    directory."""
+    base = workdir / "external-unmanifested-matching"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.parent.mkdir(parents=True)
+    subprocess.run(["git", "clone", "--quiet", "https://github.com/example/ext-upstream",
+                   str(dest)], env=env, check=True)
+    subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ext_sha],
+                   env=env, check=True)
+    marker = (dest / "skills" / "widget" / "SKILL.md").read_text()
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("unmanifested destination, matching identity — nonzero exit", code != 0, out)
+    results.check(
+        "unmanifested destination, matching identity — destination content untouched",
+        (dest / "skills" / "widget" / "SKILL.md").read_text() == marker, out)
+    results.check("unmanifested destination, matching identity — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_external_unmanifested_destination_blocks_mismatching_identity(results, workdir):
+    """The same guard fires even when the pre-existing, unmanifested
+    destination's Git identity does not match the declared source/commit —
+    proving the block is about missing ownership evidence, not merely
+    about whether a mismatched checkout looks trustworthy on its own."""
+    base = workdir / "external-unmanifested-mismatching"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.parent.mkdir(parents=True)
+    subprocess.run(["git", "clone", "--quiet", "https://github.com/example/ext-upstream",
+                   str(dest)], env=env, check=True)
+    subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ext_sha],
+                   env=env, check=True)
+    write(dest / "stray-uncommitted-file.txt", "dirty\n")
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("unmanifested destination, mismatching identity — nonzero exit", code != 0, out)
+    results.check(
+        "unmanifested destination, mismatching identity — destination left untouched",
+        (dest / "stray-uncommitted-file.txt").read_text() == "dirty\n", out)
+    results.check("unmanifested destination, mismatching identity — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_external_revision_change_follows_update_path_when_proven(results, workdir):
+    """A changed, approved external revision follows the established
+    update path — normal restaging and materialization, no ownership
+    finding — when the prior ownership record is proven."""
+    base = workdir / "external-revision-change-proven"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external revision change fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(ext_upstream / "skills" / "widget" / "SKILL.md",
+         FIXTURE_SKILL.format(name="widget") + "v2\n")
+    run_git(["add", "-A"], ext_upstream)
+    run_git(["commit", "-q", "-m", "widget v2"], ext_upstream)
+    new_ext_sha = run_git(["rev-parse", "HEAD"], ext_upstream)
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: External descriptor fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/ext-upstream\n"
+        f"  external-commit: {new_ext_sha}\n"
+        "  external-path: skills/widget\n---\nExternal descriptor fixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget points at v2"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(
+        consumer, ["--update", "--target-version", new_sha, "--force"], env=env)
+    results.check("external revision change, proven ownership — update exits zero", code == 0, out)
+    results.check(
+        "external revision change, proven ownership — content refreshed to the new revision",
+        (consumer / ".agents" / "skills" / "widget" / "SKILL.md").read_text()
+        == (ext_upstream / "skills" / "widget" / "SKILL.md").read_text(), out)
+
+
+def test_external_ownership_malformed_and_contradictory_records_block(results, workdir):
+    """A malformed manifest repository record, and a skill record that
+    contradicts the manifest by naming an unknown repository, each block
+    with an external-ownership finding."""
+    base = workdir / "external-ownership-malformed"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("malformed-record fixture — v1 install exits zero", code0 == 0, out0)
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repositories"]["example/ext-upstream"] = {
+        "source": "https://github.com/example/ext-upstream"}  # missing "commit"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    code1, result1, err1 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "malformed repository record — blocking external-ownership finding, "
+        "correct subject and diagnostic text",
+        code1 != 0 and any(
+            f["category"] == "external-ownership" and f["subject"] == "example/ext-upstream"
+            and f["severity"] == "blocking"
+            and "not a well-formed" in f["detail"]
+            for f in result1["findings"]),
+        json.dumps(result1))
+
+    manifest2 = json.loads(manifest_path.read_text())
+    manifest2["repositories"]["example/ext-upstream"] = {
+        "source": "https://github.com/example/ext-upstream", "commit": ext_sha}
+    manifest2["skills"]["widget"]["repository"] = "example/does-not-exist"
+    manifest_path.write_text(json.dumps(manifest2, indent=2))
+    code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "contradictory skill record (unknown repository) — blocking external-ownership finding, "
+        "correct subject and diagnostic text",
+        code2 != 0 and any(
+            f["category"] == "external-ownership" and f["subject"] == "widget"
+            and f["severity"] == "blocking"
+            and "references unknown repository" in f["detail"]
+            for f in result2["findings"]),
+        json.dumps(result2))
+
+
+def test_external_ownership_orphaned_repo_record_blocks(results, workdir):
+    """A manifest repository record no longer referenced by any adopted
+    skill, and whose checkout is corrupted, remains visible as a blocking
+    finding rather than being silently dropped merely because nothing
+    currently references it."""
+    base = workdir / "external-ownership-orphan"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("orphan fixture — v1 install exits zero", code0 == 0, out0)
+
+    # "widget" is no longer adopted at all (switching adopted intent to the
+    # fixture's plain root skill "alpha" instead) — the manifest's
+    # repository record for it is left in place, as if hand-edited, and
+    # its checkout is corrupted: an unprovable orphan.
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    shutil.rmtree(consumer / ".agents" / "vendor" / "example" / "ext-upstream" / ".git")
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "orphaned unprovable repository record — still visible as a blocking finding, "
+        "correct subject and diagnostic text",
+        code != 0 and any(f["category"] == "external-ownership"
+                          and f["subject"] == "example/ext-upstream"
+                          and f["severity"] == "blocking"
+                          and "not a git checkout" in f["detail"]
+                          for f in result["findings"]),
+        json.dumps(result))
+
+
+def test_external_ownership_failure_preserves_desired_inventory(results, workdir):
+    """A blocking external-ownership finding must not narrow the desired
+    inventory: the declared skill-dependency closure still names the skill
+    even though it cannot be safely installed — intent and ownership are
+    assessed independently."""
+    base = workdir / "external-ownership-preserves-desired"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+
+    # The root vendor is checked out directly (bypassing the installer) so
+    # discovery can see widget's external descriptor, without ever
+    # installing widget itself.
+    root_vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    root_vendor.parent.mkdir(parents=True)
+    run_git(["clone", "--quiet", "--no-checkout", str(upstream), str(root_vendor)], base)
+    run_git(["checkout", "--quiet", sha], root_vendor)
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.mkdir(parents=True)
+    write(dest / "not-a-git-repo.txt", "occupied\n")
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check("ownership failure — blocking, nonzero exit", code != 0, err)
+    results.check("ownership failure — the skill remains part of the declared closure",
+                  "widget" in result["closure"], json.dumps(result))
+    results.check(
+        "ownership failure — reported as an external-ownership finding",
+        any(f["category"] == "external-ownership" for f in result["findings"]),
+        json.dumps(result))
+
+
+def test_root_git_inspection_happens_once_per_evaluation(results, workdir):
+    """evaluate() must inspect the root checkout exactly once, deriving
+    both vendor_pin_matches and check_git's findings from that single
+    observation."""
+    module = load_install_module()
+    base = workdir / "root-inspection-once"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    call_count = {"n": 0}
+    real_inspect = module.git_ops.inspect_checkout
+
+    def counting_inspect(*args, **kwargs):
+        call_count["n"] += 1
+        return real_inspect(*args, **kwargs)
+
+    with mock.patch.object(module.git_ops, "inspect_checkout", side_effect=counting_inspect):
+        result = module.check_skills.evaluate(consumer.resolve())
+    results.check("root git inspection — evaluate exits ok", result["ok"], json.dumps(result))
+    results.check(
+        "root git inspection — exactly one inspection for the whole evaluation "
+        "(no external checkouts exist in this fixture, so any call is the root's)",
+        call_count["n"] == 1, call_count)
+
+
+# --- PR #105 review corrections --------------------------------------
+
+
+def test_root_skill_content_refreshed_on_pin_change(results, workdir):
+    """A root skill's ownership (name -> repository) can stay "unchanged"
+    across a pin bump even though its content did not: categorize_names
+    only ever compares repo_key, never revision. Default mode must still
+    recopy it from the newly fetched vendor tree, not treat the bump as
+    same-intent damage."""
+    base = workdir / "pin-change-refresh"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"])
+    assert code0 == 0, out0
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2 content.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "pin change, default mode — reconciles rather than misclassifying as damaged",
+        code == 0, out)
+    results.check(
+        "pin change, default mode — root skill content refreshed even though its "
+        "ownership (name) never changed",
+        "v2 content." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(),
+        out)
+
+
+def test_root_skill_content_refreshed_via_repair(results, workdir):
+    base = workdir / "pin-change-refresh-repair"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    run_install(consumer, ["--force"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2 content.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--repair", "--force"])
+    results.check("pin change, --repair — exits zero", code == 0, out)
+    results.check("pin change, --repair — root skill content refreshed too",
+                  "v2 content." in
+                  (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+
+
+def test_update_summary_reflects_target_not_current(results, workdir):
+    """The --update confirmation summary must be built from the resolved
+    target's own dependency closure, not the currently-installed one —
+    otherwise an approved plan could differ from what actually installs."""
+    base = workdir / "update-target-preview"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    run_install(consumer, ["--force"])
+
+    write(upstream / "skills" / "widget" / "SKILL.md", FIXTURE_SKILL.format(name="widget"))
+    write(upstream / "skills" / "alpha" / "SKILL.md", (
+        "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-dependency: widget\n---\nFixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha depends on widget"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", sha2],
+                            input_text=answers("n"))
+    results.check(
+        "update summary — shows the target's dependency closure (widget) before "
+        "any confirmation, not just the current one",
+        "widget" in out, out)
+    results.check("update summary, declined — widget not materialized",
+                  not (consumer / ".agents" / "skills" / "widget").exists(), out)
+
+    code2, out2 = run_install(consumer, ["--update", "--target-version", sha2, "--force"])
+    results.check("update, confirmed — exits zero", code2 == 0, out2)
+    results.check(
+        "update, confirmed — installs exactly what the summary showed",
+        (consumer / ".agents" / "skills" / "widget").is_dir(), out2)
+
+
+def test_update_inspection_creates_no_persistent_directories(results, workdir):
+    """Preview/inspection fetches used to build the --update summary must
+    use OS temp storage, not a directory nested under the consumer's own
+    .agents/vendor/ — otherwise a cancelled or purely-inspecting invocation
+    leaves behind a directory that did not exist before."""
+    base = workdir / "update-inspection-no-dirs"
+    upstream, sha1 = make_upstream(base)
+    consumer = base / "fresh-consumer"
+    write_adoption(consumer, upstream, sha1, ["alpha"])
+    assert not (consumer / ".agents" / "vendor").exists()
+
+    write(upstream / "skills" / "delta2" / "SKILL.md", FIXTURE_SKILL.format(name="delta2"))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "add delta2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(consumer, ["--update", "--target-version", sha2],
+                            input_text=answers("n"))
+    results.check("update inspection on a never-installed consumer — declines cleanly",
+                  code == 0, out)
+    results.check(
+        "update inspection — creates no persistent directory under .agents/vendor "
+        "even though it fetched a preview to build the summary",
+        not (consumer / ".agents" / "vendor").exists(), out)
+
+    code2, result2, err2 = run_check_json(
+        CHECK_UPDATE_PY, ["--root", str(consumer), "--target-version", sha2])
+    results.check("check-update direct invocation — also creates no persistent directory",
+                  code2 == 0 and not (consumer / ".agents" / "vendor").exists(), err2)
+
+
+def test_client_collision_preflight_before_any_mutation(results, workdir):
+    """An unowned client-exposure collision must stop before any other
+    mutation in the same transaction — never discovered partway through
+    reconcile(), after vendor/skill changes already happened."""
+    base = workdir / "client-collision-preflight"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta"])
+    write(consumer / ".claude" / "skills" / "beta", "unmanaged\n")
+
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("client collision — nonzero exit", code != 0, out)
+    results.check(
+        "client collision — stops before any other mutation begins (nothing "
+        "materialized, no manifest written)",
+        not (consumer / ".agents" / "skills").exists()
+        and not (consumer / ".agents" / "infurnet-skills.manifest.json").exists(),
+        out)
+    results.check("client collision — colliding content untouched",
+                  (consumer / ".claude" / "skills" / "beta").read_text() == "unmanaged\n", out)
+
+
+def test_foreign_symlink_collision_blocks_before_any_mutation(results, workdir):
+    """A foreign symlink at a desired skill name — not merely a plain file
+    — must still be recognized as unrelated consumer content, not
+    installer-owned merely because it is a symlink, and must stop the
+    entire transaction before vendor, materialized skill, adoption,
+    manifest, or client changes. The old preflight treated the mere
+    presence of any symlink at the desired name as sufficient to skip
+    collision detection; this proves that gap is closed."""
+    base = workdir / "foreign-symlink-collision"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta"])
+    elsewhere = base / "unrelated-target"
+    elsewhere.mkdir(parents=True)
+    write(elsewhere / "marker.txt", "not an installed skill\n")
+    (consumer / ".claude" / "skills").mkdir(parents=True)
+    os.symlink(elsewhere, consumer / ".claude" / "skills" / "beta", target_is_directory=True)
+    adoption_before = (consumer / ".agents" / "adoption.yml").read_text()
+
+    code, out = run_install(consumer, ["--force", "--client", "claude"])
+    results.check("foreign symlink collision — nonzero exit", code != 0, out)
+    results.check(
+        "foreign symlink collision — stops before any other mutation begins "
+        "(no vendor/skills tree, no manifest, adoption unchanged)",
+        not (consumer / ".agents" / "skills").exists()
+        and not (consumer / ".agents" / "vendor").exists()
+        and not (consumer / ".agents" / "infurnet-skills.manifest.json").exists()
+        and (consumer / ".agents" / "adoption.yml").read_text() == adoption_before,
+        out)
+    results.check(
+        "foreign symlink collision — the foreign symlink itself is untouched",
+        os.path.realpath(consumer / ".claude" / "skills" / "beta")
+        == os.path.realpath(elsewhere),
+        out)
+
+
+def test_client_exposure_apply_guard_stops_on_drift(results, workdir):
+    """apply_client_exposure() must reassess the current on-disk state
+    immediately before executing and stop — rather than silently
+    recomputing or expanding the approved plan — if it no longer matches
+    the assessment a human already confirmed."""
+    module = load_install_module()
+    base = workdir / "exposure-apply-guard"
+    consumer = base / "consumer"
+    skills_root = consumer / ".agents" / "skills"
+    skills_root.mkdir(parents=True)
+    install_canonical_skill(skills_root, "alpha")
+    client_root = consumer / "client" / "skills"
+
+    desired = {"alpha"}
+    approved = module.check_skills.assess_client_exposure(desired, skills_root, client_root)
+    results.check("apply guard setup — alpha approved as missing (not yet created)",
+                  approved["missing"] == ["alpha"], approved)
+
+    # The world changes after the plan was approved but before it is
+    # applied: something now occupies the name the plan expected to find
+    # empty.
+    client_root.mkdir(parents=True)
+    write(client_root / "alpha", "raced unrelated content\n")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_client_exposure(desired, skills_root, client_root, approved))
+    results.check("apply guard — stops rather than silently applying a stale plan",
+                  stopped, "")
+    results.check(
+        "apply guard — the raced content is left exactly as it was, not overwritten",
+        (client_root / "alpha").is_file()
+        and (client_root / "alpha").read_text() == "raced unrelated content\n",
+        "")
+
+
+def test_check_skills_malformed_manifest_shape_reports_finding(results, workdir):
+    """Syntactically valid JSON whose top-level value is not an object (an
+    array, a bare string, a number, a boolean) must report a malformed-
+    manifest finding, not raise an uncaught exception."""
+    base = workdir / "malformed-manifest-shape"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    good = manifest_path.read_text()
+
+    for bad_shape in ("[1, 2, 3]", '"just a string"', "42", "true"):
+        write(manifest_path, bad_shape)
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        results.check(
+            f"check-skills — manifest shape {bad_shape!r} reports a finding, no crash",
+            result is not None and code != 0 and not result["manifest_valid"],
+            err)
+    write(manifest_path, good)
+
+
+def test_check_skills_yaml_duplicate_keys_and_shape(results, workdir):
+    """PyYAML now parses adoption.yml and SKILL.md frontmatter, using a
+    safe loader with a duplicate-key-rejecting override — this proves that
+    override actually fires for both document types, and that real-YAML
+    syntax the old hand-written line parsers could not handle (a flow-style
+    list) is now accepted rather than rejected."""
+    base = workdir / "yaml-duplicate-keys"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        f"commit: {sha}\n"
+        "skills:\n  - alpha\n"
+    ))
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("adoption.yml duplicate top-level key — rejected",
+                  code != 0 and not result["adoption_valid"], json.dumps(result))
+
+    write(consumer / ".agents" / "adoption.yml", (
+        f"source: {upstream.as_posix()}\n"
+        f"commit: {sha}\n"
+        "skills: [alpha]\n"
+    ))
+    code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check("adoption.yml flow-style skills list — accepted as real YAML",
+                  result2["adoption_valid"], json.dumps(result2))
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-dependency: alpha\n  skill-dependency: beta\n"
+        "---\nFixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget with duplicate metadata key"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, new_sha, ["widget"])
+    code3, result3, err3 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "SKILL.md frontmatter duplicate metadata key — rejected, no crash",
+        code3 != 0, json.dumps(result3) if result3 is not None else err3)
+
+
+# --- RC5: consolidated finding pipeline ---------------------------------
+
+
+def test_check_skills_multiple_findings_and_provenance_are_independent(results, workdir):
+    """Every finding category compute_external_state() produces must appear
+    together in a single evaluate() call without one suppressing another,
+    and provenance must be independent of the missing-source finding: a
+    name classified "added" gets root provenance regardless of whether its
+    declared source actually exists — only the separate missing-source
+    finding blocks the transaction over that."""
+    base = workdir / "check-skills-multiple-findings"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "beta", "widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("multiple-findings fixture — install exits zero", code0 == 0, out0)
+
+    skills_root = consumer / ".agents" / "skills"
+    write(skills_root / "gamma" / "SKILL.md", "occupied\n")  # unowned dir -> collision
+    # Drop "beta" (-> removed), add "gamma" (occupied -> collision) and
+    # "delta" (no source in the vendored tree -> added + missing-source).
+    write_adoption(consumer, upstream, sha, ["alpha", "gamma", "delta", "widget"])
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    findings = result["findings"] if result else []
+    results.check("multiple findings — nonzero exit", code != 0, err)
+
+    def has(category, subject, detail_substr, severity):
+        return any(f["category"] == category and f["subject"] == subject
+                  and detail_substr in f["detail"] and f["severity"] == severity
+                  for f in findings)
+
+    results.check(
+        "multiple findings — removed (beta) materialization finding present",
+        has("materialization", "beta", "skill installed but no longer declared: beta", "pending"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — added (delta) materialization finding present",
+        has("materialization", "delta", "skill declared but not installed: delta", "pending"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — collision (gamma) finding present",
+        has("collision", "gamma", "skill collision: gamma", "blocking"),
+        json.dumps(findings))
+    results.check(
+        "multiple findings — missing-source (delta) finding present",
+        has("missing-source", "delta", "declared skill has no source: delta", "blocking"),
+        json.dumps(findings))
+
+    results.check(
+        "multiple findings — categorization: beta removed, gamma collision, delta added, "
+        "alpha and widget unchanged",
+        "beta" in result["removed"] and "gamma" in result["collision"]
+        and "delta" in result["added"] and "alpha" in result["unchanged"]
+        and "widget" in result["unchanged"],
+        json.dumps(result))
+
+    provenance = result["provenance"]
+    results.check(
+        "multiple findings — alpha (root, unchanged) provenance",
+        provenance.get("alpha") == {"repo_key": "example/infurnet-skills",
+                                    "source": "skills/alpha", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — widget (external, unchanged) provenance",
+        provenance.get("widget") == {"repo_key": "example/ext-upstream",
+                                     "source": "skills/widget", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — delta (added, missing source) still gets root provenance: "
+        "provenance is independent of the missing-source finding",
+        provenance.get("delta") == {"repo_key": "example/infurnet-skills",
+                                    "source": "skills/delta", "mode": "copy"},
+        json.dumps(provenance))
+    results.check(
+        "multiple findings — beta (removed) and gamma (collision) get no provenance",
+        "beta" not in provenance and "gamma" not in provenance,
+        json.dumps(provenance))
+
+
+def test_check_skills_reports_repository_requirement_conflict(results, workdir):
+    """Two adapters naming the same external repository at different
+    revisions must surface as a blocking collision/"repository" finding —
+    dedupe_external_repos()'s own conflict list, converted into a finding
+    immediately after it is produced. (The mirror case for
+    dedupe_external_skills()'s own "skill requirement conflict" is not
+    reachable through the public discovery path: discover_external_
+    requirements() enforces that a local adapter's directory name always
+    equals the exposed name it resolves to, and the closure feeding it is a
+    set of unique names, so two different requirements can never land on
+    the same dedupe_external_skills() grouping key. That branch's own
+    behavior is preserved unchanged; it is not exercised end to end here.)"""
+    base = workdir / "check-skills-repo-conflict"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    vendor_skills = consumer / ".agents" / "vendor" / "example" / "infurnet-skills" / "skills"
+    commit_a, commit_b = "a" * 40, "b" * 40
+    write(vendor_skills / "conflict-repo" / "SKILL.md", (
+        "---\nname: conflict-repo\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/conflict-repo\n"
+        f"  external-commit: {commit_a}\n"
+        "---\nFixture.\n"
+    ))
+    write(vendor_skills / "gizmo" / "SKILL.md", (
+        "---\nname: gizmo\ndescription: Fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/conflict-repo\n"
+        f"  external-commit: {commit_b}\n"
+        "  external-path: extra/gizmo\n"
+        "---\nFixture.\n"
+    ))
+    write_adoption(consumer, upstream, sha, ["alpha", "conflict-repo", "gizmo"])
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    findings = result["findings"] if result else []
+    results.check("repository requirement conflict — nonzero exit", code != 0, err)
+    results.check(
+        "repository requirement conflict — blocking collision/repository finding naming "
+        "both required revisions",
+        any(f["category"] == "collision" and f["subject"] == "repository"
+           and f["severity"] == "blocking"
+           and "external repository revision conflict" in f["detail"]
+           and commit_a[:12] in f["detail"] and commit_b[:12] in f["detail"]
+           for f in findings),
+        json.dumps(findings))
+
+
+def test_check_skills_reports_stale_external_declaration_without_losing_ownership(
+        results, workdir):
+    """A stale finding fires when the declared external-commit changes but
+    generated state has not yet been reconciled to it — ownership over the
+    still-checked-out (unchanged) commit remains proven; only the
+    declaration is stale."""
+    base = workdir / "check-skills-stale-external"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("stale-external fixture — install exits zero", code0 == 0, out0)
+
+    # Edit the already-vendored root checkout's widget descriptor directly
+    # (bypassing --update): a fresh discovery now sees a different declared
+    # external-commit than what generated state recorded, without touching
+    # the manifest-recorded commit assess_external_ownership checks the
+    # real (unchanged) external checkout against.
+    new_ext_sha = "1a" * 20  # 40 hex chars; not all-digit, so YAML keeps it a string
+    vendor_widget_md = (consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+                        / "skills" / "widget" / "SKILL.md")
+    vendor_widget_md.write_text(vendor_widget_md.read_text().replace(ext_sha, new_ext_sha))
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    findings = result["findings"] if result else []
+    results.check("stale external declaration — nonzero exit", code != 0, err)
+    results.check(
+        "stale external declaration — damage stale/widget finding, correct diagnostic text",
+        any(f["category"] == "stale" and f["subject"] == "widget"
+           and f["severity"] == "damage"
+           and "external declaration for 'widget' no longer matches installed state"
+              in f["detail"]
+           for f in findings),
+        json.dumps(findings))
+    results.check(
+        "stale external declaration — ownership over the unchanged checkout stays proven",
+        "example/ext-upstream" in result["proven_external_repos"], json.dumps(result))
+    results.check(
+        "stale external declaration — widget remains classified unchanged",
+        "widget" in result["unchanged"], json.dumps(result))
+
+
+# --- RC6.1: generated-state and staging containment ----------------------
+
+
+def test_external_vendor_path_rejects_unsafe_components(results, workdir):
+    """external_vendor_path() must reject a symlinked intermediate
+    directory, a dangling symlink at the leaf, and a non-directory
+    ancestor — checked component by component before any .resolve()-based
+    containment check, which a symlinked vendor_root could otherwise
+    defeat by having both sides of the comparison follow the same
+    redirect. A genuinely absent destination remains installable."""
+    module = load_install_module()
+    base = workdir / "vendor-path-unsafe-components"
+    vendor_root = base / "vendor"
+    vendor_root.mkdir(parents=True)
+    elsewhere = base / "elsewhere"
+    elsewhere.mkdir()
+
+    os.symlink(elsewhere, vendor_root / "sym-owner", target_is_directory=True)
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "sym-owner/repo")
+        results.check("vendor path — symlinked intermediate directory rejected", False,
+                      "did not raise")
+    except ValueError as e:
+        results.check("vendor path — symlinked intermediate directory rejected",
+                      "is a symlink" in str(e), str(e))
+
+    (vendor_root / "dangle-owner").mkdir()
+    os.symlink(base / "does-not-exist", vendor_root / "dangle-owner" / "repo",
+              target_is_directory=True)
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "dangle-owner/repo")
+        results.check("vendor path — dangling leaf symlink rejected", False, "did not raise")
+    except ValueError as e:
+        results.check("vendor path — dangling leaf symlink rejected",
+                      "is a symlink" in str(e), str(e))
+
+    (vendor_root / "file-owner").write_text("not a directory\n")
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "file-owner/repo")
+        results.check("vendor path — non-directory ancestor rejected", False, "did not raise")
+    except ValueError as e:
+        results.check("vendor path — non-directory ancestor rejected",
+                      "is not a directory" in str(e), str(e))
+
+    try:
+        path = module.check_skills.external_vendor_path(vendor_root, "clean-owner/repo")
+        results.check("vendor path — absent destination remains installable",
+                      not path.exists(), "")
+    except ValueError as e:
+        results.check("vendor path — absent destination remains installable", False, str(e))
+
+
+def test_containment_preflight_blocks_before_classify_can_fetch(results, workdir):
+    """.agents, .agents/vendor, and .agents/skills must each be a real
+    directory or absent — checked once, before classify() (and therefore
+    before any inspection fetch) runs at all."""
+    module = load_install_module()
+    base = workdir / "containment-preflight"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    for boundary in (".agents", ".agents/vendor", ".agents/skills"):
+        tag = boundary.replace("/", "-")
+        target = consumer / boundary
+        elsewhere = base / f"elsewhere-{tag}"
+        elsewhere.mkdir(parents=True, exist_ok=True)
+        backup = base / f"backup-{tag}"
+        shutil.move(str(target), str(backup))
+        os.symlink(elsewhere, target, target_is_directory=True)
+
+        stopped = stopped_with_system_exit(
+            lambda: module.containment_preflight(consumer.resolve()))
+        results.check(f"containment preflight — {boundary} symlink stops before any fetch",
+                      stopped, "")
+
+        target.unlink()
+        shutil.move(str(backup), str(target))
+
+
+def test_check_skills_agents_symlink_blocks_before_any_read(results, workdir):
+    """A symlinked .agents must be reported as a blocking containment
+    finding before adoption.yml or the manifest is even read through it —
+    even when the symlink points at a real copy of .agents that reading
+    through would otherwise "work" against."""
+    base = workdir / "agents-symlink"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    real_agents = consumer / ".agents"
+    elsewhere = base / "elsewhere-agents"
+    shutil.copytree(real_agents, elsewhere)
+    shutil.rmtree(real_agents)
+    os.symlink(elsewhere, real_agents, target_is_directory=True)
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — symlinked .agents reported as a blocking containment finding",
+        code != 0 and any(f["category"] == "containment" and f["severity"] == "blocking"
+                          for f in (result or {}).get("findings", [])),
+        json.dumps(result) if result else err)
+
+
+def test_check_skills_reports_containment_findings_for_symlinked_boundaries(results, workdir):
+    """evaluate() must report a blocking containment finding — not crash,
+    not silently proceed — when .agents/vendor or .agents/skills is
+    itself a symlink."""
+    base = workdir / "containment-findings"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    for boundary, tag in ((".agents/vendor", "vendor"), (".agents/skills", "skills")):
+        target = consumer / boundary
+        elsewhere = base / f"elsewhere-{tag}"
+        elsewhere.mkdir(parents=True, exist_ok=True)
+        backup = base / f"backup-{tag}"
+        shutil.move(str(target), str(backup))
+        os.symlink(elsewhere, target, target_is_directory=True)
+
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        results.check(
+            f"check-skills — {boundary} symlink reported as a blocking containment finding",
+            code != 0 and any(f["category"] == "containment" and f["severity"] == "blocking"
+                              for f in (result or {}).get("findings", [])),
+            json.dumps(result) if result else err)
+
+        target.unlink()
+        shutil.move(str(backup), str(target))
+
+
+def test_external_vendor_destination_drift_between_planning_and_execution_blocks(
+        results, workdir):
+    """A destination that changes between planning and execution — here,
+    a dropped external repository's vendor path replaced by a symlink
+    after classify() computed the plan but before reconcile() executes
+    it — must stop rather than delete or write through the symlink."""
+    module = load_install_module()
+    base = workdir / "external-dest-drift"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("dest-drift fixture — install exits zero", code0 == 0, out0)
+
+    write_adoption(consumer, upstream, sha, ["alpha"])  # drop widget -> dropped external repo
+
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer.resolve(), [], txn, cache)
+    results.check("dest-drift — classification reconciles",
+                  classification["state"] == "reconcile", classification["state"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    real_target = base / "elsewhere-ext"
+    shutil.copytree(ext_upstream, real_target)
+    shutil.rmtree(dest)
+    os.symlink(real_target, dest, target_is_directory=True)
+
+    stopped = stopped_with_system_exit(
+        lambda: module.mutate(_StubArgs(bindings=None, force=True), consumer.resolve(), [],
+                              classification["adoption"], classification["result"],
+                              mode="default", txn=txn, cache=cache))
+    results.check("dest-drift — execution stops rather than deleting through the symlink",
+                  stopped, "")
+    results.check(
+        "dest-drift — the symlink itself is untouched",
+        dest.is_symlink() and os.readlink(str(dest)) == str(real_target), "")
+
+
+def tree_snapshot(path):
+    """A content fingerprint of whatever is at `path`: absent, a symlink
+    (by its target, never followed), a single file (by its bytes), or a
+    directory (by every entry's relative path paired with the same
+    file/symlink fingerprint). A directory listing alone would miss a file
+    whose content changed without any entry appearing or disappearing —
+    exactly the shape of a root-vendor HEAD or origin change."""
+    if path.is_symlink():
+        return ("symlink", os.readlink(path))
+    if not path.exists():
+        return None
+    if path.is_file():
+        return ("file", path.read_bytes())
+    entries = {}
+    for p in sorted(path.rglob("*")):
+        rel = str(p.relative_to(path))
+        if p.is_symlink():
+            entries[rel] = ("symlink", os.readlink(p))
+        elif p.is_file():
+            entries[rel] = ("file", p.read_bytes())
+    return ("dir", entries)
+
+
+def test_root_vendor_drift_between_confirmation_and_execution_blocks(results, workdir):
+    """RC8.2: the root vendor's plan-time state — presence, HEAD, origin,
+    cleanliness, and detached-HEAD status — must still match once
+    execution resumes after confirmation. A checkout that drifts while the
+    prompt is open — a planned reuse that becomes dirty or moves to a
+    different HEAD or origin, a planned acquisition whose previously
+    absent destination becomes occupied, or a planned replacement whose
+    checkout changes again — must stop the run before any durable
+    mutation, rather than silently reusing, acquiring, or replacing
+    whatever is now on disk. Injection happens inside a mocked confirm(),
+    so the real post-confirmation mutate()/reconcile() path executes
+    exactly as production code would run it. An unchanged root vendor is
+    also proven to install successfully, so the guard is not a false
+    positive on the ordinary path."""
+    module = load_install_module()
+
+    def vendor_path(consumer):
+        return consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+
+    def reuse_setup(base):
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        code0, out0 = run_install(consumer, ["--force", "--client", "claude"])
+        assert code0 == 0, out0
+        write_adoption(consumer, upstream, sha, ["alpha", "beta"])  # unrelated pending change
+        return consumer
+
+    def acquire_setup(base):
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        return consumer
+
+    def replace_setup(base):
+        upstream, sha1 = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha1, ["alpha"])
+        code0, out0 = run_install(consumer, ["--force", "--client", "claude"])
+        assert code0 == 0, out0
+        write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+        run_git(["add", "-A"], upstream)
+        run_git(["commit", "-q", "-m", "add delta"], upstream)
+        sha2 = run_git(["rev-parse", "HEAD"], upstream)
+        write_adoption_file(consumer, upstream, sha2, ["alpha"])
+        return consumer
+
+    def dirty_injection(consumer):
+        write(vendor_path(consumer) / "stray-uncommitted.txt", "dirty\n")
+
+    def head_injection(consumer):
+        run_git(["commit", "--allow-empty", "-q", "-m", "drift"], vendor_path(consumer))
+
+    def origin_injection(consumer):
+        run_git(["remote", "set-url", "origin", "https://example.invalid/elsewhere.git"],
+               vendor_path(consumer))
+
+    def occupied_injection(consumer):
+        make_git_repo(vendor_path(consumer))
+
+    def changed_again_injection(consumer):
+        write(vendor_path(consumer) / "changed-again.txt", "still drifting\n")
+
+    def no_injection(consumer):
+        pass
+
+    CASES = [
+        ("reuse-becomes-dirty", reuse_setup, dirty_injection, True),
+        ("reuse-head-changes", reuse_setup, head_injection, True),
+        ("reuse-origin-changes", reuse_setup, origin_injection, True),
+        ("acquisition-destination-occupied", acquire_setup, occupied_injection, True),
+        ("replacement-changes-again", replace_setup, changed_again_injection, True),
+        ("unchanged-vendor-proceeds", reuse_setup, no_injection, False),
+    ]
+
+    for label, setup, inject, expect_stop in CASES:
+        base = workdir / f"root-vendor-drift-{label}"
+        consumer = setup(base)
+        consumer_root = consumer.resolve()
+
+        durable_paths = [
+            consumer / ".agents" / "infurnet-skills.manifest.json",
+            consumer / ".agents" / "adoption.yml",
+            consumer / ".agents" / "skills",
+            consumer / "AGENTS.md",
+            consumer / "PROJECT.md",
+            consumer / ".claude" / "skills",
+            consumer / "CLAUDE.md",
+            consumer / ".git" / "info" / "exclude",
+        ]
+        pre = [tree_snapshot(p) for p in durable_paths]
+
+        txn, cache = {"dir": None}, {}
+        classification = module.classify(consumer_root, ["claude"], txn, cache)
+
+        injected_vendor = {}
+
+        def confirm_after_injecting(force, _inject=inject, _consumer=consumer):
+            _inject(_consumer)
+            injected_vendor["snapshot"] = tree_snapshot(vendor_path(_consumer))
+            return True
+
+        with mock.patch.object(module, "confirm", side_effect=confirm_after_injecting):
+            if expect_stop:
+                stopped = stopped_with_system_exit(lambda: module.mutate(
+                    _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+                    classification["adoption"], classification["result"], mode="default",
+                    txn=txn, cache=cache))
+                results.check(
+                    f"root-vendor drift ({label}) — execution stops before any "
+                    "durable mutation", stopped, "")
+                results.check(
+                    f"root-vendor drift ({label}) — durable consumer state untouched",
+                    [tree_snapshot(p) for p in durable_paths] == pre, "")
+                results.check(
+                    f"root-vendor drift ({label}) — vendor left exactly as the "
+                    "injection made it, never further touched",
+                    tree_snapshot(vendor_path(consumer)) == injected_vendor["snapshot"], "")
+            else:
+                code = module.mutate(
+                    _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+                    classification["adoption"], classification["result"], mode="default",
+                    txn=txn, cache=cache)
+                results.check(
+                    f"root-vendor drift ({label}) — unchanged plan installs successfully",
+                    code == 0, code)
+
+
+# --- RC6.4: damage independent of intent ----------------------------------
+
+
+def test_damage_independent_of_intent_dirty_vendor_blocks_reconcile(results, workdir):
+    """A dirty previously installed root checkout must classify as damaged
+    even when adoption.yml's declared pin has also changed."""
+    base = workdir / "damage-intent-dirty"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "stray-uncommitted.txt", "dirty\n")
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "dirty vendor + changed pin — refuses via the damaged gate, not reconcile",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+    results.check(
+        "dirty vendor + changed pin — vendor left untouched (no swap attempted)",
+        (vendor / "stray-uncommitted.txt").read_text() == "dirty\n", out)
+
+
+def test_damage_independent_of_intent_hash_mismatch_blocks_reconcile(results, workdir):
+    """A materialized root skill's content contradicting its manifest hash
+    must classify as damaged even when adoption.yml's declared pin has
+    also changed — proving the tampered content is never silently
+    laundered into a freshly promoted manifest as new "truth"."""
+    base = workdir / "damage-intent-hash"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    original_manifest = manifest_path.read_text()
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "hash mismatch + changed pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+    results.check(
+        "hash mismatch + changed pin — no promoted manifest laundered the tampered content",
+        manifest_path.read_text() == original_manifest, out)
+
+
+def test_damage_independent_of_intent_malformed_manifest_blocks_reconcile(results, workdir):
+    """A structurally malformed manifest must classify as damaged even
+    when adoption.yml's declared pin has also changed."""
+    base = workdir / "damage-intent-malformed-manifest"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repositories"] = []
+    write(manifest_path, json.dumps(manifest))
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "malformed manifest + changed pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+
+
+def test_damage_independent_of_intent_external_ownership_blocks_reconcile(results, workdir):
+    """Unproven external ownership must classify as damaged even when the
+    ROOT's declared pin has also changed — an unrelated intent change must
+    not shortcut past it."""
+    base = workdir / "damage-intent-ext-ownership"
+    upstream, sha1, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("ext-ownership-damage fixture — install exits zero", code0 == 0, out0)
+
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["repositories"]["example/ext-upstream"]["commit"]
+    write(manifest_path, json.dumps(manifest))
+
+    write(upstream / "skills" / "beta" / "SKILL.md",
+         "---\nname: beta\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "bump root, unrelated to widget's external identity"],
+           upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["widget"])
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check(
+        "unproven external ownership + changed root pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+
+
+def test_repair_recovers_from_damage_detected_independent_of_intent(results, workdir):
+    """After damage is detected independent of any intent change,
+    --repair — not default mode — is the path back to a coherent
+    installation."""
+    base = workdir / "damage-intent-repair-recovers"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    code1, out1 = run_install(consumer, ["--force"])
+    results.check("repair-recovers — default mode refuses while damaged",
+                  code1 != 0 and "Damaged managed state" in out1, out1)
+
+    code2, out2 = run_install(consumer, ["--repair", "--force"])
+    results.check("repair-recovers — --repair exits zero", code2 == 0, out2)
+    results.check(
+        "repair-recovers — content restored, no longer the corrupted placeholder",
+        (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text() != "corrupted\n",
+        out2)
+
+    code3, out3 = run_install(consumer, ["--verify"])
+    results.check("repair-recovers — verify passes after repair", code3 == 0, out3)
+
+
+# --- RC6.5: malformed nested manifest structure ----------------------------
+
+
+def test_check_skills_malformed_nested_manifest_structures_no_crash(results, workdir):
+    """A syntactically valid JSON manifest whose 'repositories' or 'skills'
+    value — or one of their entries — is not a mapping must never crash
+    evaluate() with an uncaught shape exception; a malformed container
+    produces a specific blocking manifest finding rather than being
+    silently treated as permission to mutate."""
+    base = workdir / "malformed-nested-manifest"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    good_manifest = json.loads(manifest_path.read_text())
+
+    cases = [
+        ({"repositories": [], "skills": {}}, "repositories"),
+        ({"repositories": {}, "skills": []}, "skills"),
+        ({"repositories": {"owner/repo": []}, "skills": {}}, None),
+        ({"repositories": {}, "skills": {"example": []}}, None),
+    ]
+    for bad_manifest, malformed_key in cases:
+        write(manifest_path, json.dumps(bad_manifest))
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        label = json.dumps(bad_manifest)
+        results.check(f"malformed manifest {label} — no crash, JSON result produced",
+                      result is not None, err)
+        if result is not None:
+            results.check(
+                f"malformed manifest {label} — nonzero exit, findings reported",
+                code != 0 and len(result["findings"]) > 0, json.dumps(result))
+        if malformed_key is not None and result is not None:
+            results.check(
+                f"malformed manifest {label} — blocking manifest-shape finding for "
+                f"{malformed_key!r}",
+                any(f["category"] == "manifest" and f["subject"] == malformed_key
+                   and f["severity"] == "blocking" for f in result["findings"]),
+                json.dumps(result))
+
+    write(manifest_path, json.dumps(good_manifest))
+
+
+# --- RC6.2/RC6.3: transaction staging and the complete action plan --------
+
+
+def test_transaction_staging_cleaned_up_on_cancellation(results, workdir):
+    """A cancelled reconciliation to a changed pin must leave no
+    persistent .agents/.tmp staging content and no promoted vendor
+    change — the disposable inspection download used to build the plan
+    is never itself a mutation."""
+    base = workdir / "staging-cleanup-cancel"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest_before = manifest_path.read_text()
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_before = run_git(["rev-parse", "HEAD"], vendor)
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, [], input_text="n\n")
+    results.check("staging cleanup, cancel — exits zero", code == 0, out)
+    tmp_root = consumer / ".agents" / ".tmp"
+    results.check(
+        "staging cleanup, cancel — no transaction directory left in .agents/.tmp "
+        "(the shared .tmp root itself is never swept away)",
+        not tmp_root.exists() or not any(tmp_root.iterdir()), out)
+    results.check("staging cleanup, cancel — vendor HEAD unchanged (nothing promoted)",
+                  run_git(["rev-parse", "HEAD"], vendor) == head_before, "")
+    results.check("staging cleanup, cancel — manifest byte-unchanged",
+                  manifest_path.read_text() == manifest_before, "")
+
+
+def test_transaction_staging_cleaned_up_on_success(results, workdir):
+    """.agents/.tmp must not persist after a successful reconciliation to
+    a changed pin either — cleanup runs regardless of outcome."""
+    base = workdir / "staging-cleanup-success"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check("staging cleanup, success — exits zero", code == 0, out)
+    tmp_root = consumer / ".agents" / ".tmp"
+    results.check(
+        "staging cleanup, success — no transaction directory left in .agents/.tmp",
+        not tmp_root.exists() or not any(tmp_root.iterdir()), out)
+    results.check(
+        "staging cleanup, success — vendor content actually reflects the new pin",
+        "v2." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+
+
+def test_update_unseen_candidate_single_acquisition(results, workdir):
+    """--update to a previously unseen candidate must acquire that
+    candidate's tree exactly once — reused for both check-update's
+    comparison and check-skills' plan — never fetched twice for one
+    invocation. This is the specific contract approved for RC6.2:
+    disposable inspection staging, not a second download."""
+    module = load_install_module()
+    base = workdir / "update-single-acquisition"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, [], txn, cache)
+
+    call_count = {"n": 0}
+    real_acquire = module.git_ops.acquire_tree
+
+    def counting_acquire(repo_url, sha, dest):
+        call_count["n"] += 1
+        return real_acquire(repo_url, sha, dest)
+
+    args = _StubArgs(bindings=None, force=True, target_version=sha2)
+    with mock.patch.object(module.git_ops, "acquire_tree", side_effect=counting_acquire):
+        code = module.run_update(args, consumer_root, [], classification, txn, cache)
+    module.cleanup_transaction(txn)
+
+    results.check("update single acquisition — exits zero", code == 0, "")
+    results.check(
+        "update single acquisition — the unseen candidate is acquired exactly once",
+        call_count["n"] == 1, call_count)
+    tmp_root = consumer_root / ".agents" / ".tmp"
+    results.check("update single acquisition — no transaction directory left in .agents/.tmp",
+                  not tmp_root.exists() or not any(tmp_root.iterdir()), "")
+
+
+def test_root_vendor_backup_restored_on_promotion_failure(results, workdir):
+    """The previous root vendor checkout must survive until candidate-
+    manifest verification actually succeeds, and be restored — not lost —
+    if that verification fails."""
+    module = load_install_module()
+    base = workdir / "vendor-backup-restore"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_before = run_git(["rev-parse", "HEAD"], vendor)
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest_before = manifest_path.read_text()
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    classification = module.classify(consumer_root, [], txn, cache)
+    results.check("vendor backup restore — classification reconciles",
+                  classification["state"] == "reconcile", classification["state"])
+
+    real_evaluate = module.check_skills.evaluate
+
+    def failing_on_candidate(root, *args, **kwargs):
+        r = real_evaluate(root, *args, **kwargs)
+        if kwargs.get("manifest_path") is not None:
+            r = dict(r)
+            r["findings"] = r["findings"] + [
+                {"category": "manifest", "subject": "manifest",
+                 "detail": "synthetic verification failure", "severity": "blocking"}]
+            r["ok"] = False
+        return r
+
+    with mock.patch.object(module.check_skills, "evaluate", side_effect=failing_on_candidate):
+        code = module.mutate(_StubArgs(bindings=None, force=True), consumer_root, [],
+                             classification["adoption"], classification["result"],
+                             mode="default", txn=txn, cache=cache)
+    module.cleanup_transaction(txn)
+
+    results.check("vendor backup restore — mutate reports failure", code == 1, "")
+    results.check(
+        "vendor backup restore — the previous vendor checkout was restored, not lost",
+        run_git(["rev-parse", "HEAD"], vendor) == head_before, "")
+    results.check(
+        "vendor backup restore — canonical manifest left unchanged (candidate never promoted)",
+        manifest_path.read_text() == manifest_before, "")
+    leftovers = [p.name for p in vendor.parent.iterdir() if p.name != vendor.name]
+    results.check(
+        "vendor backup restore — no leftover backup or promotion-staging directories",
+        leftovers == [], leftovers)
+
+
+def test_action_plan_discloses_external_acquisition_and_matches_execution(results, workdir):
+    """The pre-confirmation plan must disclose a genuinely new external
+    repository acquisition, and what actually gets acquired/materialized
+    must match exactly what was displayed. The same v1 install and the
+    later widget-only addition also cover RC8.1's root-vendor disclosure:
+    the root repository's own planned action must be shown — acquire on
+    first install, then reuse once installed — distinctly from the
+    "Install/update:" heading, and reuse must never be misreported as a
+    replacement while an unrelated external repository is acquired
+    alongside it."""
+    base = workdir / "plan-external-acquisition"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-acquisition fixture — v1 install exits zero", code0 == 0, out0)
+    results.check(
+        "plan-acquisition — initial install discloses root-vendor acquisition",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (acquire)" in out0, out0)
+    root_vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_after_v1 = run_git(["rev-parse", "HEAD"], root_vendor)
+
+    write_adoption(consumer, upstream, sha, ["alpha", "widget"])
+    code, out = run_install(consumer, [], input_text="n\n", env=env)
+    results.check(
+        "plan-acquisition — decline leaves nothing materialized",
+        code == 0 and not (consumer / ".agents" / "skills" / "widget").exists(), out)
+    results.check(
+        "plan-acquisition — plan discloses the external repository acquisition before "
+        "confirmation",
+        "External repositories:" in out and "acquire example/ext-upstream" in out, out)
+    results.check(
+        "plan-acquisition — root vendor is disclosed as reused, never a misleading "
+        "replacement, while the unrelated external repository is acquired",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (reuse)" in out, out)
+
+    code2, out2 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-acquisition — confirmed run exits zero", code2 == 0, out2)
+    results.check(
+        "plan-acquisition — widget actually materialized, matching the displayed plan",
+        (consumer / ".agents" / "skills" / "widget").is_dir(), out2)
+    results.check(
+        "plan-acquisition — confirmed run still discloses root-vendor reuse",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (reuse)" in out2, out2)
+    results.check(
+        "plan-acquisition — the disclosed root-vendor reuse actually left the "
+        "checkout untouched",
+        run_git(["rev-parse", "HEAD"], root_vendor) == head_after_v1, "")
+
+
+def test_action_plan_discloses_complete_mutation_set_and_matches_execution(results, workdir):
+    """The pre-confirmation plan must disclose the root-vendor replacement
+    caused by a consumer-authored pin change, root skill refresh, external
+    repository removal, client exposure, client governance, git exclude,
+    and a binding write — and what actually happens must match exactly
+    what was displayed. (Plan-vs-execution disagreement from an
+    intervening filesystem change is covered separately by the
+    destination-drift tests, which must stop instead of expanding the
+    plan.)"""
+    base = workdir / "plan-complete-mutation-set"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha", "widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("plan-complete fixture — v1 install exits zero", code0 == 0, out0)
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+    ])
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])  # drop widget, bump pin
+
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget size": "Large"\n')
+
+    code, out = run_install(
+        consumer, ["--client", "claude", "--bindings", str(bindings_file)],
+        input_text="n\n", env=env)
+    results.check("plan-complete — decline exits zero", code == 0, out)
+    results.check(
+        "plan-complete — decline: nothing materialized",
+        "v2." not in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
+    results.check("plan-complete — plan discloses skill refresh (alpha)",
+                  "+ alpha" in out, out)
+    results.check(
+        "plan-complete — plan discloses the root-vendor replacement caused by the "
+        "consumer-authored pin change, distinctly from the Install/update: heading",
+        f"Root repository: {upstream.as_posix()} @ {sha2[:12]} (replace)" in out, out)
+    results.check("plan-complete — plan discloses external removal (widget's repository)",
+                  "External repositories:" in out and "remove example/ext-upstream" in out, out)
+    results.check("plan-complete — plan discloses client exposure",
+                  "Reconcile client exposure: claude" in out and "[claude] link alpha" in out,
+                  out)
+    results.check("plan-complete — plan discloses client governance",
+                  "[claude] governance document" in out, out)
+    results.check("plan-complete — plan discloses the binding write",
+                  "Bindings:" in out and "Widget size" in out, out)
+    results.check("plan-complete — plan discloses the git exclude update",
+                  "Git exclude:" in out, out)
+
+    code2, out2 = run_install(
+        consumer, ["--force", "--client", "claude", "--bindings", str(bindings_file)], env=env)
+    results.check("plan-complete — confirmed run exits zero", code2 == 0, out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: alpha refreshed",
+        "v2." in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: widget's repository removed",
+        not (consumer / ".agents" / "vendor" / "example" / "ext-upstream").exists(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: client exposure created",
+        (consumer / ".claude" / "skills" / "alpha").is_symlink(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: governance document created",
+        (consumer / "CLAUDE.md").exists(), out2)
+    results.check(
+        "plan-complete — execution matches the displayed plan: binding applied",
+        "| Widget size | Large |" in (consumer / "PROJECT.md").read_text(), out2)
+
+
+# --- RC7.1: temporary-acquisition cleanup on failure -----------------------
+
+
+def test_check_update_fetch_temp_tree_cleans_up_on_clone_failure(results, workdir):
+    """A clone failure must not leave the just-created temporary directory
+    behind — cleanup ownership starts the moment mkdtemp returns, not only
+    once acquisition hands the path back to the caller."""
+    module = load_check_update_module()
+    base = workdir / "fetch-clone-failure"
+    base.mkdir(parents=True)
+    bogus_repo = base / "does-not-exist"
+
+    before = set(p.name for p in base.iterdir())
+    raised = False
+    try:
+        module.fetch_temp_tree(str(bogus_repo), "f" * 40, tmp_parent=base)
+    except Exception:
+        raised = True
+    after = set(p.name for p in base.iterdir())
+    results.check("fetch_temp_tree, clone failure — the original failure propagates",
+                  raised, "")
+    results.check("fetch_temp_tree, clone failure — no leaked temporary directory",
+                  after == before, sorted(after))
+
+
+def test_check_update_fetch_temp_tree_cleans_up_on_checkout_failure(results, workdir):
+    """A checkout failure after a successful clone must also leave nothing
+    behind — the clone itself already populated the temporary directory
+    before the checkout step failed."""
+    module = load_check_update_module()
+    base = workdir / "fetch-checkout-failure"
+    upstream, sha = make_upstream(base / "src")
+    bogus_sha = "f" * 40  # well-formed hex, not an object that exists
+
+    before = set(p.name for p in base.iterdir())
+    raised = False
+    try:
+        module.fetch_temp_tree(str(upstream), bogus_sha, tmp_parent=base)
+    except Exception:
+        raised = True
+    after = set(p.name for p in base.iterdir())
+    results.check("fetch_temp_tree, checkout failure — the original failure propagates",
+                  raised, "")
+    results.check("fetch_temp_tree, checkout failure — no leaked temporary directory",
+                  after == before, sorted(after))
+
+
+def test_check_update_fetch_temp_tree_success_remains_usable(results, workdir):
+    """The failure-cleanup wrapper must not disturb the successful path:
+    fetch_temp_tree still returns a usable checkout, and standalone
+    check-update.py invocations still clean up after a successful
+    comparison (see test_check_update_no_mutation_and_cleanup)."""
+    module = load_check_update_module()
+    base = workdir / "fetch-success"
+    upstream, sha = make_upstream(base / "src")
+
+    tree = module.fetch_temp_tree(str(upstream), sha, tmp_parent=base)
+    try:
+        results.check(
+            "fetch_temp_tree, success — returns a usable checkout at the declared commit",
+            (tree / "skills" / "alpha" / "SKILL.md").is_file(), "")
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
 
 
 def main():
@@ -747,6 +4071,10 @@ def main():
         for target in [PosixTarget()] + powershell_targets:
             wrapper_battery(results, workdir / f"wrapper-{target.name}", target)
             test_wrapper_selects_interpreter_once(results, workdir, target)
+
+        test_dependency_import_completeness(results, workdir)
+        test_wrapper_missing_dependency_diagnostic(results, workdir)
+        test_ps1_prefers_path_interpreter_over_launcher(results, workdir)
 
         test_generic_exposure_created(results, workdir)
         test_generic_exposure_retained_unchanged(results, workdir)
@@ -769,7 +4097,126 @@ def main():
         test_claude_md_not_regular_file_blocks(results, workdir)
         test_claude_md_symlink_to_existing_file_blocks(results, workdir)
         test_claude_md_dangling_symlink_blocks(results, workdir)
+        test_agents_md_malformed_markers_blocks(results, workdir)
+        test_agents_md_marker_replacement_preserves_surrounding_content(results, workdir)
+        test_git_exclude_malformed_markers_notes_and_skips(results, workdir)
+        test_git_exclude_created_then_updated_in_place(results, workdir)
+        test_claude_governance_four_states(results, workdir)
+        test_claude_governance_staged_once_not_reassessed(results, workdir)
+        test_first_line_document_apply_guard_stops_on_symlink_drift(results, workdir)
+        test_first_line_document_apply_guard_stops_on_content_drift(results, workdir)
         test_claude_permission_settings_untouched(results, workdir)
+
+        test_removed_flags_rejected(results, workdir)
+        test_invalid_flag_combinations_rejected(results, workdir)
+        test_bootstrap_confirm_and_cancel(results, workdir)
+        test_pending_install_after_bootstrap_completion(results, workdir)
+        test_adoption_present_no_manifest_generated_state_is_damaged(results, workdir)
+        test_manifest_present_malformed_adoption_not_bootstrap(results, workdir)
+        test_default_mode_reconciles_changed_intent_and_no_silent_repair(results, workdir)
+        test_same_pin_reconciliation_is_noop(results, workdir)
+
+        test_verify_noninteractive_offline_nonmutating(results, workdir)
+        test_verify_fails_on_skill_failure(results, workdir)
+        test_verify_fails_on_binding_failure(results, workdir)
+        test_verify_client_checks_without_mutating(results, workdir)
+
+        test_check_skills_detects_corruption_classes(results, workdir)
+        test_candidate_manifest_verification_and_promotion(results, workdir)
+        test_successful_skill_integrity_promotes_despite_unresolved_binding(results, workdir)
+        test_binding_prompt_eof_stops_without_mutation(results, workdir)
+
+        test_check_bindings_applicability_and_unresolved(results, workdir)
+        test_check_bindings_malformed_section(results, workdir)
+        test_check_bindings_target_inventory_override(results, workdir)
+        test_empty_and_whitespace_bindings_enter_resolution_flow(results, workdir)
+        test_bindings_whitespace_supply_does_not_resolve(results, workdir)
+
+        test_bindings_file_valid_fills_unresolved(results, workdir)
+        test_bindings_file_rejects_malformed_content(results, workdir)
+        test_bindings_file_accepts_real_yaml_syntax(results, workdir)
+        test_check_bindings_ignores_fenced_examples(results, workdir)
+        test_check_bindings_escaped_pipe_round_trips(results, workdir)
+        test_bindings_file_noop_when_matching_and_blocks_when_conflicting(results, workdir)
+        test_bindings_staged_until_final_confirmation(results, workdir)
+        test_bazel_defaults_precedence_and_scope(results, workdir)
+
+        test_check_update_no_mutation_and_cleanup(results, workdir)
+        test_check_update_obligation_lists_and_fenced_examples(results, workdir)
+        test_check_update_inventory_includes_nested_and_binary_files(results, workdir)
+        test_check_update_rejects_unsafe_symlink_in_bundle(results, workdir)
+        test_check_update_rejects_symlinked_bundle_root(results, workdir)
+        test_check_update_ls_remote_failure_surfaced(results, workdir)
+        test_update_requires_explicit_target_no_latest_selection(results, workdir)
+        test_update_changes_only_commit_and_release(results, workdir)
+        test_update_preserves_comments_and_flow_style(results, workdir)
+        test_update_inserts_missing_release_field(results, workdir)
+        test_stage_adoption_edit_refuses_on_contract_violation(results, workdir)
+        test_update_blocked_by_current_damage(results, workdir)
+        test_fully_supplied_update_runs_noninteractive(results, workdir)
+        test_update_summary_shows_external_repo_source_changed(results, workdir)
+        test_update_summary_shows_external_skill_path_changed(results, workdir)
+
+        test_repair_preserves_adoption_and_restores_damage(results, workdir)
+        test_repair_refuses_unowned_collision_and_malformed_adoption(results, workdir)
+
+        test_removal_shown_and_confirmation_semantics(results, workdir)
+        test_confirmation_eof_and_force(results, workdir)
+        test_force_does_not_bypass_validation_or_ownership(results, workdir)
+        test_client_behavior_across_repair_and_update(results, workdir)
+        test_external_skill_lifecycle(results, workdir)
+        test_external_unmanifested_destination_blocks_matching_identity(results, workdir)
+        test_external_unmanifested_destination_blocks_mismatching_identity(results, workdir)
+        test_external_revision_change_follows_update_path_when_proven(results, workdir)
+        test_external_ownership_malformed_and_contradictory_records_block(results, workdir)
+        test_external_ownership_orphaned_repo_record_blocks(results, workdir)
+        test_external_ownership_failure_preserves_desired_inventory(results, workdir)
+        test_root_git_inspection_happens_once_per_evaluation(results, workdir)
+
+        test_root_skill_content_refreshed_on_pin_change(results, workdir)
+        test_root_skill_content_refreshed_via_repair(results, workdir)
+        test_update_summary_reflects_target_not_current(results, workdir)
+        test_update_inspection_creates_no_persistent_directories(results, workdir)
+        test_client_collision_preflight_before_any_mutation(results, workdir)
+        test_foreign_symlink_collision_blocks_before_any_mutation(results, workdir)
+        test_client_exposure_apply_guard_stops_on_drift(results, workdir)
+        test_check_skills_malformed_manifest_shape_reports_finding(results, workdir)
+        test_check_skills_yaml_duplicate_keys_and_shape(results, workdir)
+
+        test_check_skills_multiple_findings_and_provenance_are_independent(results, workdir)
+        test_check_skills_reports_repository_requirement_conflict(results, workdir)
+        test_check_skills_reports_stale_external_declaration_without_losing_ownership(
+            results, workdir)
+
+        test_external_vendor_path_rejects_unsafe_components(results, workdir)
+        test_containment_preflight_blocks_before_classify_can_fetch(results, workdir)
+        test_check_skills_agents_symlink_blocks_before_any_read(results, workdir)
+        test_check_skills_reports_containment_findings_for_symlinked_boundaries(
+            results, workdir)
+        test_external_vendor_destination_drift_between_planning_and_execution_blocks(
+            results, workdir)
+        test_root_vendor_drift_between_confirmation_and_execution_blocks(results, workdir)
+
+        test_damage_independent_of_intent_dirty_vendor_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_hash_mismatch_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_malformed_manifest_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_external_ownership_blocks_reconcile(results, workdir)
+        test_repair_recovers_from_damage_detected_independent_of_intent(results, workdir)
+
+        test_check_skills_malformed_nested_manifest_structures_no_crash(results, workdir)
+
+        test_transaction_staging_cleaned_up_on_cancellation(results, workdir)
+        test_transaction_staging_cleaned_up_on_success(results, workdir)
+        test_update_unseen_candidate_single_acquisition(results, workdir)
+        test_root_vendor_backup_restored_on_promotion_failure(results, workdir)
+        test_action_plan_discloses_external_acquisition_and_matches_execution(
+            results, workdir)
+        test_action_plan_discloses_complete_mutation_set_and_matches_execution(
+            results, workdir)
+
+        test_check_update_fetch_temp_tree_cleans_up_on_clone_failure(results, workdir)
+        test_check_update_fetch_temp_tree_cleans_up_on_checkout_failure(results, workdir)
+        test_check_update_fetch_temp_tree_success_remains_usable(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

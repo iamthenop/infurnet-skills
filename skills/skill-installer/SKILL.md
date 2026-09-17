@@ -84,6 +84,24 @@ Platform entry points are:
 * [`scripts/install.sh`](scripts/install.sh) for POSIX environments;
 * [`scripts/install.ps1`](scripts/install.ps1) for PowerShell environments.
 
+Non-mutating checker entry points are:
+
+* [`scripts/check-skills.py`](scripts/check-skills.py) for installed-skill and
+  generated-state integrity;
+* [`scripts/check-bindings.py`](scripts/check-bindings.py) for applicable
+  `PROJECT.md` binding integrity;
+* [`scripts/check-update.py`](scripts/check-update.py) for remote update
+  discovery and candidate comparison.
+
+Shared internal implementation:
+
+* [`scripts/git_ops.py`](scripts/git_ops.py) provides Git checkout
+  inspection, repository acquisition, and remote-reference retrieval. It is
+  not a command-line entry point.
+
+`install.py` invokes these checker surfaces. It does not maintain separate
+copies of their checks.
+
 Each wrapper performs its own runtime preflight — a supported Python
 interpreter, Git availability, and Git-working-tree-root identity for the
 supplied consumer root — before delegating installation to
@@ -102,21 +120,74 @@ caller's working directory do not determine installation authority or target.
 
 ## Runtime dependencies
 
-`skill-installer` requires Python 3.12 or later and Git.
+`skill-installer` requires Python 3.12 or later, Git, and the Python packages
+pinned in [`scripts/requirements.txt`](scripts/requirements.txt).
 
-It has no third-party Python runtime dependencies.
-[`scripts/requirements.txt`](scripts/requirements.txt) records that contract.
+Provision the dependencies in an existing authorized Bazel environment or an
+isolated virtual environment before invoking the installer. Use that
+environment's Python interpreter to install the bundled requirements and
+execute the installer. Do not install packages into system Python.
 
-The installer does not provision Python, Git, a virtual environment, or system
-packages.
+The platform wrappers select a supported interpreter and invoke
+`install.py`. They do not install Python packages automatically. A missing
+runtime dependency is a preflight failure with a diagnostic identifying
+`scripts/requirements.txt`.
 
 ## Installation and reconciliation
 
-The existing adoption, immutable-pin, dependency-closure, external acquisition,
-materialization, candidate-review, and approval semantics remain in force.
+`install.py` is the human-facing transaction coordinator.
 
-`install.py` is the single implementation for first installation and later
-reconciliation. Platform wrappers must not duplicate those semantics.
+Its primary modes are:
+
+* default — bootstrap, initial installation, or reconciliation to adoption
+  intent that the consumer has already changed;
+* `--verify` — run installed-skill and project-binding checks without mutation;
+* `--update` — inspect and install an explicitly selected source revision;
+* `--repair` — reconstruct installer-owned generated state without changing
+  adoption intent.
+
+`--verify`, `--update`, and `--repair` are mutually exclusive.
+
+`--target-version <ref>` is valid only with `--update`.
+
+`--bindings <file>` supplies project-binding decisions for default, update, or
+repair operation. The file is transient installer input. `PROJECT.md` remains
+the durable binding authority.
+
+`--force` suppresses the final mutation confirmation. It does not bypass
+validation, ownership, provenance, collisions, malformed durable state, or
+binding conflicts.
+
+Client selection remains explicit through repeatable `--client <client-name>`.
+
+The installer presents the complete known persistent mutation set before
+download, materialization, repair, removal, binding writes, manifest promotion,
+or client mutation. Unless `--force` is present, mutation requires:
+
+```text
+Continue? [Y/n]
+```
+
+Remote inspection performed by `check-update.py` is non-mutating and may use
+temporary checkouts before this confirmation. Temporary inspection state is
+removed after use.
+
+`--update` may change only the adopted `commit` and `release`. It does not
+silently change `source` or the directly adopted `skills` list.
+
+`--repair` never changes adoption intent.
+
+There is no separate uninstall mode. A skill that is no longer desired appears
+in the proposed removal set and is removed only after the same confirmation.
+
+The installation manifest records the last successfully verified generated
+installation state. A candidate manifest is verified by `check-skills.py`
+before it replaces the prior manifest.
+
+Project-binding findings do not redefine installation integrity. A successfully
+verified installation may record its manifest even when an applicable project
+binding remains unresolved; the installer reports that binding finding and
+returns a failing verification result.
 
 ## Bootstrap assets
 

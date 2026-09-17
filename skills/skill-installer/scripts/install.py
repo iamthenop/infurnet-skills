@@ -128,40 +128,58 @@ def compute_adoption_yaml(consumer_root):
     return True, (ASSETS_ROOT / "adoption-template.yml").read_bytes()
 
 
-def compute_claude_governance(consumer_root):
-    """Read-only staging counterpart of apply_claude_governance(): the
-    (needs_write, new_text) install.py stages before confirmation, derived
-    from the shared, checker-owned governance assessment rather than a
-    separate reread. A symlink, non-regular file, or an ambiguous existing
-    import is a hard stop here, before confirmation — never guessed or
-    repaired. Never writes."""
-    assessment = check_skills.assess_claude_governance(consumer_root)
-    state = assessment["state"]
-    if state == "unsafe":
-        sys.exit(assessment["detail"])
-    if state == "correct":
-        return False, None
-    if state == "missing":
-        return True, check_skills.CLAUDE_IMPORT + "\n"
-    # "needs-insertion"
-    return True, check_skills.CLAUDE_IMPORT + "\n\n" + assessment["existing_text"]
+def stage_first_line_document(consumer_root, doc):
+    """Read-only staging counterpart of apply_first_line_document(), generic
+    across every client's required-first-line document: the
+    (needs_write, new_text, original) install.py stages before
+    confirmation, derived from the shared, checker-owned assessment rather
+    than a separate reread. A symlink, non-regular file, or an ambiguous
+    existing line is a hard stop here, before confirmation — never guessed
+    or repaired. Never writes.
+
+    `original` is the document's exact text at staging time (None when it
+    did not exist) — apply_first_line_document() uses it to detect drift
+    between staging and application."""
+    path = consumer_root / doc["path"]
+    assessment = check_skills.assess_first_line_document(path, doc["required_first_line"])
+    match assessment["state"]:
+        case "unsafe":
+            sys.exit(assessment["detail"])
+        case "correct":
+            return False, None, None
+        case "missing":
+            return True, doc["required_first_line"] + "\n", None
+        case "needs-insertion":
+            original = assessment["existing_text"]
+            return True, doc["required_first_line"] + "\n\n" + original, original
+        case _:
+            raise AssertionError(f"unexpected document-assessment state: "
+                                 f"{assessment['state']!r}")
 
 
-def apply_claude_governance(consumer_root, plan):
-    """Writes the plan already staged by compute_claude_governance()
-    verbatim — never rereads CLAUDE.md, reassesses it, or generates a
-    different edit after confirmation."""
-    needs_write, new_text = plan
-    if needs_write:
-        (consumer_root / "CLAUDE.md").write_text(new_text)
-
-
-CLIENT_GOVERNANCE_COMPUTERS = {
-    "claude": compute_claude_governance,
-}
-CLIENT_GOVERNANCE_APPLIERS = {
-    "claude": apply_claude_governance,
-}
+def apply_first_line_document(consumer_root, doc, plan):
+    """Writes the plan already staged by stage_first_line_document()
+    verbatim — never rereads the document to decide what to write. Rereads
+    it once, immediately before writing, only to guard against drift since
+    staging: if it is no longer in the exact state (including having
+    become a symlink or other unsafe entry) the plan was staged against,
+    this stops rather than silently overwriting it or recomputing a new
+    edit."""
+    needs_write, new_text, original = plan
+    if not needs_write:
+        return
+    path = consumer_root / doc["path"]
+    if original is None:
+        if path.exists() or path.is_symlink():
+            sys.exit(f"{path}: now exists; refusing to overwrite a document that "
+                     "changed since the approved plan was staged")
+    else:
+        if path.is_symlink():
+            sys.exit(f"{path}: became a symlink; refusing to write through it")
+        if not path.is_file() or path.read_text() != original:
+            sys.exit(f"{path}: changed since the approved plan was staged; "
+                     "refusing to overwrite")
+    path.write_text(new_text)
 
 
 def client_skills_root_for(consumer_root, client_name):
@@ -227,14 +245,14 @@ def apply_client_exposure(desired_names, skills_root, client_skills_root, assess
 def reconcile_client(consumer_root, skills_root, client_name, plan):
     """install.py's own per-client wiring: applies plan["exposure"] via the
     shared generic reconciler at that client's registered skill root, plus
-    its own already-staged governance content, if any — neither is
-    reassessed or regenerated here."""
+    its own already-staged governance document content, if any — neither
+    is reassessed or regenerated here."""
     apply_client_exposure(plan["desired_names"], skills_root,
                           client_skills_root_for(consumer_root, client_name),
                           plan["exposure"])
-    applier = CLIENT_GOVERNANCE_APPLIERS.get(client_name)
-    if applier and plan["governance"] is not None:
-        applier(consumer_root, plan["governance"])
+    doc = check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client_name)
+    if doc is not None and plan["governance"] is not None:
+        apply_first_line_document(consumer_root, doc, plan["governance"])
 
 
 # --- CLI parsing and the flag-compatibility contract ----------------------
@@ -620,7 +638,16 @@ def swap_vendor_tree(fetched_tree, vendor):
     atomic_replace_dir(fetched_tree, vendor)
 
 
-def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, temp_registry):
+def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, temp_registry,
+                              proven_repo_keys):
+    """Acquires or reuses each external repository names_needed requires.
+    `proven_repo_keys` is the ownership decision check-skills.py's
+    assess_external_ownership() already made — this never independently
+    re-derives whether an occupied destination may be reused or replaced
+    from its Git identity alone: a destination that exists (a dangling
+    symlink included) without a proven prior-ownership record is a
+    blocking finding here, not a candidate for reuse, even when a fresh
+    checkout could plainly be obtained instead."""
     resolved, checkouts, findings = {}, {}, {}
     for name in sorted(names_needed):
         prov = provenance[name]
@@ -632,7 +659,12 @@ def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, 
             except ValueError as e:
                 findings[name] = str(e)
                 continue
-            if dest.exists() and not check_skills.check_external_git(
+            occupied = dest.exists() or dest.is_symlink()
+            if occupied and rkey not in proven_repo_keys:
+                findings[name] = (f"{dest}: exists without a proven prior ownership "
+                                  "record; refusing to reuse, replace, or remove it")
+                continue
+            if occupied and not check_skills.check_external_git(
                     dest, info["source"], info["commit"]):
                 checkouts[rkey] = dest
             else:
@@ -690,7 +722,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
                             if result["provenance"][n]["repo_key"] != root_key_]
         resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
             result["external_repos"], result["provenance"], ext_names_needed,
-            vendor_root, temp_registry)
+            vendor_root, temp_registry, set(result["proven_external_repos"]))
         if upstream_findings:
             sys.exit("external upstream validation failed during install: "
                      + "; ".join(f"{n}: {r}" for n, r in sorted(upstream_findings.items())))
@@ -980,8 +1012,9 @@ def mutate(args, consumer_root, clients, adoption, result, mode, version_change=
     for client in clients:
         exposure = check_client_collision(consumer_root, target_inventory,
                                           client_skills_root_for(consumer_root, client))
-        governance_computer = CLIENT_GOVERNANCE_COMPUTERS.get(client)
-        governance = governance_computer(consumer_root) if governance_computer else None
+        governance_doc = check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client)
+        governance = (stage_first_line_document(consumer_root, governance_doc)
+                     if governance_doc else None)
         client_plans[client] = {"desired_names": target_inventory,
                                 "exposure": exposure, "governance": governance}
 
@@ -1052,7 +1085,6 @@ def run_bootstrap(consumer_root, clients, force):
     adoption_yaml = agents_root / "adoption.yml"
     project_md = consumer_root / "PROJECT.md"
     agents_md = consumer_root / "AGENTS.md"
-    claude_md = consumer_root / "CLAUDE.md"
 
     for client in clients:
         check_client_skills_preflight(consumer_root, client_skills_root_for(consumer_root, client))
@@ -1060,8 +1092,12 @@ def run_bootstrap(consumer_root, clients, force):
     agents_needs_write, agents_new_text = compute_agents_md(consumer_root)
     project_needs_write, project_new_bytes = compute_project_md(consumer_root)
     adoption_needs_write, adoption_new_bytes = compute_adoption_yaml(consumer_root)
-    claude_plans = {c: compute_claude_governance(consumer_root)
-                    for c in clients if c == "claude"}
+    governance_plans = {
+        client: (doc, stage_first_line_document(consumer_root, doc))
+        for client in clients
+        for doc in [check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get(client)]
+        if doc is not None
+    }
 
     print("Bootstrap:")
     if adoption_needs_write:
@@ -1070,9 +1106,10 @@ def run_bootstrap(consumer_root, clients, force):
         print(f"  create {project_md}")
     if agents_needs_write:
         print(f"  {'create' if not agents_md.exists() else 'update'} {agents_md}")
-    for needs_write, _ in claude_plans.values():
+    for doc, (needs_write, _, _) in governance_plans.values():
         if needs_write:
-            print(f"  {'create' if not claude_md.exists() else 'update'} {claude_md}")
+            doc_path = consumer_root / doc["path"]
+            print(f"  {'create' if not doc_path.exists() else 'update'} {doc_path}")
     for client in clients:
         print(f"  create {client_skills_root_for(consumer_root, client)} (client skill root)")
 
@@ -1087,8 +1124,8 @@ def run_bootstrap(consumer_root, clients, force):
         project_md.write_bytes(project_new_bytes)
     if agents_needs_write:
         agents_md.write_text(agents_new_text)
-    for plan in claude_plans.values():
-        apply_claude_governance(consumer_root, plan)
+    for doc, plan in governance_plans.values():
+        apply_first_line_document(consumer_root, doc, plan)
     for client in clients:
         client_skills_root_for(consumer_root, client).mkdir(parents=True, exist_ok=True)
 

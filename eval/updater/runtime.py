@@ -1060,26 +1060,35 @@ def test_claude_permission_settings_untouched(results, workdir):
                   not (consumer / ".claude" / "settings.local.json").exists(), out)
 
 
+CLAUDE_DOC = {"path": "CLAUDE.md", "required_first_line": "@AGENTS.md"}
+
+
 def test_claude_governance_four_states(results, workdir):
-    """check_skills.assess_claude_governance() must distinguish exactly the
-    four states RC3.3 requires, sharing one implementation between the
-    checker's findings and install.py's staging."""
+    """check_skills.assess_first_line_document() must distinguish exactly
+    the four required states, as one generic implementation shared by
+    every client with a required-first-line document — not a Claude-
+    specific procedure — between the checker's findings and install.py's
+    staging."""
     module = load_install_module()
     base = workdir / "claude-governance-states"
+
+    def assess(root):
+        return module.check_skills.assess_first_line_document(
+            root / CLAUDE_DOC["path"], CLAUDE_DOC["required_first_line"])
 
     correct = base / "correct"
     write(correct / "CLAUDE.md", "@AGENTS.md\n\nExtra notes.\n")
     results.check("claude governance — correct import detected",
-                  module.check_skills.assess_claude_governance(correct)["state"] == "correct", "")
+                  assess(correct)["state"] == "correct", "")
 
     missing = base / "missing"
     missing.mkdir(parents=True)
     results.check("claude governance — missing file detected",
-                  module.check_skills.assess_claude_governance(missing)["state"] == "missing", "")
+                  assess(missing)["state"] == "missing", "")
 
     needs_insertion = base / "needs-insertion"
     write(needs_insertion / "CLAUDE.md", "Some existing notes.\n")
-    assessment = module.check_skills.assess_claude_governance(needs_insertion)
+    assessment = assess(needs_insertion)
     results.check("claude governance — needs-insertion detected",
                   assessment["state"] == "needs-insertion", assessment)
     results.check("claude governance — needs-insertion carries the existing text",
@@ -1089,7 +1098,7 @@ def test_claude_governance_four_states(results, workdir):
     write(ambiguous / "CLAUDE.md", "Some notes.\n@AGENTS.md\n")
     results.check(
         "claude governance — import present but not first line is unsafe/ambiguous",
-        module.check_skills.assess_claude_governance(ambiguous)["state"] == "unsafe", "")
+        assess(ambiguous)["state"] == "unsafe", "")
 
     symlink_root = base / "symlink"
     symlink_root.mkdir(parents=True)
@@ -1097,7 +1106,18 @@ def test_claude_governance_four_states(results, workdir):
     write(target, "@AGENTS.md\n")
     os.symlink(target, symlink_root / "CLAUDE.md")
     results.check("claude governance — symlink is unsafe",
-                  module.check_skills.assess_claude_governance(symlink_root)["state"] == "unsafe", "")
+                  assess(symlink_root)["state"] == "unsafe", "")
+
+    results.check(
+        "claude governance — no Claude-specific assessment procedure remains "
+        "(assess_first_line_document is the only implementation, driven by "
+        "the CLIENT_GOVERNANCE_DOCUMENTS registry)",
+        not hasattr(module.check_skills, "assess_claude_governance")
+        and not hasattr(module.check_skills, "check_claude_governance")
+        and not hasattr(module, "compute_claude_governance")
+        and not hasattr(module, "apply_claude_governance")
+        and module.check_skills.CLIENT_GOVERNANCE_DOCUMENTS.get("claude") == CLAUDE_DOC,
+        "")
 
 
 class _StubArgs:
@@ -1107,13 +1127,13 @@ class _StubArgs:
 
 
 def test_claude_governance_staged_once_not_reassessed(results, workdir):
-    """compute_claude_governance() — install.py's own pre-confirmation
+    """stage_first_line_document() — install.py's own pre-confirmation
     staging step — must be called exactly once for the whole mutate()
-    transaction. apply_claude_governance() must write that staged plan
+    transaction. apply_first_line_document() must write that staged plan
     verbatim rather than independently rereading, reassessing, or
     regenerating the edit after confirmation. (The separate post-mutation
-    check_skills verification pass legitimately reassesses CLAUDE.md too —
-    that is a different step, "Verify", not a second "stage".)"""
+    check_skills verification pass legitimately reassesses the document too
+    — that is a different step, "Verify", not a second "stage".)"""
     module = load_install_module()
     base = workdir / "claude-governance-once"
     upstream, sha = make_upstream(base)
@@ -1123,14 +1143,13 @@ def test_claude_governance_staged_once_not_reassessed(results, workdir):
     classification = module.classify(consumer_root, ["claude"])
 
     call_count = {"n": 0}
-    real_compute = module.compute_claude_governance
+    real_stage = module.stage_first_line_document
 
-    def counting_compute(consumer_root_arg):
+    def counting_stage(consumer_root_arg, doc_arg):
         call_count["n"] += 1
-        return real_compute(consumer_root_arg)
+        return real_stage(consumer_root_arg, doc_arg)
 
-    with mock.patch.object(module, "compute_claude_governance", side_effect=counting_compute):
-        module.CLIENT_GOVERNANCE_COMPUTERS["claude"] = module.compute_claude_governance
+    with mock.patch.object(module, "stage_first_line_document", side_effect=counting_stage):
         code = module.mutate(
             _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
             classification["adoption"], classification["result"], mode="default")
@@ -1142,6 +1161,56 @@ def test_claude_governance_staged_once_not_reassessed(results, workdir):
     results.check(
         "claude governance — CLAUDE.md written with the staged import",
         (consumer_root / "CLAUDE.md").read_text().split("\n")[0] == "@AGENTS.md", "")
+
+
+def test_first_line_document_apply_guard_stops_on_symlink_drift(results, workdir):
+    """apply_first_line_document() must reread the document immediately
+    before writing only to guard against drift since staging — if the
+    document was replaced with a symlink in the meantime, this must stop
+    rather than write through it or recompute a new edit."""
+    module = load_install_module()
+    base = workdir / "governance-apply-guard-symlink"
+    consumer_root = base / "consumer"
+    consumer_root.mkdir(parents=True)
+
+    plan = module.stage_first_line_document(consumer_root, CLAUDE_DOC)
+    results.check("document apply guard setup — missing file staged for creation",
+                  plan[0] is True and plan[2] is None, plan)
+
+    target = base / "elsewhere.md"
+    write(target, "unrelated\n")
+    os.symlink(target, consumer_root / "CLAUDE.md")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_first_line_document(consumer_root, CLAUDE_DOC, plan))
+    results.check("document apply guard — stops rather than writing through the symlink",
+                  stopped, "")
+    results.check(
+        "document apply guard — the symlink and its target are left untouched",
+        os.path.realpath(consumer_root / "CLAUDE.md") == os.path.realpath(target)
+        and target.read_text() == "unrelated\n", "")
+
+
+def test_first_line_document_apply_guard_stops_on_content_drift(results, workdir):
+    """The same guard must also fire when the document still exists as a
+    regular file but its content changed since staging — never silently
+    overwriting it with the staged edit computed against the old content."""
+    module = load_install_module()
+    base = workdir / "governance-apply-guard-content"
+    consumer_root = base / "consumer"
+    write(consumer_root / "CLAUDE.md", "Some existing notes.\n")
+
+    plan = module.stage_first_line_document(consumer_root, CLAUDE_DOC)
+    results.check("content drift setup — needs-insertion staged",
+                  plan[0] is True and plan[2] == "Some existing notes.\n", plan)
+
+    write(consumer_root / "CLAUDE.md", "Different notes now.\n")
+
+    stopped = stopped_with_system_exit(
+        lambda: module.apply_first_line_document(consumer_root, CLAUDE_DOC, plan))
+    results.check("content drift — apply stops rather than overwriting", stopped, "")
+    results.check("content drift — the changed content is left exactly as it is",
+                  (consumer_root / "CLAUDE.md").read_text() == "Different notes now.\n", "")
 
 
 # --- Phase 3: installer orchestration, mode/modifier CLI, checkers --------
@@ -2394,8 +2463,8 @@ def test_external_skill_lifecycle(results, workdir):
     shutil.rmtree(ext_vendor / ".git")
     code5, result5, err5 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
     results.check(
-        "external skill — corrupted external vendor reported as unresolved external state",
-        code5 != 0 and any(f["category"] == "unresolved-external" for f in result5["findings"]),
+        "external skill — corrupted external vendor reported as an external-ownership finding",
+        code5 != 0 and any(f["category"] == "external-ownership" for f in result5["findings"]),
         json.dumps(result5))
     results.check("external skill — damaged managed state still reported with findings",
                   len(result5["findings"]) > 0, "")
@@ -2405,6 +2474,217 @@ def test_external_skill_lifecycle(results, workdir):
         "external skill — --repair refuses unprovable external ownership rather than "
         "silently re-fetching over it",
         code6 != 0, out6)
+
+
+def test_external_unmanifested_destination_blocks_matching_identity(results, workdir):
+    """A destination directory for a newly declared external dependency
+    that already exists — with no manifest record at all — must block the
+    operation even when its Git identity happens to match the declared
+    source/commit exactly. A matching origin and HEAD are evidence of
+    checkout integrity, never proof that the installer owns the
+    directory."""
+    base = workdir / "external-unmanifested-matching"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.parent.mkdir(parents=True)
+    subprocess.run(["git", "clone", "--quiet", "https://github.com/example/ext-upstream",
+                   str(dest)], env=env, check=True)
+    subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ext_sha],
+                   env=env, check=True)
+    marker = (dest / "skills" / "widget" / "SKILL.md").read_text()
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("unmanifested destination, matching identity — nonzero exit", code != 0, out)
+    results.check(
+        "unmanifested destination, matching identity — destination content untouched",
+        (dest / "skills" / "widget" / "SKILL.md").read_text() == marker, out)
+    results.check("unmanifested destination, matching identity — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_external_unmanifested_destination_blocks_mismatching_identity(results, workdir):
+    """The same guard fires even when the pre-existing, unmanifested
+    destination's Git identity does not match the declared source/commit —
+    proving the block is about missing ownership evidence, not merely
+    about whether a mismatched checkout looks trustworthy on its own."""
+    base = workdir / "external-unmanifested-mismatching"
+    upstream, new_sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, new_sha, ["widget"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.parent.mkdir(parents=True)
+    subprocess.run(["git", "clone", "--quiet", "https://github.com/example/ext-upstream",
+                   str(dest)], env=env, check=True)
+    subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", ext_sha],
+                   env=env, check=True)
+    write(dest / "stray-uncommitted-file.txt", "dirty\n")
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("unmanifested destination, mismatching identity — nonzero exit", code != 0, out)
+    results.check(
+        "unmanifested destination, mismatching identity — destination left untouched",
+        (dest / "stray-uncommitted-file.txt").read_text() == "dirty\n", out)
+    results.check("unmanifested destination, mismatching identity — nothing materialized",
+                  not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_external_revision_change_follows_update_path_when_proven(results, workdir):
+    """A changed, approved external revision follows the established
+    update path — normal restaging and materialization, no ownership
+    finding — when the prior ownership record is proven."""
+    base = workdir / "external-revision-change-proven"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("external revision change fixture — v1 install exits zero", code0 == 0, out0)
+
+    write(ext_upstream / "skills" / "widget" / "SKILL.md",
+         FIXTURE_SKILL.format(name="widget") + "v2\n")
+    run_git(["add", "-A"], ext_upstream)
+    run_git(["commit", "-q", "-m", "widget v2"], ext_upstream)
+    new_ext_sha = run_git(["rev-parse", "HEAD"], ext_upstream)
+
+    write(upstream / "skills" / "widget" / "SKILL.md", (
+        "---\nname: widget\ndescription: External descriptor fixture.\nlicense: MIT\n"
+        "metadata:\n  skill-type: external\n"
+        "  external-source: https://github.com/example/ext-upstream\n"
+        f"  external-commit: {new_ext_sha}\n"
+        "  external-path: skills/widget\n---\nExternal descriptor fixture.\n"
+    ))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "widget points at v2"], upstream)
+    new_sha = run_git(["rev-parse", "HEAD"], upstream)
+
+    code, out = run_install(
+        consumer, ["--update", "--target-version", new_sha, "--force"], env=env)
+    results.check("external revision change, proven ownership — update exits zero", code == 0, out)
+    results.check(
+        "external revision change, proven ownership — content refreshed to the new revision",
+        (consumer / ".agents" / "skills" / "widget" / "SKILL.md").read_text()
+        == (ext_upstream / "skills" / "widget" / "SKILL.md").read_text(), out)
+
+
+def test_external_ownership_malformed_and_contradictory_records_block(results, workdir):
+    """A malformed manifest repository record, and a skill record that
+    contradicts the manifest by naming an unknown repository, each block
+    with an external-ownership finding."""
+    base = workdir / "external-ownership-malformed"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("malformed-record fixture — v1 install exits zero", code0 == 0, out0)
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repositories"]["example/ext-upstream"] = {
+        "source": "https://github.com/example/ext-upstream"}  # missing "commit"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    code1, result1, err1 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "malformed repository record — blocking external-ownership finding",
+        code1 != 0 and any(f["category"] == "external-ownership" for f in result1["findings"]),
+        json.dumps(result1))
+
+    manifest2 = json.loads(manifest_path.read_text())
+    manifest2["repositories"]["example/ext-upstream"] = {
+        "source": "https://github.com/example/ext-upstream", "commit": ext_sha}
+    manifest2["skills"]["widget"]["repository"] = "example/does-not-exist"
+    manifest_path.write_text(json.dumps(manifest2, indent=2))
+    code2, result2, err2 = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "contradictory skill record (unknown repository) — blocking external-ownership finding",
+        code2 != 0 and any(f["category"] == "external-ownership" for f in result2["findings"]),
+        json.dumps(result2))
+
+
+def test_external_ownership_orphaned_repo_record_blocks(results, workdir):
+    """A manifest repository record no longer referenced by any adopted
+    skill, and whose checkout is corrupted, remains visible as a blocking
+    finding rather than being silently dropped merely because nothing
+    currently references it."""
+    base = workdir / "external-ownership-orphan"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("orphan fixture — v1 install exits zero", code0 == 0, out0)
+
+    # "widget" is no longer adopted at all (switching adopted intent to the
+    # fixture's plain root skill "alpha" instead) — the manifest's
+    # repository record for it is left in place, as if hand-edited, and
+    # its checkout is corrupted: an unprovable orphan.
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    shutil.rmtree(consumer / ".agents" / "vendor" / "example" / "ext-upstream" / ".git")
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check(
+        "orphaned unprovable repository record — still visible as a blocking finding",
+        code != 0 and any(f["category"] == "external-ownership"
+                          and f["subject"] == "example/ext-upstream"
+                          for f in result["findings"]),
+        json.dumps(result))
+
+
+def test_external_ownership_failure_preserves_desired_inventory(results, workdir):
+    """A blocking external-ownership finding must not narrow the desired
+    inventory: the declared skill-dependency closure still names the skill
+    even though it cannot be safely installed — intent and ownership are
+    assessed independently."""
+    base = workdir / "external-ownership-preserves-desired"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+
+    # The root vendor is checked out directly (bypassing the installer) so
+    # discovery can see widget's external descriptor, without ever
+    # installing widget itself.
+    root_vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    root_vendor.parent.mkdir(parents=True)
+    run_git(["clone", "--quiet", "--no-checkout", str(upstream), str(root_vendor)], base)
+    run_git(["checkout", "--quiet", sha], root_vendor)
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    dest.mkdir(parents=True)
+    write(dest / "not-a-git-repo.txt", "occupied\n")
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)], env=env)
+    results.check("ownership failure — blocking, nonzero exit", code != 0, err)
+    results.check("ownership failure — the skill remains part of the declared closure",
+                  "widget" in result["closure"], json.dumps(result))
+    results.check(
+        "ownership failure — reported as an external-ownership finding",
+        any(f["category"] == "external-ownership" for f in result["findings"]),
+        json.dumps(result))
+
+
+def test_root_git_inspection_happens_once_per_evaluation(results, workdir):
+    """evaluate() must inspect the root checkout exactly once, deriving
+    both vendor_pin_matches and check_git's findings from that single
+    observation."""
+    module = load_install_module()
+    base = workdir / "root-inspection-once"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    call_count = {"n": 0}
+    real_inspect = module.git_ops.inspect_checkout
+
+    def counting_inspect(*args, **kwargs):
+        call_count["n"] += 1
+        return real_inspect(*args, **kwargs)
+
+    with mock.patch.object(module.git_ops, "inspect_checkout", side_effect=counting_inspect):
+        result = module.check_skills.evaluate(consumer.resolve())
+    results.check("root git inspection — evaluate exits ok", result["ok"], json.dumps(result))
+    results.check(
+        "root git inspection — exactly one inspection for the whole evaluation "
+        "(no external checkouts exist in this fixture, so any call is the root's)",
+        call_count["n"] == 1, call_count)
 
 
 # --- PR #105 review corrections --------------------------------------
@@ -2735,6 +3015,8 @@ def main():
         test_git_exclude_created_then_updated_in_place(results, workdir)
         test_claude_governance_four_states(results, workdir)
         test_claude_governance_staged_once_not_reassessed(results, workdir)
+        test_first_line_document_apply_guard_stops_on_symlink_drift(results, workdir)
+        test_first_line_document_apply_guard_stops_on_content_drift(results, workdir)
         test_claude_permission_settings_untouched(results, workdir)
 
         test_removed_flags_rejected(results, workdir)
@@ -2793,6 +3075,13 @@ def main():
         test_force_does_not_bypass_validation_or_ownership(results, workdir)
         test_client_behavior_across_repair_and_update(results, workdir)
         test_external_skill_lifecycle(results, workdir)
+        test_external_unmanifested_destination_blocks_matching_identity(results, workdir)
+        test_external_unmanifested_destination_blocks_mismatching_identity(results, workdir)
+        test_external_revision_change_follows_update_path_when_proven(results, workdir)
+        test_external_ownership_malformed_and_contradictory_records_block(results, workdir)
+        test_external_ownership_orphaned_repo_record_blocks(results, workdir)
+        test_external_ownership_failure_preserves_desired_inventory(results, workdir)
+        test_root_git_inspection_happens_once_per_evaluation(results, workdir)
 
         test_root_skill_content_refreshed_on_pin_change(results, workdir)
         test_root_skill_content_refreshed_via_repair(results, workdir)

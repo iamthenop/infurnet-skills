@@ -509,38 +509,58 @@ def resolve_upstream_skill(checkout, path, exposed_name):
     return base, None
 
 
-def classify_prior_external(vendor_root, manifest, root_key):
-    """Partition every non-root manifest repository/skill entry into
-    proven / unprovable / malformed."""
+def assess_external_ownership(vendor_root, manifest, root_key, desired_repo_keys):
+    """The one ownership assessment of existing generated external state:
+    for each non-root repository or skill the manifest currently records,
+    and for each desired repository the manifest does not, whether the
+    installer has sufficient evidence to reuse, replace, or remove it.
+
+    Ownership is proven only when the manifest relationship and the
+    checkout's own Git identity are coherent — a matching origin and HEAD
+    are evidence of checkout *integrity*, never proof of ownership by
+    themselves. A destination that already exists (including a dangling
+    symlink) with no manifest record at all is exactly as unproven as one
+    the manifest cannot corroborate; both produce the same
+    `external-ownership` finding, so a coincidentally matching checkout is
+    never silently adopted.
+
+    Returns (proven_repos: {repo_key: {"source", "commit"}},
+             proven_skills: {name: repo_key},
+             findings: [(subject, detail), ...]). A finding here always
+    means "the installer cannot prove ownership of this existing repository
+    or skill" — every one of them is reported as a blocking
+    `external-ownership` finding by evaluate(), including an orphaned
+    repository record no current skill references: nothing here is
+    filtered by current relevance before being surfaced."""
     repositories = (manifest or {}).get("repositories")
     repositories = repositories if isinstance(repositories, dict) else {}
     skills = (manifest or {}).get("skills")
     skills = skills if isinstance(skills, dict) else {}
 
-    repo_status = {}
+    proven_repos, findings = {}, []
     for rkey, rentry in repositories.items():
         if rkey == root_key:
             continue
         if not isinstance(rentry, dict) or not isinstance(rentry.get("source"), str) \
                 or not isinstance(rentry.get("commit"), str):
-            repo_status[rkey] = ("malformed", "repository record is not a "
-                                  "well-formed {source, commit} object")
+            findings.append((rkey, "repository record is not a well-formed "
+                             "{source, commit} object"))
             continue
         try:
             vendor_path = external_vendor_path(vendor_root, rkey)
         except ValueError as e:
-            repo_status[rkey] = ("malformed", str(e))
+            findings.append((rkey, str(e)))
             continue
-        findings = check_external_git(vendor_path, rentry["source"], rentry["commit"])
-        if findings:
-            repo_status[rkey] = ("unprovable", "; ".join(findings))
-        else:
-            repo_status[rkey] = ("proven", None)
+        checkout_findings = check_external_git(vendor_path, rentry["source"], rentry["commit"])
+        if checkout_findings:
+            findings.append((rkey, "; ".join(checkout_findings)))
+            continue
+        proven_repos[rkey] = {"source": rentry["source"], "commit": rentry["commit"]}
 
-    skill_status = {}
+    proven_skills = {}
     for name, entry in skills.items():
         if not isinstance(entry, dict):
-            skill_status[name] = ("malformed", "manifest entry is not an object")
+            findings.append((name, "manifest entry is not an object"))
             continue
         rkey = entry.get("repository")
         if rkey == root_key:
@@ -548,14 +568,33 @@ def classify_prior_external(vendor_root, manifest, root_key):
         if not isinstance(rkey, str) or not isinstance(entry.get("source"), str) \
                 or not isinstance(entry.get("mode"), str) \
                 or not isinstance(entry.get("tree_hash"), str):
-            skill_status[name] = ("malformed", "manifest entry is not well-formed")
+            findings.append((name, "manifest entry is not well-formed"))
             continue
-        if rkey not in repo_status:
-            skill_status[name] = ("malformed", f"references unknown repository {rkey!r}")
+        if rkey not in repositories:
+            findings.append((name, f"references unknown repository {rkey!r}"))
             continue
-        skill_status[name] = repo_status[rkey]
+        if rkey in proven_repos:
+            proven_skills[name] = rkey
+        # else: the repository this skill names already produced its own
+        # finding above; no need to duplicate it as a second, skill-level
+        # finding for the same root cause.
 
-    return repo_status, skill_status
+    # A desired repository with no manifest record at all is unproven
+    # exactly like one the manifest cannot corroborate — but only when it
+    # is not already covered by the walk above, to avoid a duplicate
+    # finding for a repository the manifest does mention.
+    for rkey in sorted(desired_repo_keys):
+        if rkey == root_key or rkey in repositories:
+            continue
+        try:
+            dest = external_vendor_path(vendor_root, rkey)
+        except ValueError:
+            continue
+        if dest.exists() or dest.is_symlink():
+            findings.append((rkey, f"{dest}: exists without a proven prior ownership "
+                             "record; refusing to reuse, replace, or remove it"))
+
+    return proven_repos, proven_skills, findings
 
 
 # --- vendor git checkout -------------------------------------------------
@@ -575,8 +614,19 @@ def vendor_pin_matches(vendor, adoption):
 
 def check_git(vendor, adoption):
     """Thin adapter over the shared checkout inspection, preserving this
-    checker's own root-vendor diagnostic wording exactly."""
-    inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    checker's own root-vendor diagnostic wording exactly. evaluate() calls
+    check_git_from() directly against an inspection it already has, rather
+    than through here, so a single evaluation never inspects the same
+    checkout twice; this wrapper stays for other callers that only need
+    the findings, each inspecting fresh."""
+    return check_git_from(git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"]),
+                          adoption)
+
+
+def check_git_from(inspected, adoption):
+    """The root-vendor diagnostic findings derived from an already-computed
+    checkout inspection — the one diagnostic-formatting implementation
+    check_git() and evaluate() both use."""
     if not inspected["exists"]:
         return ["vendor tree is not a git checkout (.git missing)"]
 
@@ -684,23 +734,30 @@ def verify_materialized_skills(skills_root, manifest):
 def compute_external_state(adoption, manifest, source_root, vendor_root, skills_root):
     """Everything evaluate() needs to reconcile external state: the resolved
     skill-dependency installation closure, discovered requirements, deduped
-    repository/skill requirements (with blocking conflict findings), prior
-    non-root manifest classification, and the unified add/remove/unchanged/
-    collision sets across root and external names together."""
+    repository/skill requirements (with blocking conflict findings), the
+    existing-ownership assessment, and the unified add/remove/unchanged/
+    collision sets across root and external names together.
+
+    The desired inventory (what the consumer's adoption intent, dependency
+    closure, and validated external declarations actually name) and the
+    ownership assessment (what existing generated content the installer can
+    prove it owns) are computed independently. A name whose prior ownership
+    cannot be proven is never removed from the desired inventory — its
+    ownership_findings entry is a blocking finding, which stops the whole
+    transaction before any reuse, replacement, or removal is attempted; it
+    is not achieved by silently narrowing what was declared."""
     root_key_ = repo_key(adoption["repo"])
     closure = resolve_installation_closure(adoption["skills"], source_root)
     requirements = discover_external_requirements(closure, source_root)
     ext_repos, repo_conflicts = dedupe_external_repos(requirements)
     ext_skills, skill_conflicts = dedupe_external_skills(requirements)
 
-    repo_status, skill_status = classify_prior_external(vendor_root, manifest, root_key_)
+    proven_repos, proven_skills, ownership_findings = assess_external_ownership(
+        vendor_root, manifest, root_key_, set(ext_repos))
 
     desired = {name: root_key_ for name in closure if name not in ext_skills}
     for name, info in ext_skills.items():
         desired[name] = info["repo_key"]
-    for name, (status, _) in skill_status.items():
-        if status in ("unprovable", "malformed"):
-            desired.pop(name, None)
 
     manifest_skills = (manifest or {}).get("skills")
     manifest_skills = manifest_skills if isinstance(manifest_skills, dict) else {}
@@ -716,7 +773,7 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
             continue
         if rk == root_key_:
             owned_for_categorize[name] = root_key_
-        elif skill_status.get(name, (None, None))[0] == "proven":
+        elif proven_skills.get(name) == rk:
             owned_for_categorize[name] = rk
 
     added, removed, unchanged, collision = categorize_names(
@@ -743,29 +800,17 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
         n for n, k in owned_for_categorize.items() if k != root_key_
     }
 
-    unresolved = {name for name, (s, _) in skill_status.items() if s == "unprovable"}
-    malformed = {name for name, (s, _) in skill_status.items() if s == "malformed"}
-
-    seen_repos = {info.get("repository") for info in manifest_skills.values()
-                  if isinstance(info, dict)}
-    orphan_unprovable_repos = {k for k, (s, _) in repo_status.items()
-                               if s == "unprovable" and k not in seen_repos}
-    orphan_malformed_repos = {k for k, (s, _) in repo_status.items()
-                              if s == "malformed" and k not in seen_repos}
-
     return {
         "root_key": root_key_,
         "closure": closure,
         "requirements": requirements,
         "ext_repos": ext_repos, "repo_conflicts": repo_conflicts,
         "ext_skills": ext_skills, "skill_conflicts": skill_conflicts,
-        "repo_status": repo_status, "skill_status": skill_status,
+        "proven_repos": proven_repos, "proven_skills": proven_skills,
+        "ownership_findings": ownership_findings,
         "added": added, "removed": removed, "unchanged": unchanged, "collision": collision,
         "stale": stale,
         "root_names": root_names, "ext_names": ext_names,
-        "unresolved": unresolved, "malformed": malformed,
-        "orphan_unprovable_repos": orphan_unprovable_repos,
-        "orphan_malformed_repos": orphan_malformed_repos,
     }
 
 
@@ -853,26 +898,32 @@ def check_client_skills(skills_root, client_skills_root, client_name):
     return findings
 
 
-CLAUDE_IMPORT = "@AGENTS.md"
+# A client's required-first-line document is a plain fact, not behavior:
+# every client that has one is governed by the same generic assessment,
+# staging, and application operations below. A client with no such
+# requirement is simply absent from this registry.
+CLIENT_GOVERNANCE_DOCUMENTS = {
+    "claude": {"path": "CLAUDE.md", "required_first_line": "@AGENTS.md"},
+}
 
 
-def assess_claude_governance(consumer_root):
-    """The one read-only assessment of root CLAUDE.md's required
-    "@AGENTS.md" import, shared by this checker's own findings and
-    install.py's staging. Distinguishes:
+def assess_first_line_document(path, required_first_line):
+    """The one read-only assessment of a document that must carry
+    `required_first_line` as its exact first line — generic across every
+    client with this kind of requirement, shared by this checker's own
+    findings and install.py's staging. Distinguishes:
 
-      "correct"         -- the import is already the exact first line
-      "missing"         -- CLAUDE.md does not exist
-      "needs-insertion" -- CLAUDE.md exists, lacks the import anywhere;
+      "correct"         -- the required line is already the exact first line
+      "missing"         -- the document does not exist
+      "needs-insertion" -- the document exists, lacks the line anywhere;
                             safe to prepend
-      "unsafe"          -- a symlink, a non-regular file, or the import
+      "unsafe"          -- a symlink, a non-regular file, or the line
                             present but not as the first line (ambiguous;
                             never guessed or repaired)
 
     Returns {"state", "detail", "existing_text"} — "detail" is the
-    diagnostic for "unsafe", else None; "existing_text" is CLAUDE.md's
+    diagnostic for "unsafe", else None; "existing_text" is the document's
     current content for "needs-insertion", else None."""
-    path = consumer_root / "CLAUDE.md"
     if path.is_symlink():
         return {"state": "unsafe", "detail": f"{path}: is a symlink", "existing_text": None}
     if not path.exists():
@@ -882,36 +933,34 @@ def assess_claude_governance(consumer_root):
                "detail": f"{path}: exists but is not a regular file", "existing_text": None}
     text = path.read_text()
     lines = text.split("\n")
-    if lines[0] == CLAUDE_IMPORT:
+    if lines[0] == required_first_line:
         return {"state": "correct", "detail": None, "existing_text": None}
-    if CLAUDE_IMPORT in lines[1:]:
+    if required_first_line in lines[1:]:
         return {"state": "unsafe",
-               "detail": f"{path}: contains {CLAUDE_IMPORT!r} but not as the first "
-                         "line; refusing to create a duplicate import",
+               "detail": f"{path}: contains {required_first_line!r} but not as the "
+                         "first line; refusing to create a duplicate import",
                "existing_text": None}
     return {"state": "needs-insertion", "detail": None, "existing_text": text}
 
 
-def check_claude_governance(consumer_root):
-    """Read-only counterpart of install.py's Claude governance staging:
-    root CLAUDE.md must import "@AGENTS.md" as its exact first line."""
-    assessment = assess_claude_governance(consumer_root)
-    state = assessment["state"]
-    if state == "correct":
-        return []
-    if state == "unsafe":
-        return [("client-exposure", "CLAUDE.md", assessment["detail"])]
-    path = consumer_root / "CLAUDE.md"
-    if state == "missing":
-        return [("client-exposure", "CLAUDE.md", f"{path}: missing @AGENTS.md import")]
-    # "needs-insertion"
-    return [("client-exposure", "CLAUDE.md",
-             f"{path}: first line is not the required '@AGENTS.md' import")]
-
-
-CLIENT_GOVERNANCE_CHECKS = {
-    "claude": check_claude_governance,
-}
+def first_line_document_findings(path, required_first_line, assessment):
+    """Findings for a required-first-line document assessment — generic
+    across every client with this kind of requirement."""
+    match assessment["state"]:
+        case "correct":
+            return []
+        case "unsafe":
+            return [("client-exposure", path.name, assessment["detail"])]
+        case "missing":
+            return [("client-exposure", path.name,
+                     f"{path}: missing {required_first_line!r} import")]
+        case "needs-insertion":
+            return [("client-exposure", path.name,
+                     f"{path}: first line is not the required "
+                     f"{required_first_line!r} import")]
+        case _:
+            raise AssertionError(f"unexpected document-assessment state: "
+                                 f"{assessment['state']!r}")
 
 
 # --- top-level evaluation -------------------------------------------------
@@ -988,8 +1037,12 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
         result["findings"] = sorted(findings, key=lambda f: (f["category"], f["subject"]))
         return result
 
-    result["vendor_pin_matches"] = vendor_pin_matches(vendor, adoption)
-    for detail in check_git(vendor, adoption):
+    # Inspected once: vendor_pin_matches and check_git's findings both come
+    # from this single observation rather than each re-inspecting the same
+    # checkout.
+    vendor_inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    result["vendor_pin_matches"] = vendor_inspected["exists"] and vendor_inspected["head_matches"]
+    for detail in check_git_from(vendor_inspected, adoption):
         findings.append(make_finding("vendor", "vendor", detail, "damage"))
 
     effective_source = source_root or vendor
@@ -1029,43 +1082,27 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
             "stale", name,
             f"external declaration for {name!r} no longer matches installed state",
             "damage"))
-    for c in state["repo_conflicts"]:
-        findings.append(make_finding("collision", "repository", c, "blocking"))
-    for c in state["skill_conflicts"]:
-        findings.append(make_finding("collision", "skill", c, "blocking"))
+    for subject, conflicts in (("repository", state["repo_conflicts"]),
+                              ("skill", state["skill_conflicts"])):
+        for c in conflicts:
+            findings.append(make_finding("collision", subject, c, "blocking"))
     for name in missing_skill_sources(state["closure"], effective_source):
         findings.append(make_finding("missing-source", name,
                                       f"declared skill has no source: {name}", "blocking"))
-    for name in sorted(state["unresolved"]):
-        findings.append(make_finding(
-            "unresolved-external", name,
-            f"unresolved external state for {name!r}: {state['skill_status'][name][1]}",
-            "blocking"))
-    for name in sorted(state["malformed"]):
-        findings.append(make_finding(
-            "malformed-external", name,
-            f"malformed external manifest state for {name!r}: {state['skill_status'][name][1]}",
-            "blocking"))
-    for rkey in sorted(state["orphan_unprovable_repos"]):
-        findings.append(make_finding(
-            "unresolved-external", rkey,
-            f"unresolved external state for repository {rkey!r}: {state['repo_status'][rkey][1]}",
-            "blocking"))
-    for rkey in sorted(state["orphan_malformed_repos"]):
-        findings.append(make_finding(
-            "malformed-external", rkey,
-            f"malformed external manifest state for repository {rkey!r}: "
-            f"{state['repo_status'][rkey][1]}",
-            "blocking"))
+    for subject, detail in state["ownership_findings"]:
+        findings.append(make_finding("external-ownership", subject, detail, "blocking"))
 
     for client_name in clients:
         client_skills_root = root.joinpath(*CLIENT_SKILLS_ROOT[client_name])
         for category, subject, detail in check_client_skills(
                 skills_root, client_skills_root, client_name):
             findings.append(make_finding(category, subject, detail, "damage"))
-        governance_check = CLIENT_GOVERNANCE_CHECKS.get(client_name)
-        if governance_check:
-            for category, subject, detail in governance_check(root):
+        doc = CLIENT_GOVERNANCE_DOCUMENTS.get(client_name)
+        if doc is not None:
+            doc_path = root / doc["path"]
+            assessment = assess_first_line_document(doc_path, doc["required_first_line"])
+            for category, subject, detail in first_line_document_findings(
+                    doc_path, doc["required_first_line"], assessment):
                 findings.append(make_finding(category, subject, detail, "damage"))
 
     provenance = {}
@@ -1090,8 +1127,7 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
         "provenance": provenance,
         "external_repos": state["ext_repos"],
         "external_requirements": state["requirements"],
-        "proven_external_repos": sorted(
-            k for k, (status, _) in state["repo_status"].items() if status == "proven"),
+        "proven_external_repos": sorted(state["proven_repos"]),
         "added": sorted(state["added"]), "removed": sorted(state["removed"]),
         "unchanged": sorted(state["unchanged"]), "collision": sorted(state["collision"]),
         "stale": sorted(state["stale"]),

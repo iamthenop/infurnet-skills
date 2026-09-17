@@ -134,7 +134,7 @@ def evaluate_text(text, inventory):
                                         "immediately under the applicability comment"})
             continue
         for _, label, value in table["rows"]:
-            if UNRESOLVED_MARK in value:
+            if UNRESOLVED_MARK in value or not value.strip():
                 unresolved.append({"section": section["name"], "binding": label})
             else:
                 resolved.append({"section": section["name"], "binding": label, "value": value})

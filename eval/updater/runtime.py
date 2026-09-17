@@ -1372,11 +1372,15 @@ def test_verify_fails_on_binding_failure(results, workdir):
     base = workdir / "verify-binding-fail"
     upstream, sha, consumer = full_install(base, ["alpha"])
     write_project_md(consumer, [
-        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget size", "*not yet defined*")]},
+        {"name": "Widgets", "applies_to": "alpha",
+         "rows": [("Widget size", "*not yet defined*"), ("Widget color", "")]},
     ])
 
     code, out = run_install(consumer, ["--verify"])
     results.check("verify fails when an applicable binding is unresolved", code != 0, out)
+    results.check(
+        "verify fails when an applicable binding is merely an empty cell (RC8.3)",
+        "Widget color" in out, out)
 
 
 def test_verify_client_checks_without_mutating(results, workdir):
@@ -1532,13 +1536,17 @@ def test_binding_prompt_eof_stops_without_mutation(results, workdir):
 
 
 def test_check_bindings_applicability_and_unresolved(results, workdir):
+    """RC8.3: an empty or whitespace-only binding cell must be reported
+    unresolved exactly like the *not yet defined* marker — a blank cell is
+    not a decision, and neither is a cell containing only whitespace."""
     consumer = workdir / "check-bindings-applicability"
     write_project_md(consumer, [
         {"name": "Unannotated", "rows": [("Foo", "*not yet defined*")]},
         {"name": "Not applicable here", "applies_to": "other-skill",
          "rows": [("Bar", "*not yet defined*")]},
         {"name": "Applicable", "applies_to": "alpha",
-         "rows": [("Baz", "*not yet defined*"), ("Qux", "already-set")]},
+         "rows": [("Baz", "*not yet defined*"), ("Qux", "already-set"),
+                  ("Empty", ""), ("Whitespace", "   ")]},
     ])
     write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "Fixture.\n")
 
@@ -1557,6 +1565,16 @@ def test_check_bindings_applicability_and_unresolved(results, workdir):
         "check-bindings — already-defined binding reported resolved",
         any(r["section"] == "Applicable" and r["binding"] == "Qux" and r["value"] == "already-set"
             for r in result["resolved"]),
+        json.dumps(result))
+    results.check(
+        "check-bindings — empty table cell reported unresolved",
+        any(u["section"] == "Applicable" and u["binding"] == "Empty"
+            for u in result["unresolved"]),
+        json.dumps(result))
+    results.check(
+        "check-bindings — whitespace-only table cell reported unresolved",
+        any(u["section"] == "Applicable" and u["binding"] == "Whitespace"
+            for u in result["unresolved"]),
         json.dumps(result))
     results.check("check-bindings — exits non-zero when an applicable binding is unresolved",
                   code != 0, "")
@@ -1585,6 +1603,53 @@ def test_check_bindings_target_inventory_override(results, workdir):
     results.check(
         "check-bindings --skill — evaluates a target inventory before materialization",
         "Applicable" in result["applicable_sections"], json.dumps(result))
+
+
+def test_empty_and_whitespace_bindings_enter_resolution_flow(results, workdir):
+    """RC8.3: an empty or whitespace-only PROJECT.md binding cell must be
+    treated exactly like the *not yet defined* marker by a mutating
+    install run — with no interactive input and no --bindings supply, it
+    stops before any mutation rather than treating blank as already
+    decided."""
+    for label, cell_value in (("empty", ""), ("whitespace-only", "   ")):
+        base = workdir / f"binding-{label.replace(' ', '-')}-stop"
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        write_project_md(consumer, [
+            {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", cell_value)]},
+        ])
+
+        code, out = run_install(consumer, ["--force"])
+        results.check(
+            f"{label} binding cell — stops before any mutation, same as the marker",
+            code != 0 and not (consumer / ".agents" / "skills").exists(), out)
+
+
+def test_bindings_whitespace_supply_does_not_resolve(results, workdir):
+    """RC8.3: a whitespace-only value, whether supplied via --bindings or
+    typed interactively, must not resolve a binding — it remains
+    unresolved exactly as if nothing had been supplied at all."""
+    base = workdir / "bindings-whitespace-supply"
+    upstream, sha = make_upstream(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["alpha"])
+    write_project_md(consumer, [
+        {"name": "Widgets", "applies_to": "alpha", "rows": [("Widget", "*not yet defined*")]},
+    ])
+    bindings_file = base / "bindings.yml"
+    write(bindings_file, 'bindings:\n  "Widgets":\n    "Widget": "   "\n')
+
+    code, out = run_install(consumer, ["--bindings", str(bindings_file), "--force"])
+    results.check(
+        "whitespace-only --bindings value — does not resolve the binding; "
+        "stops before any mutation",
+        code != 0 and not (consumer / ".agents" / "skills").exists(), out)
+
+    code2, out2 = run_install(consumer, [], input_text=answers("   ", "y"))
+    results.check(
+        "whitespace-only interactive input — does not resolve the binding either",
+        code2 != 0 and "Widget" in out2, out2)
 
 
 def test_bindings_file_valid_fills_unresolved(results, workdir):
@@ -2048,6 +2113,10 @@ def test_update_requires_explicit_target_no_latest_selection(results, workdir):
 
 
 def test_update_changes_only_commit_and_release(results, workdir):
+    """Also covers RC8.1's root-vendor disclosure for --update: the plan
+    must show the root repository moving to the target revision as a
+    replacement, distinctly from the Install/update: adoption.yml summary
+    that already reports the same commit change."""
     base = workdir / "update-fields-only"
     upstream, sha, consumer = full_install(base, ["alpha"])
 
@@ -2058,6 +2127,9 @@ def test_update_changes_only_commit_and_release(results, workdir):
 
     code, out = run_install(consumer, ["--update", "--target-version", new_sha, "--force"])
     results.check("--update to a new commit — exits zero", code == 0, out)
+    results.check(
+        "--update — plan discloses the root-vendor replacement for the target revision",
+        f"Root repository: {upstream.as_posix()} @ {new_sha[:12]} (replace)" in out, out)
     after_adoption = (consumer / ".agents" / "adoption.yml").read_text()
     results.check("--update — source: line unchanged",
                   f"source: {upstream.as_posix()}" in after_adoption, after_adoption)
@@ -3314,6 +3386,157 @@ def test_external_vendor_destination_drift_between_planning_and_execution_blocks
         dest.is_symlink() and os.readlink(str(dest)) == str(real_target), "")
 
 
+def tree_snapshot(path):
+    """A content fingerprint of whatever is at `path`: absent, a symlink
+    (by its target, never followed), a single file (by its bytes), or a
+    directory (by every entry's relative path paired with the same
+    file/symlink fingerprint). A directory listing alone would miss a file
+    whose content changed without any entry appearing or disappearing —
+    exactly the shape of a root-vendor HEAD or origin change."""
+    if path.is_symlink():
+        return ("symlink", os.readlink(path))
+    if not path.exists():
+        return None
+    if path.is_file():
+        return ("file", path.read_bytes())
+    entries = {}
+    for p in sorted(path.rglob("*")):
+        rel = str(p.relative_to(path))
+        if p.is_symlink():
+            entries[rel] = ("symlink", os.readlink(p))
+        elif p.is_file():
+            entries[rel] = ("file", p.read_bytes())
+    return ("dir", entries)
+
+
+def test_root_vendor_drift_between_confirmation_and_execution_blocks(results, workdir):
+    """RC8.2: the root vendor's plan-time state — presence, HEAD, origin,
+    cleanliness, and detached-HEAD status — must still match once
+    execution resumes after confirmation. A checkout that drifts while the
+    prompt is open — a planned reuse that becomes dirty or moves to a
+    different HEAD or origin, a planned acquisition whose previously
+    absent destination becomes occupied, or a planned replacement whose
+    checkout changes again — must stop the run before any durable
+    mutation, rather than silently reusing, acquiring, or replacing
+    whatever is now on disk. Injection happens inside a mocked confirm(),
+    so the real post-confirmation mutate()/reconcile() path executes
+    exactly as production code would run it. An unchanged root vendor is
+    also proven to install successfully, so the guard is not a false
+    positive on the ordinary path."""
+    module = load_install_module()
+
+    def vendor_path(consumer):
+        return consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+
+    def reuse_setup(base):
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        code0, out0 = run_install(consumer, ["--force", "--client", "claude"])
+        assert code0 == 0, out0
+        write_adoption(consumer, upstream, sha, ["alpha", "beta"])  # unrelated pending change
+        return consumer
+
+    def acquire_setup(base):
+        upstream, sha = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha, ["alpha"])
+        return consumer
+
+    def replace_setup(base):
+        upstream, sha1 = make_upstream(base)
+        consumer = base / "consumer"
+        write_adoption(consumer, upstream, sha1, ["alpha"])
+        code0, out0 = run_install(consumer, ["--force", "--client", "claude"])
+        assert code0 == 0, out0
+        write(upstream / "skills" / "delta" / "SKILL.md", FIXTURE_SKILL.format(name="delta"))
+        run_git(["add", "-A"], upstream)
+        run_git(["commit", "-q", "-m", "add delta"], upstream)
+        sha2 = run_git(["rev-parse", "HEAD"], upstream)
+        write_adoption_file(consumer, upstream, sha2, ["alpha"])
+        return consumer
+
+    def dirty_injection(consumer):
+        write(vendor_path(consumer) / "stray-uncommitted.txt", "dirty\n")
+
+    def head_injection(consumer):
+        run_git(["commit", "--allow-empty", "-q", "-m", "drift"], vendor_path(consumer))
+
+    def origin_injection(consumer):
+        run_git(["remote", "set-url", "origin", "https://example.invalid/elsewhere.git"],
+               vendor_path(consumer))
+
+    def occupied_injection(consumer):
+        make_git_repo(vendor_path(consumer))
+
+    def changed_again_injection(consumer):
+        write(vendor_path(consumer) / "changed-again.txt", "still drifting\n")
+
+    def no_injection(consumer):
+        pass
+
+    CASES = [
+        ("reuse-becomes-dirty", reuse_setup, dirty_injection, True),
+        ("reuse-head-changes", reuse_setup, head_injection, True),
+        ("reuse-origin-changes", reuse_setup, origin_injection, True),
+        ("acquisition-destination-occupied", acquire_setup, occupied_injection, True),
+        ("replacement-changes-again", replace_setup, changed_again_injection, True),
+        ("unchanged-vendor-proceeds", reuse_setup, no_injection, False),
+    ]
+
+    for label, setup, inject, expect_stop in CASES:
+        base = workdir / f"root-vendor-drift-{label}"
+        consumer = setup(base)
+        consumer_root = consumer.resolve()
+
+        durable_paths = [
+            consumer / ".agents" / "infurnet-skills.manifest.json",
+            consumer / ".agents" / "adoption.yml",
+            consumer / ".agents" / "skills",
+            consumer / "AGENTS.md",
+            consumer / "PROJECT.md",
+            consumer / ".claude" / "skills",
+            consumer / "CLAUDE.md",
+            consumer / ".git" / "info" / "exclude",
+        ]
+        pre = [tree_snapshot(p) for p in durable_paths]
+
+        txn, cache = {"dir": None}, {}
+        classification = module.classify(consumer_root, ["claude"], txn, cache)
+
+        injected_vendor = {}
+
+        def confirm_after_injecting(force, _inject=inject, _consumer=consumer):
+            _inject(_consumer)
+            injected_vendor["snapshot"] = tree_snapshot(vendor_path(_consumer))
+            return True
+
+        with mock.patch.object(module, "confirm", side_effect=confirm_after_injecting):
+            if expect_stop:
+                stopped = stopped_with_system_exit(lambda: module.mutate(
+                    _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+                    classification["adoption"], classification["result"], mode="default",
+                    txn=txn, cache=cache))
+                results.check(
+                    f"root-vendor drift ({label}) — execution stops before any "
+                    "durable mutation", stopped, "")
+                results.check(
+                    f"root-vendor drift ({label}) — durable consumer state untouched",
+                    [tree_snapshot(p) for p in durable_paths] == pre, "")
+                results.check(
+                    f"root-vendor drift ({label}) — vendor left exactly as the "
+                    "injection made it, never further touched",
+                    tree_snapshot(vendor_path(consumer)) == injected_vendor["snapshot"], "")
+            else:
+                code = module.mutate(
+                    _StubArgs(bindings=None, force=True), consumer_root, ["claude"],
+                    classification["adoption"], classification["result"], mode="default",
+                    txn=txn, cache=cache)
+                results.check(
+                    f"root-vendor drift ({label}) — unchanged plan installs successfully",
+                    code == 0, code)
+
+
 # --- RC6.4: damage independent of intent ----------------------------------
 
 
@@ -3644,13 +3867,24 @@ def test_root_vendor_backup_restored_on_promotion_failure(results, workdir):
 def test_action_plan_discloses_external_acquisition_and_matches_execution(results, workdir):
     """The pre-confirmation plan must disclose a genuinely new external
     repository acquisition, and what actually gets acquired/materialized
-    must match exactly what was displayed."""
+    must match exactly what was displayed. The same v1 install and the
+    later widget-only addition also cover RC8.1's root-vendor disclosure:
+    the root repository's own planned action must be shown — acquire on
+    first install, then reuse once installed — distinctly from the
+    "Install/update:" heading, and reuse must never be misreported as a
+    replacement while an unrelated external repository is acquired
+    alongside it."""
     base = workdir / "plan-external-acquisition"
     upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
     consumer = base / "consumer"
     write_adoption(consumer, upstream, sha, ["alpha"])
     code0, out0 = run_install(consumer, ["--force"], env=env)
     results.check("plan-acquisition fixture — v1 install exits zero", code0 == 0, out0)
+    results.check(
+        "plan-acquisition — initial install discloses root-vendor acquisition",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (acquire)" in out0, out0)
+    root_vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    head_after_v1 = run_git(["rev-parse", "HEAD"], root_vendor)
 
     write_adoption(consumer, upstream, sha, ["alpha", "widget"])
     code, out = run_install(consumer, [], input_text="n\n", env=env)
@@ -3661,21 +3895,33 @@ def test_action_plan_discloses_external_acquisition_and_matches_execution(result
         "plan-acquisition — plan discloses the external repository acquisition before "
         "confirmation",
         "External repositories:" in out and "acquire example/ext-upstream" in out, out)
+    results.check(
+        "plan-acquisition — root vendor is disclosed as reused, never a misleading "
+        "replacement, while the unrelated external repository is acquired",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (reuse)" in out, out)
 
     code2, out2 = run_install(consumer, ["--force"], env=env)
     results.check("plan-acquisition — confirmed run exits zero", code2 == 0, out2)
     results.check(
         "plan-acquisition — widget actually materialized, matching the displayed plan",
         (consumer / ".agents" / "skills" / "widget").is_dir(), out2)
+    results.check(
+        "plan-acquisition — confirmed run still discloses root-vendor reuse",
+        f"Root repository: {upstream.as_posix()} @ {sha[:12]} (reuse)" in out2, out2)
+    results.check(
+        "plan-acquisition — the disclosed root-vendor reuse actually left the "
+        "checkout untouched",
+        run_git(["rev-parse", "HEAD"], root_vendor) == head_after_v1, "")
 
 
 def test_action_plan_discloses_complete_mutation_set_and_matches_execution(results, workdir):
-    """The pre-confirmation plan must disclose root vendor/skill refresh,
-    external repository removal, client exposure, client governance, git
-    exclude, and a binding write — and what actually happens must match
-    exactly what was displayed. (Plan-vs-execution disagreement from an
+    """The pre-confirmation plan must disclose the root-vendor replacement
+    caused by a consumer-authored pin change, root skill refresh, external
+    repository removal, client exposure, client governance, git exclude,
+    and a binding write — and what actually happens must match exactly
+    what was displayed. (Plan-vs-execution disagreement from an
     intervening filesystem change is covered separately by the
-    destination-drift test, which must stop instead of expanding the
+    destination-drift tests, which must stop instead of expanding the
     plan.)"""
     base = workdir / "plan-complete-mutation-set"
     upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
@@ -3706,6 +3952,10 @@ def test_action_plan_discloses_complete_mutation_set_and_matches_execution(resul
         "v2." not in (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text(), out)
     results.check("plan-complete — plan discloses skill refresh (alpha)",
                   "+ alpha" in out, out)
+    results.check(
+        "plan-complete — plan discloses the root-vendor replacement caused by the "
+        "consumer-authored pin change, distinctly from the Install/update: heading",
+        f"Root repository: {upstream.as_posix()} @ {sha2[:12]} (replace)" in out, out)
     results.check("plan-complete — plan discloses external removal (widget's repository)",
                   "External repositories:" in out and "remove example/ext-upstream" in out, out)
     results.check("plan-complete — plan discloses client exposure",
@@ -3879,6 +4129,8 @@ def main():
         test_check_bindings_applicability_and_unresolved(results, workdir)
         test_check_bindings_malformed_section(results, workdir)
         test_check_bindings_target_inventory_override(results, workdir)
+        test_empty_and_whitespace_bindings_enter_resolution_flow(results, workdir)
+        test_bindings_whitespace_supply_does_not_resolve(results, workdir)
 
         test_bindings_file_valid_fills_unresolved(results, workdir)
         test_bindings_file_rejects_malformed_content(results, workdir)
@@ -3943,6 +4195,7 @@ def main():
             results, workdir)
         test_external_vendor_destination_drift_between_planning_and_execution_blocks(
             results, workdir)
+        test_root_vendor_drift_between_confirmation_and_execution_blocks(results, workdir)
 
         test_damage_independent_of_intent_dirty_vendor_blocks_reconcile(results, workdir)
         test_damage_independent_of_intent_hash_mismatch_blocks_reconcile(results, workdir)

@@ -339,8 +339,10 @@ def parse_bindings_file(path):
 
     Fails closed on invalid YAML, a duplicate key at any level (section or
     binding label), an unexpected top-level key, wrong nesting, or any
-    value that is not a plain string. An empty value does not stage a
-    binding decision."""
+    value that is not a plain string. An empty or whitespace-only value
+    does not stage a binding decision — check_bindings.evaluate_text()
+    treats either the same way, and this must not compete with that
+    classification."""
     try:
         data = check_skills.load_yaml_no_duplicates(path.read_text())
     except yaml.YAMLError as e:
@@ -367,7 +369,7 @@ def parse_bindings_file(path):
             if not isinstance(value, str):
                 sys.exit(f"{path}: [{section}] {label!r} must be a scalar string "
                          f"value, got {value!r}")
-            if value:
+            if value.strip():
                 result[(section, label)] = value
 
     return result
@@ -886,12 +888,20 @@ def generate_manifest(adoption, root_key_, materialized, provenance, ext_repos_f
 
 
 def reconcile(consumer_root, adoption, result, to_materialize, to_remove, clients,
-             temp_registry, client_plans, txn, cache):
+             temp_registry, client_plans, txn, cache, root_vendor_plan):
     """Mutates generated state toward to_materialize/to_remove and returns
     (candidate_manifest, vendor_backup). Never writes the canonical
     manifest — the caller verifies and promotes it, and — because
     vendor_backup is kept rather than deleted here when the root vendor
     was swapped — restores it if that verification fails.
+
+    root_vendor_plan is the "root_vendor" entry build_action_plan()
+    already put on the approved plan (see root_vendor_state()) — mutate()
+    already compared one fresh reading of the root vendor against it right
+    after confirmation; this repeats that same comparison once more,
+    immediately before the destructive replacement below, to close the gap
+    everything reconcile() does beforehand (external-repository
+    preparation in particular) could otherwise leave open.
 
     A root revision needing acquisition was already staged into this run's
     own transaction directory during planning (see preview_result()); this
@@ -902,7 +912,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
     skills_root = agents_root / "skills"
     vendor = safe_vendor_path(vendor_root, root_key_)
 
-    vendor_matches = not check_skills.check_git(vendor, adoption)
+    vendor_matches = root_vendor_state(vendor, adoption)["action"] == "reuse"
     if vendor_matches:
         effective_vendor = vendor
     else:
@@ -927,8 +937,15 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
         try:
             staged.rename(promotion_ready)
             # Revalidated immediately before this destructive replacement,
-            # not just once during earlier planning.
+            # not just once during earlier planning: path/ownership safety
+            # again, and the same root-vendor drift comparison mutate()
+            # already made once after confirmation.
             vendor = safe_vendor_path(vendor_root, root_key_)
+            fresh_fingerprint = root_vendor_state(vendor, adoption)["fingerprint"]
+            if fresh_fingerprint != root_vendor_plan["fingerprint"]:
+                shutil.rmtree(promotion_ready, ignore_errors=True)
+                sys.exit(f"{vendor}: root-vendor checkout changed since the approved "
+                         "plan was built; refusing to replace it")
             vendor_backup = atomic_replace_dir(promotion_ready, vendor, keep_backup=True)
         except Exception:
             if promotion_ready.exists():
@@ -1129,6 +1146,27 @@ def collect_blocking(adoption, result):
     return blocking
 
 
+def root_vendor_state(vendor, adoption):
+    """The root-vendor observations that decide reuse/acquire/replace, and
+    that must not silently change between planning and execution:
+    presence, HEAD, origin, cleanliness, and detached-HEAD status.
+    build_action_plan() captures this once, when the plan is built;
+    mutate() and reconcile() each recompute it later — after confirmation,
+    and again immediately before the destructive replacement itself — and
+    stop rather than proceed when their fresh reading disagrees with the
+    captured one."""
+    inspected = git_ops.inspect_checkout(vendor, adoption["repo"], adoption["pin"])
+    if not inspected["exists"]:
+        action = "acquire"
+    elif check_skills.check_git_from(inspected, adoption):
+        action = "replace"
+    else:
+        action = "reuse"
+    fingerprint = (inspected["exists"], inspected["head"], inspected["origin"],
+                  inspected["clean"], inspected["detached"])
+    return {"action": action, "fingerprint": fingerprint}
+
+
 def build_action_plan(consumer_root, adoption, result, mode, version_change,
                       to_materialize, to_remove, clients, client_plans,
                       staged, remaining_unresolved):
@@ -1139,18 +1177,22 @@ def build_action_plan(consumer_root, adoption, result, mode, version_change,
     version_change it already had — nothing here is independently
     recomputed for execution.
 
-    The root-vendor reuse/acquire label and each external repository's
-    classify_external_action() call ARE evaluated fresh here as well as
-    again during reconcile()'s own execution — deliberately: both call
-    identical pure functions against the filesystem, so a destination
-    unchanged between planning and execution always agrees, and one that
-    has changed is caught as drift (reconcile() stops) rather than this
-    plan silently being treated as authorization for something else."""
+    root_vendor_state() captures the root vendor's fingerprint and
+    resulting action (reuse, acquire, or replace) once, here; mutate() and
+    reconcile() each compare a fresh reading against this same capture
+    (see root_vendor_state()'s own docstring) rather than trusting a
+    second, independent classification of their own.
+
+    Each external repository's classify_external_action() call is
+    evaluated fresh here as well as again during reconcile()'s own
+    execution — deliberately: both call identical pure functions against
+    the filesystem, so a destination unchanged between planning and
+    execution always agrees, and reconcile()'s own path-safety
+    revalidation catches one that changed."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     vendor_root = consumer_root / ".agents" / "vendor"
     vendor = safe_vendor_path(vendor_root, root_key_)
-    root_vendor_action = "reuse" if not check_skills.check_git(vendor, adoption) else \
-        "acquire-or-replace"
+    root_vendor_state_ = root_vendor_state(vendor, adoption)
 
     ext_names = [n for n in to_materialize if result["provenance"][n]["repo_key"] != root_key_]
     ext_repo_keys_needed = sorted({result["provenance"][n]["repo_key"] for n in ext_names})
@@ -1168,12 +1210,14 @@ def build_action_plan(consumer_root, adoption, result, mode, version_change,
     ext_removed = sorted(proven - kept_repo_keys)
 
     any_generated_change = bool(to_materialize or to_remove or ext_changes or ext_removed
-                                or root_vendor_action == "acquire-or-replace")
+                                or root_vendor_state_["action"] != "reuse")
 
     return {
         "mode": mode,
         "version_change": version_change,
-        "root_vendor": root_vendor_action,
+        "root_vendor": {"repo": adoption["repo"], "commit": adoption["pin"],
+                        "action": root_vendor_state_["action"],
+                        "fingerprint": root_vendor_state_["fingerprint"]},
         "external_vendors": {"changes": ext_changes, "removed": ext_removed},
         "skills": {"materialize": to_materialize, "remove": to_remove},
         "manifest": "promote candidate after verification",
@@ -1185,9 +1229,13 @@ def build_action_plan(consumer_root, adoption, result, mode, version_change,
 
 
 def print_action_summary(plan):
+    root_vendor = plan["root_vendor"]
+    print(f"Root repository: {root_vendor['repo']} @ {root_vendor['commit'][:12]} "
+         f"({root_vendor['action']})")
+
     version_change = plan["version_change"]
     if version_change is not None:
-        print("Download:")
+        print("\nDownload:")
         print(f"  {version_change['current_pin'][:12]} -> "
              f"{version_change['target_commit'][:12]}")
         print("\nInstall/update:")
@@ -1319,6 +1367,23 @@ def mutate(args, consumer_root, clients, adoption, result, mode, txn, cache, ver
         print("\nCancelled — no changes made.")
         return 0
 
+    # Immediately after confirmation and before any durable mutation below
+    # (PROJECT.md, AGENTS.md, adoption.yml, then reconcile()): the root
+    # vendor's state is reread and compared against what build_action_plan()
+    # captured. A checkout that changed while the confirmation prompt was
+    # open — dirtied, moved to a different HEAD or origin, or newly
+    # occupying a destination the plan found absent — invalidates the
+    # approved plan; this never recomputes a new action or silently expands
+    # what was approved. safe_vendor_path() also revalidates path/ownership
+    # safety, regardless of --force (which only ever suppressed the Y/n
+    # prompt above, never this check).
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    vendor_root = consumer_root / ".agents" / "vendor"
+    vendor = safe_vendor_path(vendor_root, root_key_)
+    if root_vendor_state(vendor, adoption)["fingerprint"] != plan["root_vendor"]["fingerprint"]:
+        sys.exit(f"{vendor}: root-vendor checkout changed since the approved plan was "
+                 "built; rerun to review the current state")
+
     if project_needs_write:
         (consumer_root / "PROJECT.md").write_bytes(project_new_bytes)
     if agents_needs_write:
@@ -1338,7 +1403,7 @@ def mutate(args, consumer_root, clients, adoption, result, mode, txn, cache, ver
     try:
         candidate_manifest, vendor_backup = reconcile(
             consumer_root, adoption, result, to_materialize, to_remove, clients,
-            temp_registry, client_plans, txn, cache)
+            temp_registry, client_plans, txn, cache, plan["root_vendor"])
     finally:
         for tmp in temp_registry:
             if tmp.exists():

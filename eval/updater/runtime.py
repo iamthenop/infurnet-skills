@@ -3148,6 +3148,339 @@ def test_check_skills_reports_stale_external_declaration_without_losing_ownershi
         "widget" in result["unchanged"], json.dumps(result))
 
 
+# --- RC6.1: generated-state and staging containment ----------------------
+
+
+def test_external_vendor_path_rejects_unsafe_components(results, workdir):
+    """external_vendor_path() must reject a symlinked intermediate
+    directory, a dangling symlink at the leaf, and a non-directory
+    ancestor — checked component by component before any .resolve()-based
+    containment check, which a symlinked vendor_root could otherwise
+    defeat by having both sides of the comparison follow the same
+    redirect. A genuinely absent destination remains installable."""
+    module = load_install_module()
+    base = workdir / "vendor-path-unsafe-components"
+    vendor_root = base / "vendor"
+    vendor_root.mkdir(parents=True)
+    elsewhere = base / "elsewhere"
+    elsewhere.mkdir()
+
+    os.symlink(elsewhere, vendor_root / "sym-owner", target_is_directory=True)
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "sym-owner/repo")
+        results.check("vendor path — symlinked intermediate directory rejected", False,
+                      "did not raise")
+    except ValueError as e:
+        results.check("vendor path — symlinked intermediate directory rejected",
+                      "is a symlink" in str(e), str(e))
+
+    (vendor_root / "dangle-owner").mkdir()
+    os.symlink(base / "does-not-exist", vendor_root / "dangle-owner" / "repo",
+              target_is_directory=True)
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "dangle-owner/repo")
+        results.check("vendor path — dangling leaf symlink rejected", False, "did not raise")
+    except ValueError as e:
+        results.check("vendor path — dangling leaf symlink rejected",
+                      "is a symlink" in str(e), str(e))
+
+    (vendor_root / "file-owner").write_text("not a directory\n")
+    try:
+        module.check_skills.external_vendor_path(vendor_root, "file-owner/repo")
+        results.check("vendor path — non-directory ancestor rejected", False, "did not raise")
+    except ValueError as e:
+        results.check("vendor path — non-directory ancestor rejected",
+                      "is not a directory" in str(e), str(e))
+
+    try:
+        path = module.check_skills.external_vendor_path(vendor_root, "clean-owner/repo")
+        results.check("vendor path — absent destination remains installable",
+                      not path.exists(), "")
+    except ValueError as e:
+        results.check("vendor path — absent destination remains installable", False, str(e))
+
+
+def test_containment_preflight_blocks_before_classify_can_fetch(results, workdir):
+    """.agents, .agents/vendor, and .agents/skills must each be a real
+    directory or absent — checked once, before classify() (and therefore
+    before any inspection fetch) runs at all."""
+    module = load_install_module()
+    base = workdir / "containment-preflight"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    for boundary in (".agents", ".agents/vendor", ".agents/skills"):
+        tag = boundary.replace("/", "-")
+        target = consumer / boundary
+        elsewhere = base / f"elsewhere-{tag}"
+        elsewhere.mkdir(parents=True, exist_ok=True)
+        backup = base / f"backup-{tag}"
+        shutil.move(str(target), str(backup))
+        os.symlink(elsewhere, target, target_is_directory=True)
+
+        stopped = stopped_with_system_exit(
+            lambda: module.containment_preflight(consumer.resolve()))
+        results.check(f"containment preflight — {boundary} symlink stops before any fetch",
+                      stopped, "")
+
+        target.unlink()
+        shutil.move(str(backup), str(target))
+
+
+def test_check_skills_agents_symlink_blocks_before_any_read(results, workdir):
+    """A symlinked .agents must be reported as a blocking containment
+    finding before adoption.yml or the manifest is even read through it —
+    even when the symlink points at a real copy of .agents that reading
+    through would otherwise "work" against."""
+    base = workdir / "agents-symlink"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    real_agents = consumer / ".agents"
+    elsewhere = base / "elsewhere-agents"
+    shutil.copytree(real_agents, elsewhere)
+    shutil.rmtree(real_agents)
+    os.symlink(elsewhere, real_agents, target_is_directory=True)
+
+    code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+    results.check(
+        "check-skills — symlinked .agents reported as a blocking containment finding",
+        code != 0 and any(f["category"] == "containment" and f["severity"] == "blocking"
+                          for f in (result or {}).get("findings", [])),
+        json.dumps(result) if result else err)
+
+
+def test_check_skills_reports_containment_findings_for_symlinked_boundaries(results, workdir):
+    """evaluate() must report a blocking containment finding — not crash,
+    not silently proceed — when .agents/vendor or .agents/skills is
+    itself a symlink."""
+    base = workdir / "containment-findings"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+
+    for boundary, tag in ((".agents/vendor", "vendor"), (".agents/skills", "skills")):
+        target = consumer / boundary
+        elsewhere = base / f"elsewhere-{tag}"
+        elsewhere.mkdir(parents=True, exist_ok=True)
+        backup = base / f"backup-{tag}"
+        shutil.move(str(target), str(backup))
+        os.symlink(elsewhere, target, target_is_directory=True)
+
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        results.check(
+            f"check-skills — {boundary} symlink reported as a blocking containment finding",
+            code != 0 and any(f["category"] == "containment" and f["severity"] == "blocking"
+                              for f in (result or {}).get("findings", [])),
+            json.dumps(result) if result else err)
+
+        target.unlink()
+        shutil.move(str(backup), str(target))
+
+
+def test_external_vendor_destination_drift_between_planning_and_execution_blocks(
+        results, workdir):
+    """A destination that changes between planning and execution — here,
+    a dropped external repository's vendor path replaced by a symlink
+    after classify() computed the plan but before reconcile() executes
+    it — must stop rather than delete or write through the symlink."""
+    module = load_install_module()
+    base = workdir / "external-dest-drift"
+    upstream, sha, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("dest-drift fixture — install exits zero", code0 == 0, out0)
+
+    write_adoption(consumer, upstream, sha, ["alpha"])  # drop widget -> dropped external repo
+
+    classification = module.classify(consumer.resolve(), [])
+    results.check("dest-drift — classification reconciles",
+                  classification["state"] == "reconcile", classification["state"])
+
+    dest = consumer / ".agents" / "vendor" / "example" / "ext-upstream"
+    real_target = base / "elsewhere-ext"
+    shutil.copytree(ext_upstream, real_target)
+    shutil.rmtree(dest)
+    os.symlink(real_target, dest, target_is_directory=True)
+
+    stopped = stopped_with_system_exit(
+        lambda: module.mutate(_StubArgs(bindings=None, force=True), consumer.resolve(), [],
+                              classification["adoption"], classification["result"],
+                              mode="default"))
+    results.check("dest-drift — execution stops rather than deleting through the symlink",
+                  stopped, "")
+    results.check(
+        "dest-drift — the symlink itself is untouched",
+        dest.is_symlink() and os.readlink(str(dest)) == str(real_target), "")
+
+
+# --- RC6.4: damage independent of intent ----------------------------------
+
+
+def test_damage_independent_of_intent_dirty_vendor_blocks_reconcile(results, workdir):
+    """A dirty previously installed root checkout must classify as damaged
+    even when adoption.yml's declared pin has also changed."""
+    base = workdir / "damage-intent-dirty"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+    write(vendor / "stray-uncommitted.txt", "dirty\n")
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "dirty vendor + changed pin — refuses via the damaged gate, not reconcile",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+    results.check(
+        "dirty vendor + changed pin — vendor left untouched (no swap attempted)",
+        (vendor / "stray-uncommitted.txt").read_text() == "dirty\n", out)
+
+
+def test_damage_independent_of_intent_hash_mismatch_blocks_reconcile(results, workdir):
+    """A materialized root skill's content contradicting its manifest hash
+    must classify as damaged even when adoption.yml's declared pin has
+    also changed — proving the tampered content is never silently
+    laundered into a freshly promoted manifest as new "truth"."""
+    base = workdir / "damage-intent-hash"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    original_manifest = manifest_path.read_text()
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "hash mismatch + changed pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+    results.check(
+        "hash mismatch + changed pin — no promoted manifest laundered the tampered content",
+        manifest_path.read_text() == original_manifest, out)
+
+
+def test_damage_independent_of_intent_malformed_manifest_blocks_reconcile(results, workdir):
+    """A structurally malformed manifest must classify as damaged even
+    when adoption.yml's declared pin has also changed."""
+    base = workdir / "damage-intent-malformed-manifest"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repositories"] = []
+    write(manifest_path, json.dumps(manifest))
+
+    write(upstream / "skills" / "alpha" / "SKILL.md",
+         "---\nname: alpha\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "alpha v2"], upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["alpha"])
+
+    code, out = run_install(consumer, ["--force"])
+    results.check(
+        "malformed manifest + changed pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+
+
+def test_damage_independent_of_intent_external_ownership_blocks_reconcile(results, workdir):
+    """Unproven external ownership must classify as damaged even when the
+    ROOT's declared pin has also changed — an unrelated intent change must
+    not shortcut past it."""
+    base = workdir / "damage-intent-ext-ownership"
+    upstream, sha1, ext_upstream, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha1, ["widget"])
+    code0, out0 = run_install(consumer, ["--force"], env=env)
+    results.check("ext-ownership-damage fixture — install exits zero", code0 == 0, out0)
+
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["repositories"]["example/ext-upstream"]["commit"]
+    write(manifest_path, json.dumps(manifest))
+
+    write(upstream / "skills" / "beta" / "SKILL.md",
+         "---\nname: beta\ndescription: Fixture.\nlicense: MIT\n---\nv2.\n")
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "bump root, unrelated to widget's external identity"],
+           upstream)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write_adoption_file(consumer, upstream, sha2, ["widget"])
+
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check(
+        "unproven external ownership + changed root pin — refuses via the damaged gate",
+        code != 0 and "Damaged managed state" in out and "--repair" in out, out)
+
+
+def test_repair_recovers_from_damage_detected_independent_of_intent(results, workdir):
+    """After damage is detected independent of any intent change,
+    --repair — not default mode — is the path back to a coherent
+    installation."""
+    base = workdir / "damage-intent-repair-recovers"
+    upstream, sha1, consumer = full_install(base, ["alpha"])
+    write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "corrupted\n")
+
+    code1, out1 = run_install(consumer, ["--force"])
+    results.check("repair-recovers — default mode refuses while damaged",
+                  code1 != 0 and "Damaged managed state" in out1, out1)
+
+    code2, out2 = run_install(consumer, ["--repair", "--force"])
+    results.check("repair-recovers — --repair exits zero", code2 == 0, out2)
+    results.check(
+        "repair-recovers — content restored, no longer the corrupted placeholder",
+        (consumer / ".agents" / "skills" / "alpha" / "SKILL.md").read_text() != "corrupted\n",
+        out2)
+
+    code3, out3 = run_install(consumer, ["--verify"])
+    results.check("repair-recovers — verify passes after repair", code3 == 0, out3)
+
+
+# --- RC6.5: malformed nested manifest structure ----------------------------
+
+
+def test_check_skills_malformed_nested_manifest_structures_no_crash(results, workdir):
+    """A syntactically valid JSON manifest whose 'repositories' or 'skills'
+    value — or one of their entries — is not a mapping must never crash
+    evaluate() with an uncaught shape exception; a malformed container
+    produces a specific blocking manifest finding rather than being
+    silently treated as permission to mutate."""
+    base = workdir / "malformed-nested-manifest"
+    upstream, sha, consumer = full_install(base, ["alpha"])
+    manifest_path = consumer / ".agents" / "infurnet-skills.manifest.json"
+    good_manifest = json.loads(manifest_path.read_text())
+
+    cases = [
+        ({"repositories": [], "skills": {}}, "repositories"),
+        ({"repositories": {}, "skills": []}, "skills"),
+        ({"repositories": {"owner/repo": []}, "skills": {}}, None),
+        ({"repositories": {}, "skills": {"example": []}}, None),
+    ]
+    for bad_manifest, malformed_key in cases:
+        write(manifest_path, json.dumps(bad_manifest))
+        code, result, err = run_check_json(CHECK_SKILLS_PY, ["--root", str(consumer)])
+        label = json.dumps(bad_manifest)
+        results.check(f"malformed manifest {label} — no crash, JSON result produced",
+                      result is not None, err)
+        if result is not None:
+            results.check(
+                f"malformed manifest {label} — nonzero exit, findings reported",
+                code != 0 and len(result["findings"]) > 0, json.dumps(result))
+        if malformed_key is not None and result is not None:
+            results.check(
+                f"malformed manifest {label} — blocking manifest-shape finding for "
+                f"{malformed_key!r}",
+                any(f["category"] == "manifest" and f["subject"] == malformed_key
+                   and f["severity"] == "blocking" for f in result["findings"]),
+                json.dumps(result))
+
+    write(manifest_path, json.dumps(good_manifest))
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -3280,6 +3613,22 @@ def main():
         test_check_skills_reports_repository_requirement_conflict(results, workdir)
         test_check_skills_reports_stale_external_declaration_without_losing_ownership(
             results, workdir)
+
+        test_external_vendor_path_rejects_unsafe_components(results, workdir)
+        test_containment_preflight_blocks_before_classify_can_fetch(results, workdir)
+        test_check_skills_agents_symlink_blocks_before_any_read(results, workdir)
+        test_check_skills_reports_containment_findings_for_symlinked_boundaries(
+            results, workdir)
+        test_external_vendor_destination_drift_between_planning_and_execution_blocks(
+            results, workdir)
+
+        test_damage_independent_of_intent_dirty_vendor_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_hash_mismatch_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_malformed_manifest_blocks_reconcile(results, workdir)
+        test_damage_independent_of_intent_external_ownership_blocks_reconcile(results, workdir)
+        test_repair_recovers_from_damage_detected_independent_of_intent(results, workdir)
+
+        test_check_skills_malformed_nested_manifest_structures_no_crash(results, workdir)
 
     if results.failures:
         print(f"\nFAIL — {len(results.failures)} regression(s): "

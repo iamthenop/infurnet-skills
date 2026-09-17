@@ -428,13 +428,45 @@ def valid_repo_key(key):
     return True
 
 
+def unsafe_symlink_detail(consumer_root, target):
+    """None when every path component from consumer_root down to target is
+    a real directory or does not exist at all. Otherwise, the diagnostic
+    for the first unsafe component — a symlink (dangling included) or a
+    non-directory entry standing in for a directory that must be
+    traversed or mutated. A target that does not exist yet is always safe:
+    resolving it away would let a redirected ancestor (e.g. a symlinked
+    vendor root) pass a containment check that compares both sides through
+    the same redirect, so this never calls .resolve()."""
+    relative = target.relative_to(consumer_root)
+    current = consumer_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return f"{current}: is a symlink; refusing to traverse or mutate through it"
+        if current.exists() and not current.is_dir():
+            return f"{current}: exists but is not a directory"
+    return None
+
+
 def external_vendor_path(vendor_root, key):
-    """Resolves a repo_key to its canonical vendor path beneath vendor_root,
-    with containment checked independently of the shape check above."""
+    """Resolves a repo_key to its canonical vendor path beneath vendor_root.
+    Every component from vendor_root down to the leaf is checked for an
+    unsafe symlink or non-directory entry before any .resolve()-based
+    containment check runs — a symlinked vendor_root itself would otherwise
+    let path.resolve() and vendor_root.resolve() both follow the same
+    redirect and pass containment while actually reading or writing outside
+    it entirely."""
     if not valid_repo_key(key):
         raise ValueError(f"malformed repository key: {key!r}")
     owner, repo = key.split("/")
     path = vendor_root / owner / repo
+    current = vendor_root
+    for part in (owner, repo):
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"{current}: is a symlink; refusing to traverse or mutate through it")
+        if current.exists() and not current.is_dir():
+            raise ValueError(f"{current}: exists but is not a directory")
     try:
         path.resolve().relative_to(vendor_root.resolve())
     except ValueError:
@@ -705,12 +737,15 @@ def verify_materialized_skills(skills_root, manifest):
     findings = []
     if not manifest:
         return findings
-    for name, info in manifest.get("skills", {}).items():
+    skills = manifest.get("skills")
+    if not isinstance(skills, dict):
+        return findings  # manifest_shape_findings() already reports this container
+    for name, info in skills.items():
         dest = skills_root / name
         if not dest.is_dir():
             findings.append(("materialization", name, f"materialized skill missing: {name}"))
             continue
-        if tree_hash(dest) != info.get("tree_hash"):
+        if not isinstance(info, dict) or tree_hash(dest) != info.get("tree_hash"):
             findings.append(("hash", name, f"materialized skill content mismatch: {name}"))
     return findings
 
@@ -720,6 +755,23 @@ def verify_materialized_skills(skills_root, manifest):
 
 def make_finding(category, subject, detail, severity):
     return {"category": category, "subject": subject, "detail": detail, "severity": severity}
+
+
+def manifest_shape_findings(manifest):
+    """Blocking findings for a syntactically-valid-JSON manifest whose
+    top-level 'repositories' or 'skills' value, when present, is not
+    itself a mapping. Every downstream reader treats a malformed container
+    as absent (coerced to {}) to keep collecting diagnostics rather than
+    crashing — but that coercion must never be silent permission to mutate:
+    malformed ownership evidence blocks the transaction the same as any
+    other blocking finding, while whichever container (if any) is
+    genuinely well-formed still gets its own specific findings normally."""
+    findings = []
+    for key in ("repositories", "skills"):
+        if key in manifest and not isinstance(manifest[key], dict):
+            findings.append(make_finding("manifest", key,
+                                         f"manifest {key!r} must be an object", "blocking"))
+    return findings
 
 
 def compute_external_state(adoption, manifest, source_root, vendor_root, skills_root):
@@ -761,6 +813,8 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
 
     manifest_skills = (manifest or {}).get("skills")
     manifest_skills = manifest_skills if isinstance(manifest_skills, dict) else {}
+    manifest_repositories = (manifest or {}).get("repositories")
+    manifest_repositories = manifest_repositories if isinstance(manifest_repositories, dict) else {}
     owned = owned_from_manifest(manifest)
     owned_for_categorize = {}
     for name, rk in owned.items():
@@ -793,7 +847,7 @@ def compute_external_state(adoption, manifest, source_root, vendor_root, skills_
         info = ext_skills.get(name)
         if info is None:
             continue
-        repo_entry = ((manifest or {}).get("repositories") or {}).get(info["repo_key"])
+        repo_entry = manifest_repositories.get(info["repo_key"])
         skill_entry = manifest_skills.get(name)
         if not isinstance(repo_entry, dict) or not isinstance(skill_entry, dict):
             continue
@@ -1005,6 +1059,26 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
     manifest_path = manifest_path or (agents_root / "infurnet-skills.manifest.json")
 
     findings = []
+
+    # .agents itself must be safe before anything beneath it — including
+    # adoption.yml and the manifest — can be safely read at all: a
+    # symlinked .agents would let every subsequent read or containment
+    # check follow the same redirect.
+    agents_unsafe = unsafe_symlink_detail(root, agents_root)
+    if agents_unsafe is not None:
+        findings.append(make_finding("containment", str(agents_root), agents_unsafe, "blocking"))
+        result = {
+            "ok": False,
+            "adoption_present": False, "adoption_valid": False,
+            "manifest_present": False, "manifest_valid": False,
+            "adoption": None, "vendor_pin_matches": False,
+            "findings": sorted(findings, key=lambda f: (f["category"], f["subject"])),
+            "closure": [], "provenance": {}, "external_repos": {},
+            "external_requirements": [], "proven_external_repos": [],
+            "added": [], "removed": [], "unchanged": [], "collision": [], "stale": [],
+        }
+        return result
+
     if adoption_override is not None:
         adoption, adoption_error = adoption_override, None
     else:
@@ -1032,6 +1106,12 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
         findings.append(make_finding("adoption", "adoption.yml", adoption_error, "blocking"))
     if manifest_error:
         findings.append(make_finding("manifest", "manifest", manifest_error, "damage"))
+    if manifest is not None:
+        findings.extend(manifest_shape_findings(manifest))
+    for boundary in (vendor_root, skills_root):
+        detail = unsafe_symlink_detail(root, boundary)
+        if detail is not None:
+            findings.append(make_finding("containment", str(boundary), detail, "blocking"))
 
     if adoption is None:
         result["ok"] = False
@@ -1062,8 +1142,9 @@ def evaluate(root, clients=(), manifest_path=None, source_root=None, adoption_ov
 
     if manifest_for_state is not None:
         root_key_ = state["root_key"]
-        repo_entry = manifest_for_state.get("repositories", {}).get(root_key_)
-        if repo_entry is None:
+        repositories = manifest_for_state.get("repositories")
+        repo_entry = repositories.get(root_key_) if isinstance(repositories, dict) else None
+        if not isinstance(repo_entry, dict):
             findings.append(make_finding("manifest", root_key_,
                                           f"manifest has no repository entry for {root_key_!r}",
                                           "damage"))

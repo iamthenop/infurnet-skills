@@ -186,13 +186,52 @@ def client_skills_root_for(consumer_root, client_name):
     return consumer_root.joinpath(*check_skills.CLIENT_SKILLS_ROOT[client_name])
 
 
+# --- containment: generated-state and staging roots -----------------------
+
+
+def require_safe_path(consumer_root, target):
+    """sys.exit-based counterpart of check_skills.unsafe_symlink_detail(),
+    for install.py's own mutation-time preflights and pre-destructive
+    revalidation."""
+    try:
+        detail = check_skills.unsafe_symlink_detail(consumer_root, target)
+    except ValueError:
+        sys.exit(f"{target}: is not beneath the consumer root {consumer_root}")
+    if detail is not None:
+        sys.exit(detail)
+
+
+def containment_preflight(consumer_root):
+    """Establishes that .agents, .agents/vendor, .agents/skills, and
+    .agents/.tmp are each a real directory or safely absent — never a
+    symlink (dangling included), nor a non-directory standing in for one —
+    before classify() or any staging/fetch may traverse or create anything
+    beneath them. Run once, at the top of every mutating-capable
+    invocation, before any inspection begins."""
+    agents_root = consumer_root / ".agents"
+    for target in (agents_root, agents_root / "vendor", agents_root / "skills",
+                  agents_root / ".tmp"):
+        require_safe_path(consumer_root, target)
+
+
+def safe_vendor_path(vendor_root, key):
+    """check_skills.external_vendor_path(), converted to a hard stop: every
+    install.py call site that resolves a vendor destination for actual
+    mutation must stop rather than let an unsafe path propagate as an
+    uncaught exception."""
+    try:
+        return check_skills.external_vendor_path(vendor_root, key)
+    except ValueError as e:
+        sys.exit(str(e))
+
+
 # --- generic client-skill exposure (mutating) -----------------------------
 
 
 def check_client_skills_preflight(consumer_root, client_skills_root):
-    """Directory-symlink capability (probed under an OS temp directory, never
-    under consumer_root) and every path component down to client_skills_root
-    is a real, non-symlink entry."""
+    """Directory-symlink capability (probed under an OS temp directory,
+    never under consumer_root) plus the shared containment walk down to
+    client_skills_root."""
     probe_root = Path(tempfile.mkdtemp(prefix="infurnet-skills-symlink-check-"))
     try:
         target = probe_root / "target"
@@ -204,18 +243,7 @@ def check_client_skills_preflight(consumer_root, client_skills_root):
     finally:
         shutil.rmtree(probe_root, ignore_errors=True)
 
-    try:
-        relative = client_skills_root.relative_to(consumer_root)
-    except ValueError:
-        sys.exit(f"{client_skills_root}: is not beneath the consumer root {consumer_root}")
-
-    current = consumer_root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            sys.exit(f"{current}: is a symlink; refusing to write through it")
-        if current.exists() and not current.is_dir():
-            sys.exit(f"{current}: exists but is not a directory")
+    require_safe_path(consumer_root, client_skills_root)
 
 
 def apply_client_exposure(desired_names, skills_root, client_skills_root, assessment):
@@ -530,6 +558,67 @@ def stage_adoption_edit(adoption_yaml, commit, release):
 # --- state classification --------------------------------------------
 
 
+def independent_damage_findings(findings, root_key):
+    """Findings that, whenever present, always indicate corruption of
+    previously installed content — independent of whether declared intent
+    has also changed: a hash mismatch, unproven external ownership, a
+    materialized skill that has gone missing, or a structurally malformed
+    manifest container. Never collision/missing-source/stale — those are
+    namespace or declaration problems, not corruption of content this
+    installer previously owned, and routing them here would incorrectly
+    suggest --repair can fix an unrelated occupied path (it can't; it hits
+    the same block --repair does today).
+
+    The "manifest" category also carries evaluate()'s own root-identity
+    check, which compares the manifest's recorded commit/source against
+    the CURRENTLY DECLARED adoption target (subject == root_key) — that
+    comparison is exactly as intent-relative as a vendor HEAD or origin
+    mismatch, expected to differ whenever intent changes, and is excluded
+    here for the same reason vendor_previously_damaged() never consults
+    head_matches/origin_matches against a new target. A missing entry for
+    an unchanged root_key is still caught independently, by
+    vendor_previously_damaged()'s own fail-closed manifest-evidence
+    check."""
+    return [f for f in findings
+            if f["category"] in ("hash", "external-ownership")
+            or (f["category"] == "manifest" and f["subject"] != root_key)
+            or (f["category"] == "materialization" and f["severity"] == "damage")]
+
+
+def vendor_previously_damaged(consumer_root, adoption, manifest_path):
+    """Whether the vendor checkout's state contradicts the manifest's own
+    recorded evidence of what was previously installed — checked against
+    that recorded commit and source, never against any newly declared
+    target, so a legitimate adoption.yml edit is never itself treated as
+    damage. All four checkout properties (HEAD, origin, cleanliness,
+    branch attachment) are compared against the manifest's identity: a
+    HEAD or origin that no longer matches what the manifest recorded is
+    exactly as much evidence of corruption as a dirty tree or an attached
+    branch — excluding either would leave that corruption undetected.
+    Malformed or missing manifest evidence for the root itself fails
+    closed (treated as damaged): there is nothing safe to compare
+    against."""
+    manifest_data, manifest_error = check_skills.read_manifest_safe(manifest_path)
+    if manifest_error is not None or manifest_data is None:
+        return True
+    root_key_ = check_skills.repo_key(adoption["repo"])
+    repositories = manifest_data.get("repositories")
+    repo_entry = repositories.get(root_key_) if isinstance(repositories, dict) else None
+    if not isinstance(repo_entry, dict) or not isinstance(repo_entry.get("commit"), str) \
+            or not isinstance(repo_entry.get("source"), str):
+        return True
+    vendor_root = consumer_root / ".agents" / "vendor"
+    try:
+        vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    except ValueError:
+        return True
+    inspected = git_ops.inspect_checkout(vendor, repo_entry["source"], repo_entry["commit"])
+    if not inspected["exists"]:
+        return False  # absence is handled by the manifest/generated-present gate in classify()
+    return not (inspected["head_matches"] and inspected["origin_matches"]
+               and inspected["detached"] and inspected["clean"])
+
+
 def classify(consumer_root, clients):
     """One of "bootstrap", "adoption-invalid" (not repairable), "damaged"
     (repairable), "pending-install", "reconcile", "in-sync"."""
@@ -560,6 +649,17 @@ def classify(consumer_root, clients):
     if not manifest_present:
         return {"state": "damaged", "adoption": adoption, "result": result,
                 "reason": "manifest absent but generated installer state already exists"}
+
+    # Existing installation integrity is assessed before, and independent
+    # of, whether declared intent also changed — a changed pin must never
+    # shortcut past real corruption of what was previously installed (see
+    # vendor_previously_damaged() and independent_damage_findings()).
+    if vendor_previously_damaged(consumer_root, adoption, manifest_path) \
+            or independent_damage_findings(result["findings"],
+                                           check_skills.repo_key(adoption["repo"])):
+        return {"state": "damaged", "adoption": adoption, "result": result,
+                "reason": "existing installation integrity findings exist, "
+                          "independent of any declared intent change"}
 
     # A root pin change is an intent change even when it leaves every
     # skill's ownership (name -> repository) exactly as it was — added/
@@ -706,7 +806,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
     agents_root = consumer_root / ".agents"
     vendor_root = agents_root / "vendor"
     skills_root = agents_root / "skills"
-    vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    vendor = safe_vendor_path(vendor_root, root_key_)
 
     declared_tree = None
     try:
@@ -742,7 +842,9 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
             remove_skill(name, skills_root)
 
         for rkey, checkout in list(ext_checkouts.items()):
-            dest = check_skills.external_vendor_path(vendor_root, rkey)
+            # Revalidated immediately before this destructive replacement,
+            # not just once during earlier planning.
+            dest = safe_vendor_path(vendor_root, rkey)
             if checkout != dest:
                 atomic_replace_dir(checkout, dest)
                 temp_registry.remove(checkout)
@@ -755,8 +857,9 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
         }
         dropped_repos = set(result["proven_external_repos"]) - set(ext_repos_final)
         for rkey in sorted(dropped_repos):
-            shutil.rmtree(check_skills.external_vendor_path(vendor_root, rkey),
-                          ignore_errors=True)
+            # Revalidated immediately before this removal, not just once
+            # during earlier planning.
+            shutil.rmtree(safe_vendor_path(vendor_root, rkey), ignore_errors=True)
 
         candidate_manifest = generate_manifest(
             adoption, root_key_, materialized_final, result["provenance"],
@@ -802,7 +905,7 @@ def generated_paths(consumer_root, candidate_manifest):
     manifest_path = agents_root / "infurnet-skills.manifest.json"
     paths = []
     for rkey in sorted(candidate_manifest["repositories"]):
-        paths.append(str(check_skills.external_vendor_path(vendor_root, rkey)
+        paths.append(str(safe_vendor_path(vendor_root, rkey)
                          .relative_to(consumer_root)) + "/")
     for name in sorted(candidate_manifest["skills"]):
         paths.append(str((skills_root / name).relative_to(consumer_root)) + "/")
@@ -862,7 +965,7 @@ def preview_result(consumer_root, adoption, clients):
     result), so a plan built from this is guaranteed current."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     vendor_root = consumer_root / ".agents" / "vendor"
-    vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    vendor = safe_vendor_path(vendor_root, root_key_)
     if not check_skills.check_git(vendor, adoption):
         return check_skills.evaluate(consumer_root, clients=tuple(clients),
                                      adoption_override=adoption)
@@ -884,7 +987,7 @@ def refresh_names_for_vendor_change(consumer_root, adoption, result):
     replaced."""
     root_key_ = check_skills.repo_key(adoption["repo"])
     vendor_root = consumer_root / ".agents" / "vendor"
-    vendor = check_skills.external_vendor_path(vendor_root, root_key_)
+    vendor = safe_vendor_path(vendor_root, root_key_)
     if not check_skills.check_git(vendor, adoption):
         return set()
     return {n for n in result["unchanged"] if result["provenance"][n]["repo_key"] == root_key_}
@@ -1259,6 +1362,8 @@ def main():
 
     if args.verify:
         return run_verify(consumer_root, clients)
+
+    containment_preflight(consumer_root)
 
     classification = classify(consumer_root, clients)
     state = classification["state"]

@@ -810,20 +810,12 @@ def atomic_replace_dir(new_dir, dest, keep_backup=False):
     return backup if (had_dest and keep_backup) else None
 
 
-def require_safe_bundle(name, bundle):
-    """Stops, naming the skill and every offending entry, unless
-    check_skills.check_bundle() finds the bundle safe."""
-    problems = check_skills.check_bundle(bundle)
-    if problems:
-        sys.exit(f"{name}: unsafe skill bundle: " + "; ".join(problems))
-
-
-def open_source(path, bundle_real):
+def open_source(path, real):
     """Opens the regular file at `path` for reading, refusing a symlink at
-    its final component, and confirms the open file is the one `path`
-    resolves to inside the bundle rooted at `bundle_real` — an entry swapped
-    for an escaping link or directory while a copy is under way is refused,
-    never followed."""
+    its final component, and confirms the open file is the one at `real`,
+    the path's own location in the validated tree. An entry or directory
+    swapped for a symlink while a copy is under way is refused, never
+    followed."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as e:
@@ -831,8 +823,7 @@ def open_source(path, bundle_real):
     src = os.fdopen(fd, "rb")
     try:
         opened = os.fstat(fd)
-        real = Path(os.path.realpath(path))
-        safe = (stat.S_ISREG(opened.st_mode) and real.is_relative_to(bundle_real)
+        safe = (stat.S_ISREG(opened.st_mode) and Path(os.path.realpath(path)) == real
                 and os.path.samestat(opened, os.stat(real)))
     except OSError:
         safe = False
@@ -842,57 +833,57 @@ def open_source(path, bundle_real):
     return src
 
 
-def copy_file(src, dest, bundle_real):
-    with open_source(src, bundle_real) as source, open(dest, "xb") as out:
+def copy_file(src, dest, real):
+    with open_source(src, real) as source, open(dest, "xb") as out:
         shutil.copyfileobj(source, out)
         opened = os.fstat(source.fileno())
     os.chmod(dest, stat.S_IMODE(opened.st_mode))
     os.utime(dest, ns=(opened.st_atime_ns, opened.st_mtime_ns))
 
 
-def copy_bundle(src, dest, bundle_real):
+def copy_bundle(src, dest, real):
     """Copies the bundle directory `src` to the new directory `dest`, entry
-    by entry. Each entry is examined at the moment it is copied, never
-    assumed unchanged since an earlier inspection: a symlink is judged by
-    check_skills.resolve_link() and, when permitted, copied as the regular
-    file it resolves to; a directory symlink, or anything that is not a
-    regular file or directory, stops the copy. Only content inside
-    `bundle_real` is read."""
+    by entry, regular files and directories only. Each entry is examined at
+    the moment it is copied, never assumed unchanged since validation: a
+    symlink, or anything else that is not a regular file or directory,
+    stops the copy, and so does a directory whose real location is no
+    longer `real`, its place in the validated tree."""
     mode = os.lstat(src).st_mode
     if not stat.S_ISDIR(mode):
         sys.exit(f"{src}: is not a directory; refusing to copy")
     dest.mkdir()
     with os.scandir(src) as entries:
         names = sorted(e.name for e in entries)
+    if Path(os.path.realpath(src)) != real:
+        sys.exit(f"{src}: changed while being copied; refusing to follow it")
     for name in names:
         path = src / name
         kind = os.lstat(path).st_mode
-        if stat.S_ISLNK(kind):
-            target, detail = check_skills.resolve_link(path, bundle_real)
-            if detail is not None:
-                sys.exit(f"{detail}; refusing to copy")
-            copy_file(target, dest / name, bundle_real)
-        elif stat.S_ISDIR(kind):
-            copy_bundle(path, dest / name, bundle_real)
+        if stat.S_ISDIR(kind):
+            copy_bundle(path, dest / name, real / name)
         elif stat.S_ISREG(kind):
-            copy_file(path, dest / name, bundle_real)
+            copy_file(path, dest / name, real / name)
+        elif stat.S_ISLNK(kind):
+            sys.exit(f"{path}: symlink inside a skill bundle; refusing to copy")
         else:
-            sys.exit(f"{path}: not a regular file, directory, or permitted symlink")
+            sys.exit(f"{path}: not a regular file or directory; refusing to copy")
     os.chmod(dest, stat.S_IMODE(mode))
 
 
-def materialize_from(name, source_dir, skills_root):
-    """Copies the skill bundle at `source_dir` to skills_root/<name>. The
-    bundle is validated immediately before the copy and judged again entry
-    by entry during it; an unsafe bundle leaves skills_root untouched.
-    `bundle_real` is taken before the validation so a root swapped for a
-    link in between is refused rather than adopted as the boundary."""
-    bundle_real = Path(os.path.realpath(source_dir))
-    require_safe_bundle(name, source_dir)
+def materialize_from(name, checkout, source_dir, skills_root):
+    """Copies the skill bundle at `source_dir`, inside the acquired source
+    checkout `checkout`, to skills_root/<name>. The whole path from the
+    checkout to the bundle and everything in it is validated immediately
+    before the copy and judged again entry by entry during it; an unsafe
+    source leaves skills_root untouched. `real` is taken before the
+    validation so a bundle swapped for a symlink in between is refused
+    rather than adopted as the location to copy."""
+    real = Path(os.path.realpath(source_dir))
+    check_skills.require_bundle(name, checkout, source_dir)
     skills_root.mkdir(parents=True, exist_ok=True)
     tmp = skills_root / f".{name}.tmp-{uuid.uuid4().hex[:12]}"
     try:
-        copy_bundle(source_dir, tmp, bundle_real)
+        copy_bundle(source_dir, tmp, real)
         atomic_replace_dir(tmp, skills_root / name)
     finally:
         if tmp.exists():
@@ -900,7 +891,7 @@ def materialize_from(name, source_dir, skills_root):
 
 
 def materialize_skill(name, source_root, skills_root):
-    materialize_from(name, source_root / "skills" / name, skills_root)
+    materialize_from(name, source_root, source_root / "skills" / name, skills_root)
 
 
 def remove_skill(name, skills_root):
@@ -1070,7 +1061,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
         if prov["repo_key"] == root_key_:
             materialize_skill(name, effective_vendor, skills_root)
         else:
-            materialize_from(name, bundles[name], skills_root)
+            materialize_from(name, ext_checkouts[prov["repo_key"]], bundles[name], skills_root)
     for name in to_remove:
         remove_skill(name, skills_root)
 
@@ -1247,9 +1238,11 @@ def planned_checkout(consumer_root, adoption, result, rkey, txn, cache):
 def check_sources(consumer_root, adoption, result, names, txn, cache):
     """Stops on the first unsafe bundle among `names` — every skill this
     transaction will copy — before anything durable is written. Each bundle
-    is inspected where it will be copied from (see planned_checkout()).
-    Trees staged here are transaction-owned and disposable; they are the
-    same trees reconcile() promotes and copies, not a second acquisition."""
+    is inspected where it will be copied from (see planned_checkout()),
+    with that checkout root as the boundary: a symlink on the path to the
+    bundle or inside it stops the run. Trees staged here are
+    transaction-owned and disposable; they are the same trees reconcile()
+    promotes and copies, not a second acquisition."""
     checkouts = {}
     for name in names:
         prov = result["provenance"][name]
@@ -1257,13 +1250,8 @@ def check_sources(consumer_root, adoption, result, names, txn, cache):
         if rkey not in checkouts:
             checkouts[rkey] = planned_checkout(consumer_root, adoption, result, rkey,
                                                txn, cache)
-        checkout = checkouts[rkey]
-        if checkout is None:
-            continue
-        if rkey != check_skills.repo_key(adoption["repo"]) \
-                and check_skills.resolve_upstream_skill(checkout, prov["source"], name)[0] is None:
-            continue  # reconcile() reports an unresolvable external declaration
-        require_safe_bundle(name, checkout / prov["source"])
+        if checkouts[rkey] is not None:
+            check_skills.require_bundle(name, checkouts[rkey], checkouts[rkey] / prov["source"])
 
 
 def check_client_collision(consumer_root, desired_names, client_skills_root):

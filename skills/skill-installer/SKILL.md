@@ -70,6 +70,10 @@ Runtime materialization uses:
 .agents/skills/<skill-name>/
 ```
 
+Source skill paths are symlink-free. For every selected root-library or external skill, every path component from the acquired checkout root to the selected bundle and every entry inside that bundle must be a real directory or regular file. Any symbolic link — file, directory, dangling, internal, or escaping — is a stop condition. The installer never follows, preserves, dereferences, or materializes a source symlink.
+
+Installer-owned client exposure links are separate generated integration state and remain governed by the client-integration contract below.
+
 The installation manifest records the last successfully installed generated
 state. It is not an authority source and does not replace the adoption
 declaration.

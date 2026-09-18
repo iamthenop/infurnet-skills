@@ -155,22 +155,31 @@ repair operation. The file is transient installer input. `PROJECT.md` remains
 the durable binding authority.
 
 `--force` suppresses the final mutation confirmation. It does not bypass
-validation, ownership, provenance, collisions, malformed durable state, or
-binding conflicts.
+validation, ownership, provenance, collisions, drift, malformed durable state,
+or binding conflicts.
 
 Client selection remains explicit through repeatable `--client <client-name>`.
 
-The installer presents the complete known persistent mutation set before
-download, materialization, repair, removal, binding writes, manifest promotion,
-or client mutation. Unless `--force` is present, mutation requires:
+Mutating modes may acquire a candidate into transaction-owned disposable
+staging before final confirmation solely for inspection, validation, and
+construction of the complete persistent mutation plan. Disposable staging is
+not installed state and grants no approval to promote or otherwise mutate
+durable consumer state.
+
+Before promotion or any other persistent mutation, the installer presents the
+complete persistent mutation set. Unless `--force` is present, persistent
+mutation requires:
 
 ```text
 Continue? [Y/n]
 ```
 
-Remote inspection performed by `check-update.py` is non-mutating and may use
-temporary checkouts before this confirmation. Temporary inspection state is
-removed after use.
+`--verify` remains offline and does not create inspection staging or mutate
+consumer state.
+
+The transaction coordinator owns and cleans its transaction staging.
+`check-update.py`, when invoked independently for comparison, owns and cleans
+its own temporary checkout.
 
 `--update` may change only the adopted `commit` and `release`. It does not
 silently change `source` or the directly adopted `skills` list.

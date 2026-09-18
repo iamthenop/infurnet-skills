@@ -167,32 +167,23 @@ def differing_candidate_updater(tree):
 def collect_governed(tree):
     """{relative_path: bytes} for every regular file within a skills/<name>/
     bundle — SKILL.md, references, scripts, assets, and anything else, at
-    any nesting depth. A directory symlink inside a bundle is rejected
-    outright; a file symlink is included only when its resolved target
-    stays inside that same bundle. Comparison elsewhere is byte-based, so a
-    binary asset is never decoded as text here."""
+    any nesting depth. A bundle that check_skills.check_bundle() reports
+    unsafe stops the inventory outright; a file symlink it permits is read
+    through to its in-bundle target. Comparison elsewhere is byte-based, so
+    a binary asset is never decoded as text here."""
     files = {}
     skills_dir = tree / "skills"
     if not skills_dir.is_dir():
         return files
     for bundle in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
-        if bundle.is_symlink():
-            sys.exit(f"{bundle}: symlink skill bundle root; refusing to inventory")
-        bundle_resolved = bundle.resolve()
+        problems = check_skills.check_bundle(bundle)
+        if problems:
+            sys.exit(f"{problems[0]}; refusing to inventory")
         for dirpath, dirnames, filenames in os.walk(bundle, followlinks=False):
             dirnames.sort()
             current_dir = Path(dirpath)
-            for dirname in dirnames:
-                if (current_dir / dirname).is_symlink():
-                    sys.exit(f"{current_dir / dirname}: symlink directory inside a "
-                             "skill bundle; refusing to inventory")
             for filename in sorted(filenames):
                 p = current_dir / filename
-                if p.is_symlink():
-                    target = p.resolve()
-                    if not target.is_relative_to(bundle_resolved):
-                        sys.exit(f"{p}: symlink escapes its skill bundle; refusing "
-                                 "to inventory")
                 files[str(p.relative_to(tree))] = p.read_bytes()
     return files
 

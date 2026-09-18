@@ -107,6 +107,13 @@ def make_git_repo(path):
     return path
 
 
+def init_git(path):
+    """Makes an existing consumer directory the root of a Git working tree,
+    which install.py requires of every `--root`."""
+    if not (path / ".git").exists():
+        run_git(["init", "-q"], path)
+
+
 def make_upstream(base):
     """A minimal local git repo standing in for the adopted root skill
     library: three trivial skills, one commit on main. Returns
@@ -128,6 +135,7 @@ def write_adoption(consumer, upstream, sha, adopted):
         f"source: {upstream.as_posix()}", f"commit: {sha}", 'release: ""', "skills:",
         *(f"  - {name}" for name in adopted),
     ]) + "\n")
+    init_git(consumer)
 
 
 def run_install(consumer, args, env=None, input_text=""):
@@ -216,6 +224,7 @@ def write_adoption_file(consumer, upstream, sha, adopted, release=""):
         f"source: {upstream.as_posix()}", f"commit: {sha}", f'release: "{release}"',
         "skills:", *(f"  - {name}" for name in adopted),
     ]) + "\n")
+    init_git(consumer)
 
 
 def full_install(base, skills=("alpha",), name="full-install"):
@@ -867,6 +876,7 @@ def test_claude_selects_claude_skills_root(results, workdir):
 def test_claude_md_created(results, workdir):
     consumer = workdir / "claude-md-created"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     code, out = run_install(consumer, ["--client", "claude", "--force"])
     results.check("--client claude, fresh — exits zero", code == 0, out)
     claude_md = consumer / "CLAUDE.md"
@@ -882,6 +892,7 @@ def test_claude_md_created(results, workdir):
 def test_claude_md_import_prepended(results, workdir):
     consumer = workdir / "claude-md-prepend"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     write(consumer / "CLAUDE.md", "# My guide\nSome text\n")
     code, out = run_install(consumer, ["--client", "claude", "--force"])
     results.check("existing CLAUDE.md, no import — exits zero", code == 0, out)
@@ -893,6 +904,7 @@ def test_claude_md_import_prepended(results, workdir):
 def test_claude_md_correct_import_unchanged(results, workdir):
     consumer = workdir / "claude-md-unchanged"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     content = "@AGENTS.md\n\nExtra notes.\n"
     write(consumer / "CLAUDE.md", content)
     code, out = run_install(consumer, ["--client", "claude", "--force"])
@@ -904,6 +916,7 @@ def test_claude_md_correct_import_unchanged(results, workdir):
 def test_claude_md_import_elsewhere_blocks(results, workdir):
     consumer = workdir / "claude-md-elsewhere"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     content = "# Notes\n@AGENTS.md\n"
     write(consumer / "CLAUDE.md", content)
     code, out = run_install(consumer, ["--client", "claude"])
@@ -915,6 +928,7 @@ def test_claude_md_import_elsewhere_blocks(results, workdir):
 def test_claude_md_not_regular_file_blocks(results, workdir):
     consumer = workdir / "claude-md-not-file"
     (consumer / "CLAUDE.md").mkdir(parents=True)
+    init_git(consumer)
     code, out = run_install(consumer, ["--client", "claude"])
     results.check("CLAUDE.md is not a regular file — nonzero exit", code != 0, out)
 
@@ -925,6 +939,7 @@ def test_claude_md_symlink_to_existing_file_blocks(results, workdir):
     written through it."""
     consumer = workdir / "claude-md-symlink-existing"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     target = workdir / "claude-md-symlink-existing-target.md"
     write(target, "@AGENTS.md\n\nUnrelated existing content.\n")
     before = target.read_text()
@@ -942,6 +957,7 @@ def test_claude_md_dangling_symlink_blocks(results, workdir):
     symlink."""
     consumer = workdir / "claude-md-symlink-dangling"
     consumer.mkdir(parents=True)
+    init_git(consumer)
     target = workdir / "claude-md-symlink-dangling-target.md"
     os.symlink(target, consumer / "CLAUDE.md")
 
@@ -1249,6 +1265,7 @@ def test_invalid_flag_combinations_rejected(results, workdir):
 def test_bootstrap_confirm_and_cancel(results, workdir):
     consumer = workdir / "bootstrap-cycle"
     consumer.mkdir(parents=True)
+    init_git(consumer)
 
     code, out = run_install(consumer, [])
     results.check("bootstrap — EOF without --force stops before mutation", code != 0, out)
@@ -2156,6 +2173,7 @@ def test_update_preserves_comments_and_flow_style(results, workdir):
         'release: ""\n'
         "skills: [alpha]\n"
     ))
+    init_git(consumer)
     code0, out0 = run_install(consumer, ["--force"])
     results.check("flow-style fixture — v1 install exits zero", code0 == 0, out0)
 
@@ -2188,6 +2206,7 @@ def test_update_inserts_missing_release_field(results, workdir):
         f"commit: {sha}\n"
         "skills:\n  - alpha\n"
     ))
+    init_git(consumer)
     code0, out0 = run_install(consumer, ["--force"])
     results.check("no-release fixture — v1 install exits zero", code0 == 0, out0)
 
@@ -4053,6 +4072,441 @@ def test_check_update_fetch_temp_tree_success_remains_usable(results, workdir):
         shutil.rmtree(tree, ignore_errors=True)
 
 
+# --- consumer root and skill-bundle safety --------------------------------
+
+
+OUTSIDE_MARK = "OUTSIDE-SECRET\n"
+
+
+def tree_state(path, skip=(".agents/.tmp",)):
+    """{relative path: fingerprint} for everything at `path`: symlinks by
+    target and never followed, empty directories included, absent as None.
+    Skips the named subtrees and git's own opportunistic index refresh."""
+    if not os.path.lexists(path):
+        return None
+    state = {}
+    for dirpath, dirnames, filenames in os.walk(path):
+        for name in dirnames + filenames:
+            p = pathlib.Path(dirpath, name)
+            rel = p.relative_to(path).as_posix()
+            if any(rel == s or rel.startswith(s + "/") for s in skip):
+                continue
+            if name == "index" and p.parent.name == ".git":
+                continue
+            if p.is_symlink():
+                state[rel] = ("link", os.readlink(p))
+            elif p.is_dir():
+                state[rel] = ("dir",)
+            else:
+                state[rel] = ("file", p.read_bytes())
+    return state
+
+
+def has_outside(path):
+    """Whether any regular file beneath `path` carries the outside marker."""
+    for dirpath, _, filenames in os.walk(path):
+        for name in filenames:
+            p = pathlib.Path(dirpath, name)
+            if not p.is_symlink() and OUTSIDE_MARK.encode() in p.read_bytes():
+                return True
+    return False
+
+
+def test_root_preflight(results, workdir):
+    """install.py checks the consumer root itself, before any mode runs: a
+    root that is not an existing directory that is the root of a Git
+    working tree is rejected in every mode — --force and --verify included
+    — and left exactly as found."""
+    base = workdir / "root-preflight"
+    base.mkdir(parents=True)
+    repo = make_git_repo(base / "repo")
+    (repo / "sub").mkdir()
+    bare = base / "bare.git"
+    run_git(["init", "-q", "--bare", str(bare)], base)
+    plain = base / "plain"
+    write(plain / "keep.txt", "keep\n")
+    afile = base / "afile"
+    write(afile, "not a directory\n")
+
+    rows = [
+        ("nonexistent", base / "absent", "does not exist"),
+        ("non-Git directory", plain, "does not resolve as a Git working tree"),
+        ("regular file", afile, "is not a directory"),
+        ("Git subdirectory", repo / "sub", "is not the root of its Git working tree"),
+        ("bare repository", bare, "does not resolve as a Git working tree"),
+        ("git directory", repo / ".git", "does not resolve as a Git working tree"),
+    ]
+    for label, root, message in rows:
+        for mode in ([], ["--force"], ["--verify"]):
+            before = tree_state(base)
+            code, out = run_install(root, mode)
+            results.check(f"root preflight, {label} {mode} — nonzero exit with the condition",
+                          code != 0 and message in out, out)
+            results.check(f"root preflight, {label} {mode} — nothing created or changed",
+                          tree_state(base) == before, out)
+
+    nogit = base / "empty-path"
+    nogit.mkdir()
+    code, out = run_install(repo, [], env=dict(os.environ, PATH=str(nogit)))
+    results.check("root preflight, git unavailable — nonzero exit with the condition",
+                  code != 0 and "git executable not found" in out, out)
+
+    code, out = run_install(repo, ["--force"])
+    results.check("root preflight, Git root — default bootstrap exits zero", code == 0, out)
+    results.check("root preflight, Git root — bootstrap creates its files",
+                  all((repo / n).exists() for n in
+                      (".agents/adoption.yml", "PROJECT.md", "AGENTS.md")), out)
+
+    worktree = base / "worktree"
+    run_git(["worktree", "add", "-q", str(worktree), "-b", "wt"], repo)
+    code, out = run_install(worktree, ["--force"])
+    results.check("root preflight, Git worktree root — accepted", code == 0, out)
+
+    upstream, sha, consumer = full_install(base / "installed", ["alpha"])
+    before = tree_state(consumer)
+    code, out = run_install(consumer, ["--verify"])
+    results.check("root preflight, Git root — --verify verifies the installation",
+                  code == 0 and "adoption.yml: present" in out, out)
+    results.check("root preflight, Git root — --verify writes nothing",
+                  tree_state(consumer) == before, out)
+
+
+def link(target, at):
+    at.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, at)
+
+
+def swap_root(skill):
+    """Turns the bundle directory into a symlink to a sibling holding its
+    content."""
+    real = skill.with_name(skill.name + "-real")
+    skill.rename(real)
+    os.symlink(real.name, skill)
+
+
+# (label, change(skill, sibling, outside), outcome). `skill` is the adopted
+# bundle, `sibling` another bundle of the same repository, `outside` a
+# directory beyond it. A str outcome is what the rejection must name; a dict
+# outcome permits the bundle and maps files of the installed copy to their
+# content.
+BUNDLE_CASES = [
+    ("escaping directory link", lambda s, o, out: link(out, s / "refs"), "refs"),
+    ("escaping file link",
+     lambda s, o, out: link(out / "secret.txt", s / "leak.txt"), "leak.txt"),
+    ("dangling link", lambda s, o, out: link("missing.txt", s / "gone"), "gone"),
+    ("symlinked bundle root", lambda s, o, out: swap_root(s), "symlink skill bundle root"),
+    ("link into another bundle",
+     lambda s, o, out: link(os.path.relpath(o / "SKILL.md", s), s / "shared.md"), "shared.md"),
+    ("directory link within the bundle",
+     lambda s, o, out: (write(s / "real" / "a.md", "a\n"), link("real", s / "alias")), "alias"),
+    ("file link within the bundle",
+     lambda s, o, out: (write(s / "refs" / "real.md", "real\n"),
+                        link("refs/real.md", s / "alias.md")),
+     {"alias.md": "real\n", "refs/real.md": "real\n"}),
+    ("plain bundle", lambda s, o, out: write(s / "refs" / "real.md", "real\n"),
+     {"refs/real.md": "real\n"}),
+]
+
+
+def check_copied(results, label, dest, expected):
+    """The installed copy holds exactly the expected content, every file a
+    regular file — a permitted link is copied as its target's content."""
+    for rel, content in expected.items():
+        p = dest / rel
+        results.check(f"{label} — {rel} copied as a regular file with its content",
+                      p.is_file() and not p.is_symlink() and p.read_text() == content, "")
+    results.check(f"{label} — the copy holds no symlink",
+                  not any(q.is_symlink() for q in dest.rglob("*")), "")
+
+
+def make_bundle_tree(base):
+    """A repository-shaped tree with two bundles, and an outside directory
+    holding the marker."""
+    tree = base / "tree"
+    for name in ("alpha", "beta"):
+        write(tree / "skills" / name / "SKILL.md", FIXTURE_SKILL.format(name=name))
+    outside = base / "outside"
+    write(outside / "secret.txt", OUTSIDE_MARK)
+    return tree, outside
+
+
+def test_bundle_policy(results, workdir):
+    """Update inspection and materialization apply one bundle-symlink
+    policy: for every case collect_governed() and materialize_from() reach
+    the same verdict on the same tree. A rejected bundle creates nothing and
+    copies nothing from outside; a permitted one is copied with its links'
+    content and hashes identically to its source."""
+    module = load_install_module()
+    check_update = load_check_update_module()
+    for label, change, outcome in BUNDLE_CASES:
+        base = workdir / f"bundle-policy-{label.replace(' ', '-')}"
+        tree, outside = make_bundle_tree(base)
+        change(tree / "skills" / "alpha", tree / "skills" / "beta", outside)
+        skills_root = base / "installed" / "skills"
+        permitted = isinstance(outcome, dict)
+
+        inventoried = not stopped_with_system_exit(lambda: check_update.collect_governed(tree))
+        copied = not stopped_with_system_exit(
+            lambda: module.materialize_from("alpha", tree / "skills" / "alpha", skills_root))
+        results.check(f"bundle policy, {label} — update inspection verdict",
+                      inventoried == permitted, "")
+        results.check(f"bundle policy, {label} — materialization reaches the same verdict",
+                      copied == inventoried, "")
+        if not permitted:
+            results.check(f"bundle policy, {label} — nothing created, nothing copied from outside",
+                          not skills_root.exists() and not has_outside(base / "installed"), "")
+            continue
+        check_copied(results, f"bundle policy, {label}", skills_root / "alpha", outcome)
+        results.check(f"bundle policy, {label} — copy hashes identically to its source",
+                      module.check_skills.tree_hash(skills_root / "alpha")
+                      == module.check_skills.tree_hash(tree / "skills" / "alpha"), "")
+
+    base = workdir / "bundle-policy-mode"
+    tree, outside = make_bundle_tree(base)
+    script = tree / "skills" / "alpha" / "scripts" / "run.sh"
+    write(script, "#!/bin/sh\n")
+    script.chmod(0o755)
+    module.materialize_from("alpha", tree / "skills" / "alpha", base / "installed" / "skills")
+    copied = base / "installed" / "skills" / "alpha" / "scripts" / "run.sh"
+    results.check("bundle policy — file permissions are preserved",
+                  copied.stat().st_mode & 0o777 == 0o755, oct(copied.stat().st_mode))
+
+
+def make_bundle_fixture(base, layout, change):
+    """(consumer, env, adopted skill) for a consumer whose pin selects an
+    upstream where `change` was applied to the adopted bundle: alpha in the
+    root library, or widget in the external repository that library's
+    descriptor points at."""
+    outside = base / "outside"
+    write(outside / "secret.txt", OUTSIDE_MARK)
+    if layout == "root":
+        upstream, sha = make_upstream(base)
+        change(upstream / "skills" / "alpha", upstream / "skills" / "beta", outside)
+        run_git(["add", "-A"], upstream)
+        run_git(["commit", "-q", "-m", "change"], upstream)
+        sha, env, skill = run_git(["rev-parse", "HEAD"], upstream), None, "alpha"
+    else:
+        upstream, sha, ext, ext_sha, env = make_external_fixture(base)
+        write(ext / "skills" / "other" / "SKILL.md", FIXTURE_SKILL.format(name="other"))
+        change(ext / "skills" / "widget", ext / "skills" / "other", outside)
+        repoint_external(upstream, ext, ext_sha)
+        sha, skill = run_git(["rev-parse", "HEAD"], upstream), "widget"
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, [skill])
+    return consumer, env, skill
+
+
+def repoint_external(upstream, ext, old_sha):
+    """Commits the external repository's working tree, then commits a root
+    descriptor that pins the result."""
+    run_git(["add", "-A"], ext)
+    run_git(["commit", "-q", "-m", "change"], ext)
+    descriptor = upstream / "skills" / "widget" / "SKILL.md"
+    descriptor.write_text(
+        descriptor.read_text().replace(old_sha, run_git(["rev-parse", "HEAD"], ext)))
+    run_git(["add", "-A"], upstream)
+    run_git(["commit", "-q", "-m", "repoint"], upstream)
+
+
+def check_rejected(results, label, consumer, code, out, before, words):
+    """What every rejected installer run shows: a nonzero result naming the
+    offending entry, durable state identical to `before`, no outside content
+    copied, and only the transaction's own staging removed."""
+    results.check(f"{label} — nonzero exit naming the offending entry",
+                  code != 0 and all(w in out for w in words), out)
+    results.check(f"{label} — no durable consumer state changed",
+                  tree_state(consumer) == before, out)
+    results.check(f"{label} — no outside content copied", not has_outside(consumer), out)
+    tmp_root = consumer / ".agents" / ".tmp"
+    results.check(f"{label} — staging removed, unrelated temporary content kept",
+                  sorted(os.listdir(tmp_root)) == ["unrelated"]
+                  and (tmp_root / "unrelated" / "keep.txt").read_text() == "keep\n", out)
+
+
+def test_bundle_install(results, workdir):
+    """Every bundle a public installer run materializes is judged by the
+    bundle-symlink policy before anything durable changes, for root-library
+    and external skills alike: an unsafe bundle stops the run with no
+    consumer state changed; a safe one installs and verifies."""
+    for layout in ("root", "external"):
+        for label, change, outcome in BUNDLE_CASES:
+            name = f"bundle install, {layout}, {label}"
+            base = workdir / f"bundle-install-{layout}-{label.replace(' ', '-')}"
+            consumer, env, skill = make_bundle_fixture(base, layout, change)
+            write(consumer / ".agents" / ".tmp" / "unrelated" / "keep.txt", "keep\n")
+            before = tree_state(consumer)
+            code, out = run_install(consumer, ["--force"], env=env)
+            if not isinstance(outcome, dict):
+                check_rejected(results, name, consumer, code, out, before,
+                               ("unsafe skill bundle", outcome))
+                continue
+            results.check(f"{name} — installs", code == 0, out)
+            check_copied(results, name, consumer / ".agents" / "skills" / skill, outcome)
+            code, out = run_install(consumer, ["--verify"])
+            results.check(f"{name} — installation verifies", code == 0, out)
+
+
+def test_bundle_paths(results, workdir):
+    """Default reconciliation after a pin change, --update, --repair, and an
+    --update whose only unsafe bundle is in an external repository the
+    update comparison never reads each judge the bundle they would install,
+    and change nothing when it is unsafe."""
+    for path in ("reconcile", "update", "repair"):
+        base = workdir / f"bundle-paths-{path}"
+        upstream, sha1, consumer = full_install(base, ["alpha"])
+        outside = base / "outside"
+        write(outside / "secret.txt", OUTSIDE_MARK)
+        link(outside, upstream / "skills" / "alpha" / "refs")
+        run_git(["add", "-A"], upstream)
+        run_git(["commit", "-q", "-m", "unsafe"], upstream)
+        sha2 = run_git(["rev-parse", "HEAD"], upstream)
+        words = ("unsafe skill bundle", "refs")
+        args = ["--force"]
+        if path == "update":
+            args, words = ["--update", "--target-version", sha2, "--force"], ("symlink", "refs")
+        else:
+            write_adoption_file(consumer, upstream, sha2, ["alpha"])
+        if path == "repair":
+            vendor = consumer / ".agents" / "vendor" / "example" / "infurnet-skills"
+            run_git(["fetch", "-q", "origin", "main"], vendor)
+            run_git(["checkout", "-q", "--detach", sha2], vendor)
+            write(consumer / ".agents" / "skills" / "alpha" / "SKILL.md", "tampered\n")
+            args = ["--repair", "--force"]
+        write(consumer / ".agents" / ".tmp" / "unrelated" / "keep.txt", "keep\n")
+        before = tree_state(consumer)
+        code, out = run_install(consumer, args)
+        check_rejected(results, f"bundle paths, {path}", consumer, code, out, before, words)
+
+    base = workdir / "bundle-paths-update-external"
+    upstream, sha, ext, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    code, out = run_install(consumer, ["--force"], env=env)
+    results.check("bundle paths, update external — v1 installs", code == 0, out)
+    outside = base / "outside"
+    write(outside / "secret.txt", OUTSIDE_MARK)
+    link(outside, ext / "skills" / "widget" / "refs")
+    repoint_external(upstream, ext, ext_sha)
+    sha2 = run_git(["rev-parse", "HEAD"], upstream)
+    write(consumer / ".agents" / ".tmp" / "unrelated" / "keep.txt", "keep\n")
+    before = tree_state(consumer)
+    code, out = run_install(consumer, ["--update", "--target-version", sha2, "--force"], env=env)
+    check_rejected(results, "bundle paths, update external", consumer, code, out, before,
+                   ("unsafe skill bundle", "refs"))
+
+
+def test_bundle_race(results, workdir):
+    """materialize_from() never follows an entry that changes after the
+    bundle was inspected: an unsafe replacement introduced before an entry
+    is copied, between its inspection and its open, or between a
+    directory's inspection and its listing stops the copy with nothing
+    outside copied and nothing left behind."""
+    module = load_install_module()
+
+    def replace(path, target):
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        os.symlink(target, path)
+
+    def once(state, owner, attr, match):
+        """Patches owner.attr so `state["change"]` runs once, immediately
+        before the real function's first call — the first call at all when
+        `match` is None, otherwise the first whose first argument equals the
+        Path `match`. The copier passes Paths; the inspection walk passes
+        strings, so a Path match fires only inside the copy."""
+        real = getattr(owner, attr)
+
+        def hook(*args, **kwargs):
+            if not state["done"] and (match is None or (args and args[0] == match)):
+                state["done"] = True
+                state["change"]()
+            return real(*args, **kwargs)
+        return mock.patch.object(owner, attr, side_effect=hook)
+
+    rows = [
+        ("file swapped before its copy", lambda st, src: once(st, module, "copy_file", None),
+         lambda src, out: replace(src / "b.txt", out / "secret.txt")),
+        ("directory swapped before its copy",
+         lambda st, src: once(st, module, "copy_file", None),
+         lambda src, out: replace(src / "z", out)),
+        ("file swapped between inspection and open",
+         lambda st, src: once(st, os, "open", src / "b.txt"),
+         lambda src, out: replace(src / "b.txt", out / "secret.txt")),
+        ("directory swapped between inspection and listing",
+         lambda st, src: once(st, os, "scandir", src / "sub"),
+         lambda src, out: replace(src / "sub", out)),
+    ]
+    for label, patcher, change in rows:
+        base = workdir / f"bundle-race-{label.replace(' ', '-')}"
+        src = base / "src"
+        for rel in ("SKILL.md", "a.txt", "b.txt", "sub/secret.txt", "z/f.txt"):
+            write(src / rel, "fixture\n")
+        outside = base / "outside"
+        write(outside / "secret.txt", OUTSIDE_MARK)
+        skills_root = base / "installed" / "skills"
+        state = {"done": False, "change": lambda: change(src, outside)}
+        with patcher(state, src):
+            stopped = stopped_with_system_exit(
+                lambda: module.materialize_from("alpha", src, skills_root))
+        leftovers = os.listdir(skills_root) if skills_root.exists() else []
+        results.check(f"bundle race, {label} — the copy stops after the change",
+                      stopped and state["done"], "")
+        results.check(f"bundle race, {label} — nothing outside is copied",
+                      not has_outside(base / "installed"), "")
+        results.check(f"bundle race, {label} — nothing installed or left behind",
+                      leftovers == [], leftovers)
+
+
+def test_bundle_acquire(results, workdir):
+    """A repository is downloaded once per run: the tree staged to validate
+    its bundles is the tree promoted, never fetched again. Declining after
+    the plan leaves neither a staged tree nor a vendor or skills directory."""
+    module = load_install_module()
+    base = workdir / "bundle-acquire"
+    upstream, sha, ext, ext_sha, env = make_external_fixture(base)
+    consumer = base / "consumer"
+    write_adoption(consumer, upstream, sha, ["widget"])
+    agents = consumer / ".agents"
+
+    code, out = run_install(consumer, [], env=env, input_text="n\n")
+    results.check("bundle acquire — declining exits zero", code == 0, out)
+    results.check("bundle acquire — declining leaves no vendor, skills, or staging",
+                  not (agents / "vendor").exists() and not (agents / "skills").exists()
+                  and not any((agents / ".tmp").iterdir()), out)
+
+    calls = []
+    real_acquire = module.git_ops.acquire_tree
+
+    def counting(url, commit, dest):
+        calls.append((url, commit))
+        return real_acquire(url, commit, dest)
+
+    consumer_root = consumer.resolve()
+    txn, cache = {"dir": None}, {}
+    git_env = {k: v for k, v in env.items() if k.startswith("GIT_CONFIG")}
+    with mock.patch.dict(os.environ, git_env), \
+            mock.patch.object(module.git_ops, "acquire_tree", side_effect=counting):
+        classification = module.classify(consumer_root, [], txn, cache)
+        code = module.mutate(_StubArgs(bindings=None, force=True), consumer_root, [],
+                             classification["adoption"], classification["result"],
+                             mode="default", txn=txn, cache=cache)
+    module.cleanup_transaction(txn)
+
+    results.check("bundle acquire — the install exits zero", code == 0, "")
+    results.check("bundle acquire — the root and the external repository are each "
+                  "downloaded exactly once",
+                  len(calls) == 2 and len(set(calls)) == 2, calls)
+    vendor = agents / "vendor" / "example"
+    results.check("bundle acquire — the staged trees were promoted, leaving nothing beside them",
+                  sorted(os.listdir(vendor)) == ["ext-upstream", "infurnet-skills"]
+                  and (vendor / "ext-upstream" / ".git").exists()
+                  and (agents / "skills" / "widget" / "SKILL.md").is_file(), os.listdir(vendor))
+    results.check("bundle acquire — no transaction directory left in .agents/.tmp",
+                  not any((agents / ".tmp").iterdir()), "")
+
+
 def main():
     if not INSTALL_PY.exists():
         print(f"FAIL  install.py not found at {INSTALL_PY}")
@@ -4213,6 +4667,13 @@ def main():
             results, workdir)
         test_action_plan_discloses_complete_mutation_set_and_matches_execution(
             results, workdir)
+
+        test_root_preflight(results, workdir)
+        test_bundle_policy(results, workdir)
+        test_bundle_install(results, workdir)
+        test_bundle_paths(results, workdir)
+        test_bundle_race(results, workdir)
+        test_bundle_acquire(results, workdir)
 
         test_check_update_fetch_temp_tree_cleans_up_on_clone_failure(results, workdir)
         test_check_update_fetch_temp_tree_cleans_up_on_checkout_failure(results, workdir)

@@ -720,6 +720,50 @@ def missing_skill_sources(names, source_root):
     )
 
 
+def resolve_link(path, bundle_real):
+    """(target, None) when the symlink at `path` may live in the skill
+    bundle whose resolved root is `bundle_real`: it resolves to a regular
+    file inside that same bundle. Otherwise (None, diagnostic) — a
+    directory symlink, a dangling or unresolvable link, or a link that
+    resolves outside the bundle (another bundle, the checkout, or anywhere
+    else included). The one definition of the bundle-symlink policy:
+    check_bundle() and every copy of a bundle apply it entry by entry."""
+    try:
+        target = Path(os.path.realpath(path, strict=True))
+    except (OSError, RuntimeError):
+        return None, f"{path}: dangling or unresolvable symlink in a skill bundle"
+    if target.is_dir():
+        return None, f"{path}: symlink directory inside a skill bundle"
+    if not target.is_relative_to(bundle_real):
+        return None, f"{path}: symlink escapes its skill bundle"
+    if not target.is_file():
+        return None, f"{path}: symlink target is not a regular file"
+    return target, None
+
+
+def check_bundle(bundle):
+    """Non-mutating: a diagnostic for every entry that makes the skill
+    bundle unsafe to inventory or copy; [] when it is safe. The bundle root
+    must be a real directory, never a symlink (a dangling one included).
+    Inside it, every symlink is judged by resolve_link(). A directory that
+    cannot be read is reported, never skipped."""
+    if bundle.is_symlink():
+        return [f"{bundle}: symlink skill bundle root"]
+    if not bundle.is_dir():
+        return [f"{bundle}: skill bundle is missing or not a directory"]
+    bundle_real = Path(os.path.realpath(bundle))
+    problems = []
+    for dirpath, dirnames, filenames in os.walk(
+            bundle, onerror=lambda e: problems.append(f"{e.filename}: {e.strerror}")):
+        for name in dirnames + filenames:
+            entry = Path(dirpath, name)
+            if entry.is_symlink():
+                _, detail = resolve_link(entry, bundle_real)
+                if detail is not None:
+                    problems.append(detail)
+    return sorted(problems)
+
+
 def tree_hash(directory):
     h = hashlib.sha256()
     for p in sorted(directory.rglob("*")):

@@ -606,7 +606,7 @@ findings.extend(check_section_references(
     list(skills) + sorted((ROOT / "skills").glob("*/assets/*")), skill_names))
 
 md_files = list(skills) + list(refs) + [
-    ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "ADOPTION.md",
+    ROOT / "README.md", ROOT / "AGENTS.md",
     ROOT / "eval" / "triggers.md",
 ]
 findings.extend(check_links(md_files))

@@ -1,0 +1,49 @@
+# Adoption declaration — <consuming repository>
+#
+# This is the durable, consumer-owned root adoption declaration read by
+# `install.py`. Copy this template to `.agents/adoption.yml` in the
+# consuming repository, fill every field, and commit it there.
+#
+# `source` and `skills` are yours to change directly, in your own commit —
+# the installer never changes them. `commit` and `release` may also be
+# edited here directly, for the installer's default mode to reconcile
+# generated state to; or updated by the installer itself via `--update`,
+# which inspects the target, displays the complete mutation plan, and
+# requires confirmation before changing either value.
+#
+# Supported syntax is deliberately narrow: the top-level keys below plus
+# one block list. Nested mappings, flow-style lists ([a, b]), multi-line
+# strings, and YAML anchors/aliases are not supported and are rejected.
+
+# Canonical repository URL for the adopted root skill library.
+source: https://github.com/iamthenop/infurnet-skills
+
+# The immutable, authoritative revision. Must be a full 40-character SHA —
+# not a branch or tag name. This is the integrity identity of the install.
+commit: <full 40-character SHA>
+
+# Optional human-friendly release identity. Leave blank (or omit the value
+# after the colon) if none. When present, it must resolve to `commit` —
+# the installer refuses to proceed if it doesn't.
+release: ""
+
+# Skills this consumer intends to expose under .agents/skills/. Only
+# these are materialized; vendoring the library does not expose every
+# skill in it. One skill name per line, any skill type.
+skills:
+  - designer
+  - design-docs
+
+# Update procedure:
+# 1. Edit source/skills here only when consumer intent itself is changing.
+# 2. Run install.py --root <consumer-root> --update to inspect a source update.
+#    Use --target-version <ref> to select the target non-interactively.
+# 3. Review the proposed version, inventory, obligation, external-source,
+#    binding, and removal changes.
+# 4. Obtain approval from the consuming repository's deciding authority.
+# 5. Confirm the installer's complete mutation plan. The installer updates
+#    commit/release only after approval; source/skills remain consumer intent.
+# 6. Run install.py --root <consumer-root> --verify after completion when an
+#    independent verification pass is desired.
+#
+# A version update that skips approval is drift with a version number.

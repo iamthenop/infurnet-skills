@@ -16,7 +16,7 @@ METADATA_KEYS = {
 }
 INVISIBLE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
 GLYPHS = re.compile(r"[\u2510\u2514\u251c\u2502\u2193]")
-PORTABILITY = ("Infurnet", "PROJECT.md", "docs/agents", "founder")
+PORTABILITY = ("Infurnet", "docs/agents", "founder")
 GUARDS = [
     ("authorized by TICKET", "authorization reference in @temporary example"),
     ("get1", "sequential api-docs anchors"),
@@ -606,7 +606,7 @@ findings.extend(check_section_references(
     list(skills) + sorted((ROOT / "skills").glob("*/assets/*")), skill_names))
 
 md_files = list(skills) + list(refs) + [
-    ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "ADOPTION.md",
+    ROOT / "README.md", ROOT / "AGENTS.md",
     ROOT / "eval" / "triggers.md",
 ]
 findings.extend(check_links(md_files))

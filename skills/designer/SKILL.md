@@ -22,6 +22,7 @@ design deliverables. Designer does not decide or implement.
 
 | Deliverable | Purpose |
 | :--- | :--- |
+| `brand-designer` | Draft core brand identity and platform-specific application documentation |
 | `design-docs` | Record system design, decisions, boundaries, contracts, and representations |
 | `api-docs` | Draft API design documentation |
 | `schema-design` | Draft schema design and initialization structure |

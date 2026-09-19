@@ -1,10 +1,16 @@
 # [Brand Name] — Web & Product Implementation
 
-> Implements the brand defined in `brand-core-template.md` for web and digital product surfaces. Every value here should trace back to a core value (the hero color, the chosen typefaces, etc.) — this doc defines how those get executed in pixels, tokens, and code, not new brand decisions. If you're tempted to introduce a new color or font here that isn't in the core doc, stop and add it there first.
+> Implements the brand defined in `brand-core-template.md` for web and digital product surfaces. Inherited identity values — the hero color, the chosen typefaces — trace back to a core value. This doc defines how those get executed in pixels, tokens, and code; it does not make new brand decisions.
+>
+> If you're tempted to introduce a new color or font here that isn't in the core doc, stop and add it there first. That's an identity decision, not an implementation detail.
+>
+> Platform-owned implementation values — layout, spacing, component states, surface semantics — are defined here directly. They do not require a core-doc counterpart; see `SKILL.md`'s ownership contract.
 
 ---
 
 ## 0. Source of Truth
+
+Tracks inherited identity values only. A platform-owned implementation token (spacing, component state, breakpoint) is not an identity value and does not belong in this table.
 
 | Core value | Defined in core doc as | Implemented here as |
 |---|---|---|
@@ -12,7 +18,7 @@
 | Headings typeface | [Font Name] | `--font-display` |
 | Body typeface | [Font Name] | `--font-body` |
 
-*(Extend this table as you add tokens below — every token should map back to something named in the core doc.)*
+*(Extend this table as you add inherited-identity tokens below. Platform-owned tokens are defined in Section 1 without a row here.)*
 
 ---
 
@@ -35,25 +41,49 @@ Values only mean something once they're named variables developers and designers
 ```
 
 ### 1.2 Theme Variants
-Define each theme as a full override of the token set above — not a partial diff.
+Define each theme as a full override of the token set above — not a partial diff. Every token declared in Section 1.1 must appear in each theme's token table below, including the optional additional theme when one is defined.
 
 **Light (default)**
 | Token | Value |
 |---|---|
+| `--color-brand-primary` | `#[HEX]` |
+| `--color-brand-secondary` | `#[HEX]` |
+| `--color-text-primary` | `#[HEX]` |
+| `--color-text-secondary` | `#[HEX]` |
 | `--color-bg` | `#[HEX]` |
 | `--color-surface` | `#[HEX]` |
-| `--color-text-primary` | `#[HEX]` |
+| `--color-border` | `#[HEX]` |
+| `--color-success` | `#[HEX]` |
+| `--color-warning` | `#[HEX]` |
+| `--color-error` | `#[HEX]` |
 
 **Dark**
 | Token | Value |
 |---|---|
+| `--color-brand-primary` | `#[HEX]` |
+| `--color-brand-secondary` | `#[HEX]` |
+| `--color-text-primary` | `#[HEX]` |
+| `--color-text-secondary` | `#[HEX]` |
 | `--color-bg` | `#[HEX]` |
 | `--color-surface` | `#[HEX]` |
-| `--color-text-primary` | `#[HEX]` |
+| `--color-border` | `#[HEX]` |
+| `--color-success` | `#[HEX]` |
+| `--color-warning` | `#[HEX]` |
+| `--color-error` | `#[HEX]` |
 
 **[Additional theme, if any — e.g. high-contrast]**
 | Token | Value |
 |---|---|
+| `--color-brand-primary` | `#[HEX]` |
+| `--color-brand-secondary` | `#[HEX]` |
+| `--color-text-primary` | `#[HEX]` |
+| `--color-text-secondary` | `#[HEX]` |
+| `--color-bg` | `#[HEX]` |
+| `--color-surface` | `#[HEX]` |
+| `--color-border` | `#[HEX]` |
+| `--color-success` | `#[HEX]` |
+| `--color-warning` | `#[HEX]` |
+| `--color-error` | `#[HEX]` |
 
 ---
 
@@ -152,6 +182,6 @@ Base unit: **[8px]**.
 Implements the core doc's accessibility principles as concrete rules:
 
 - **Contrast:** [e.g. 4.5:1 minimum for body text, 3:1 for large text — per WCAG 2.1 AA]
-- **Touch targets:** [e.g. minimum 44x44px]
+- **Touch targets:** [e.g. minimum 44x44px — an enhanced design target per `references/accessibility-standards.md`, not a WCAG 2.1 AA requirement]
 - **Focus states:** [e.g. visible focus ring on all interactive elements, never removed via CSS]
 - **Motion:** see Section 5 — reduced-motion fallback required

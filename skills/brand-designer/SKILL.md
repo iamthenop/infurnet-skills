@@ -21,6 +21,18 @@ Every brand has two layers, and conflating them is the most common failure mode 
 
 Never let a platform-specific detail (a px value, a CSS variable, a CMYK conversion) leak into the core doc. If a rule would need to be re-stated differently for print vs. web vs. social, it's platform-level.
 
+**Ownership contract:** core identity values are defined by the core brand document and inherited by platform documents. Platform documents may define implementation values for layout, spacing, component states, and surface semantics without creating corresponding core brand values. Platform documents must not redefine existing core identity values.
+
+A spacing token, a state color, or a breakpoint is platform-owned. It needs no matching row in the core doc.
+
+## Implementation authority
+
+Brand documentation defines identity and platform specifications. It does not override applicable implementation standards or grant permission to change implementation architecture. Where `web-standard` applies, that standard governs the web shell, CSS ownership, asset handling, runtime dependencies, and accessibility.
+
+Conflicting requirements must be reported rather than silently overridden.
+
+The Step 1 note on real design tokens is a writing instruction. It does not permit editing code.
+
 ## Step 1: Figure out scale before writing anything
 
 Ask (or infer from context — an existing repo, a product with a design system, a solo creator's one-pager) which situation applies:

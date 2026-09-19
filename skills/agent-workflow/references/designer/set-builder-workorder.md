@@ -108,8 +108,3 @@ applicable handoff in the master workflow.
 ## Output
 
 One completed `builder-workorder` using the authoritative template.
-
-The workorder communicates the commissioned outcome, its authority,
-and its assignment-specific constraints. Builder's receiving
-procedure determines whether the initial response is a
-`builder-plan` or a `deviation-request`.

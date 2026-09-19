@@ -1,6 +1,6 @@
 ---
 thread-id: "<workorder identifier>"
-msg-type: "<builder-workorder|tester-workorder>"
+msg-type: "builder-workorder"
 agent: "<drafting agent>"
 metadata:
   branch-assignment: "<reference>"

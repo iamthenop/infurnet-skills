@@ -62,6 +62,7 @@ assigned profile and the accepted work.
 | Deliverable | Governs |
 | --- | --- |
 | [`api-docs`](skills/api-docs/SKILL.md) | API document and operation shape |
+| [`brand-designer`](skills/brand-designer/SKILL.md) | Brand identity and platform-specific application documentation |
 | [`builder-report`](skills/builder-report/SKILL.md) | Builder execution account and pull-request body |
 | [`design-docs`](skills/design-docs/SKILL.md) | Design file taxonomy, writing rules, diagram conventions |
 | [`plan-review`](skills/plan-review/SKILL.md) | Work plan verdict before execution begins |

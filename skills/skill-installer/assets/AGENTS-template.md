@@ -1,8 +1,32 @@
 <!-- BEGIN infurnet-skills -->
 ## Installed skills
 
+This section is installer-owned. The consuming repository owns all content
+outside these markers. Replacing this section requires an authorized installer
+operation.
+
+### Adoption and installation
+
+`.agents/adoption.yml` declares the intended skill inventory and pinned source
+revision.
+
+The installer resolves the declared skills and their dependencies, then
+materializes the resulting inventory under `.agents/skills/`.
+
+Acquired vendor repositories and the installation manifest are generated,
+reconstructable state. They do not replace the adoption declaration or establish
+authority.
+
+Client discovery exposes installed skills. It does not select a profile,
+authorize work, or determine which skills are applicable.
+
+Installation does not grant authority. Repository governance assigns profiles
+and authorizes work; adopted skills constrain execution within that authority.
+
 Project-specific bindings used by installed skills are declared in root
 `PROJECT.md`.
+
+### Skill loading
 
 A consuming session loads skills in one authority-preserving order:
 
@@ -24,6 +48,8 @@ Applicable standards may come from:
 
 Standards must not be inferred from file paths, directory names, surfaces,
 available tools, or agent judgment.
+
+### Profile boundary
 
 An agent loads exactly one profile during a session. The assignment is
 immutable for that session. Task wording, native description triggering,

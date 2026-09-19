@@ -288,10 +288,12 @@ def resolve_installation_closure(direct_names, source_root):
         if name in closure:
             return
         closure.add(name)
+        require_bundle(name, source_root, source_root / "skills" / name)
         skill_md = source_root / "skills" / name / "SKILL.md"
         if not skill_md.is_file():
             return
         for dep in read_skill_dependencies(skill_md):
+            require_bundle(dep, source_root, source_root / "skills" / dep)
             dep_md = source_root / "skills" / dep / "SKILL.md"
             if not dep_md.is_file():
                 sys.exit(f"{skill_md}: skill-dependency names missing skill {dep!r}")
@@ -350,6 +352,7 @@ def exposed_name_for(source, path):
 def discover_external_requirements(desired_names, source_root):
     requirements = []
     for name in sorted(desired_names):
+        require_bundle(name, source_root, source_root / "skills" / name)
         skill_md = source_root / "skills" / name / "SKILL.md"
         if not skill_md.is_file():
             continue
@@ -521,6 +524,7 @@ def read_upstream_name(skill_md):
 
 
 def resolve_upstream_skill(checkout, path, exposed_name):
+    require_bundle(exposed_name, checkout, checkout / path)
     base = (checkout / path).resolve() if path != "." else checkout.resolve()
     try:
         base.relative_to(checkout.resolve())
@@ -714,10 +718,51 @@ def categorize_names(desired, owned, skills_root):
 
 
 def missing_skill_sources(names, source_root):
+    for name in names:
+        require_bundle(name, source_root, source_root / "skills" / name)
     return sorted(
         name for name in names
         if not (source_root / "skills" / name / "SKILL.md").is_file()
     )
+
+
+def check_bundle(checkout, bundle):
+    """Non-mutating: a diagnostic for every source symlink that makes the
+    skill bundle unsafe to read, inventory, or copy; [] when it is safe.
+    `checkout` is the acquired source root and the only trusted boundary: no
+    component of the path from it to `bundle`, and no entry inside `bundle`,
+    may be a symlink — file, directory, dangling, internal, or escaping.
+    Nothing is followed or resolved. A bundle that does not exist has no
+    symlink problem; callers report it missing. A directory that cannot be
+    read is reported, never skipped."""
+    try:
+        relative = bundle.relative_to(checkout)
+    except ValueError:
+        relative = None
+    if relative is None or ".." in relative.parts:
+        return [f"{bundle}: is not beneath the source checkout {checkout}"]
+    detail = unsafe_symlink_detail(checkout, bundle)
+    if detail is not None:
+        return [detail]
+    if not bundle.is_dir():
+        return []
+    problems = []
+    for dirpath, dirnames, filenames in os.walk(
+            bundle, onerror=lambda e: problems.append(f"{e.filename}: {e.strerror}")):
+        for name in dirnames + filenames:
+            entry = Path(dirpath, name)
+            if entry.is_symlink():
+                problems.append(f"{entry}: symlink inside a skill bundle")
+    return sorted(problems)
+
+
+def require_bundle(name, checkout, bundle):
+    """Stops, naming the skill and every offending entry, unless
+    check_bundle() finds the bundle safe. Every read of a selected skill's
+    source content, and every copy of it, is preceded by this."""
+    problems = check_bundle(checkout, bundle)
+    if problems:
+        sys.exit(f"{name}: unsafe skill bundle: " + "; ".join(problems))
 
 
 def tree_hash(directory):

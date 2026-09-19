@@ -4,7 +4,10 @@ consuming repository.
 
 Run with `--root <consumer-root>` to target the consuming repository
 explicitly; the installer's own physical location and the caller's working
-directory never determine the target.
+directory never determine the target. The root must be an existing directory
+that is the root of a Git working tree; every mode, `--verify` included,
+checks this first and stops with a nonzero result before inspecting,
+staging, or writing anything.
 
 Primary modes, mutually exclusive:
 
@@ -34,6 +37,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -184,6 +189,31 @@ def apply_first_line_document(consumer_root, doc, plan):
 
 def client_skills_root_for(consumer_root, client_name):
     return consumer_root.joinpath(*check_skills.CLIENT_SKILLS_ROOT[client_name])
+
+
+# --- consumer root ---------------------------------------------------------
+
+
+def root_preflight(consumer_root):
+    """Stops unless consumer_root is an existing directory that is the root
+    of a Git working tree. A subdirectory of one, a bare repository, and a
+    repository's own .git directory do not qualify."""
+    if not consumer_root.exists():
+        sys.exit(f"consumer root does not exist: {consumer_root}")
+    if not consumer_root.is_dir():
+        sys.exit(f"consumer root is not a directory: {consumer_root}")
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(consumer_root), "rev-parse", "--is-inside-work-tree",
+             "--show-cdup"],
+            capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("git executable not found")
+    inside, _, cdup = proc.stdout.partition("\n")
+    if proc.returncode != 0 or inside != "true":
+        sys.exit(f"consumer root does not resolve as a Git working tree: {consumer_root}")
+    if cdup.strip():
+        sys.exit(f"consumer root is not the root of its Git working tree: {consumer_root}")
 
 
 # --- containment: generated-state and staging roots -----------------------
@@ -692,22 +722,14 @@ def print_findings(findings):
         print(f"  {f['severity'].upper():8} [{f['category']}] {f['subject']}: {f['detail']}")
 
 
-# --- mutation primitives ---------------------------------------------
-
-
-def fetch_tree(repo_url, sha, sibling_of):
-    tmp = Path(tempfile.mkdtemp(dir=sibling_of.parent, prefix=f".{sibling_of.name}.fetch-"))
-    git_ops.acquire_tree(repo_url, sha, tmp)
-    return tmp
-
-
 # --- transaction staging: .agents/.tmp/<transaction-id>/ ------------------
 #
-# One disposable staging root per install.py run, used only to inspect a
-# not-yet-locally-present root revision and construct the complete
-# mutation plan before confirmation. Nothing here is installed state: nothing
-# is promoted until after confirmation, and cleanup removes only this run's
-# own transaction directory, never a broader .agents/.tmp/ sweep.
+# One disposable staging root per install.py run, used only to inspect each
+# not-yet-locally-present root or external repository revision, validate the
+# skill bundles it holds, and construct the complete mutation plan before
+# confirmation. Nothing here is installed state: nothing is promoted until
+# after confirmation, and cleanup removes only this run's own transaction
+# directory, never a broader .agents/.tmp/ sweep.
 
 
 def ensure_transaction_dir(consumer_root, txn):
@@ -788,11 +810,80 @@ def atomic_replace_dir(new_dir, dest, keep_backup=False):
     return backup if (had_dest and keep_backup) else None
 
 
-def materialize_from(name, source_dir, skills_root):
+def open_source(path, real):
+    """Opens the regular file at `path` for reading, refusing a symlink at
+    its final component, and confirms the open file is the one at `real`,
+    the path's own location in the validated tree. An entry or directory
+    swapped for a symlink while a copy is under way is refused, never
+    followed."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        sys.exit(f"{path}: cannot be opened for copying: {e.strerror}")
+    src = os.fdopen(fd, "rb")
+    try:
+        opened = os.fstat(fd)
+        safe = (stat.S_ISREG(opened.st_mode) and Path(os.path.realpath(path)) == real
+                and os.path.samestat(opened, os.stat(real)))
+    except OSError:
+        safe = False
+    if not safe:
+        src.close()
+        sys.exit(f"{path}: changed while being copied; refusing to follow it")
+    return src
+
+
+def copy_file(src, dest, real):
+    with open_source(src, real) as source, open(dest, "xb") as out:
+        shutil.copyfileobj(source, out)
+        opened = os.fstat(source.fileno())
+    os.chmod(dest, stat.S_IMODE(opened.st_mode))
+    os.utime(dest, ns=(opened.st_atime_ns, opened.st_mtime_ns))
+
+
+def copy_bundle(src, dest, real):
+    """Copies the bundle directory `src` to the new directory `dest`, entry
+    by entry, regular files and directories only. Each entry is examined at
+    the moment it is copied, never assumed unchanged since validation: a
+    symlink, or anything else that is not a regular file or directory,
+    stops the copy, and so does a directory whose real location is no
+    longer `real`, its place in the validated tree."""
+    mode = os.lstat(src).st_mode
+    if not stat.S_ISDIR(mode):
+        sys.exit(f"{src}: is not a directory; refusing to copy")
+    dest.mkdir()
+    with os.scandir(src) as entries:
+        names = sorted(e.name for e in entries)
+    if Path(os.path.realpath(src)) != real:
+        sys.exit(f"{src}: changed while being copied; refusing to follow it")
+    for name in names:
+        path = src / name
+        kind = os.lstat(path).st_mode
+        if stat.S_ISDIR(kind):
+            copy_bundle(path, dest / name, real / name)
+        elif stat.S_ISREG(kind):
+            copy_file(path, dest / name, real / name)
+        elif stat.S_ISLNK(kind):
+            sys.exit(f"{path}: symlink inside a skill bundle; refusing to copy")
+        else:
+            sys.exit(f"{path}: not a regular file or directory; refusing to copy")
+    os.chmod(dest, stat.S_IMODE(mode))
+
+
+def materialize_from(name, checkout, source_dir, skills_root):
+    """Copies the skill bundle at `source_dir`, inside the acquired source
+    checkout `checkout`, to skills_root/<name>. The whole path from the
+    checkout to the bundle and everything in it is validated immediately
+    before the copy and judged again entry by entry during it; an unsafe
+    source leaves skills_root untouched. `real` is taken before the
+    validation so a bundle swapped for a symlink in between is refused
+    rather than adopted as the location to copy."""
+    real = Path(os.path.realpath(source_dir))
+    check_skills.require_bundle(name, checkout, source_dir)
     skills_root.mkdir(parents=True, exist_ok=True)
     tmp = skills_root / f".{name}.tmp-{uuid.uuid4().hex[:12]}"
-    shutil.copytree(source_dir, tmp)
     try:
+        copy_bundle(source_dir, tmp, real)
         atomic_replace_dir(tmp, skills_root / name)
     finally:
         if tmp.exists():
@@ -800,7 +891,7 @@ def materialize_from(name, source_dir, skills_root):
 
 
 def materialize_skill(name, source_root, skills_root):
-    materialize_from(name, source_root / "skills" / name, skills_root)
+    materialize_from(name, source_root, source_root / "skills" / name, skills_root)
 
 
 def remove_skill(name, skills_root):
@@ -841,10 +932,17 @@ def classify_external_action(vendor_root, rkey, info, proven_repo_keys):
 
 
 def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, temp_registry,
-                              proven_repo_keys):
+                              proven_repo_keys, consumer_root, txn, cache):
     """Acquires or reuses each external repository names_needed requires,
-    per classify_external_action()'s decision for each."""
-    resolved, checkouts, findings = {}, {}, {}
+    per classify_external_action()'s decision for each. An acquired
+    repository is the tree already staged in this run's transaction
+    directory (see check_sources()) — staged here only if planning did not —
+    renamed beside its destination for promotion, never downloaded a second
+    time.
+
+    Returns ({name: bundle directory, symlinks left unresolved so the
+    bundle-safety check sees them}, {repo_key: checkout}, {name: finding})."""
+    bundles, checkouts, findings = {}, {}, {}
     for name in sorted(names_needed):
         prov = provenance[name]
         rkey = prov["repo_key"]
@@ -858,8 +956,12 @@ def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, 
             if action == "reuse":
                 checkouts[rkey] = dest
             else:
+                stage_candidate(consumer_root, txn, cache, info["source"], info["commit"])
+                staged = take_staged_candidate(cache, info["source"], info["commit"])
+                require_safe_path(consumer_root, staged)
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = fetch_tree(info["source"], info["commit"], dest)
+                tmp = dest.parent / f".{dest.name}.promote-{uuid.uuid4().hex[:12]}"
+                staged.rename(tmp)
                 temp_registry.append(tmp)
                 checkouts[rkey] = tmp
         skill_dir, reason = check_skills.resolve_upstream_skill(
@@ -867,8 +969,8 @@ def prepare_external_installs(ext_repos, provenance, names_needed, vendor_root, 
         if skill_dir is None:
             findings[name] = reason
         else:
-            resolved[name] = skill_dir
-    return resolved, checkouts, findings
+            bundles[name] = checkouts[rkey] / prov["source"]
+    return bundles, checkouts, findings
 
 
 def generate_manifest(adoption, root_key_, materialized, provenance, ext_repos_final, skills_root):
@@ -921,9 +1023,10 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
 
     ext_names_needed = [n for n in to_materialize
                         if result["provenance"][n]["repo_key"] != root_key_]
-    resolved_dirs, ext_checkouts, upstream_findings = prepare_external_installs(
+    bundles, ext_checkouts, upstream_findings = prepare_external_installs(
         result["external_repos"], result["provenance"], ext_names_needed,
-        vendor_root, temp_registry, set(result["proven_external_repos"]))
+        vendor_root, temp_registry, set(result["proven_external_repos"]),
+        consumer_root, txn, cache)
     if upstream_findings:
         sys.exit("external upstream validation failed during install: "
                  + "; ".join(f"{n}: {r}" for n, r in sorted(upstream_findings.items())))
@@ -958,7 +1061,7 @@ def reconcile(consumer_root, adoption, result, to_materialize, to_remove, client
         if prov["repo_key"] == root_key_:
             materialize_skill(name, effective_vendor, skills_root)
         else:
-            materialize_from(name, resolved_dirs[name], skills_root)
+            materialize_from(name, ext_checkouts[prov["repo_key"]], bundles[name], skills_root)
     for name in to_remove:
         remove_skill(name, skills_root)
 
@@ -1109,6 +1212,46 @@ def mutation_targets(result, repair):
     to_materialize = sorted(set(result["added"]) | stale_names | damaged_names)
     to_remove = sorted(result["removed"])
     return to_materialize, to_remove
+
+
+def planned_checkout(consumer_root, adoption, result, rkey, txn, cache):
+    """The tree reconcile() will copy repository `rkey`'s skills from: its
+    installed checkout when that is reused, otherwise the candidate staged
+    for promotion. None when the plan cannot use the repository at all (a
+    blocking external destination, reported elsewhere)."""
+    vendor_root = consumer_root / ".agents" / "vendor"
+    if rkey == check_skills.repo_key(adoption["repo"]):
+        vendor = safe_vendor_path(vendor_root, rkey)
+        if root_vendor_state(vendor, adoption)["action"] == "reuse":
+            return vendor
+        return stage_candidate(consumer_root, txn, cache, adoption["repo"], adoption["pin"])
+    info = result["external_repos"][rkey]
+    action, _ = classify_external_action(vendor_root, rkey, info,
+                                         set(result["proven_external_repos"]))
+    if action == "blocking":
+        return None
+    if action == "reuse":
+        return safe_vendor_path(vendor_root, rkey)
+    return stage_candidate(consumer_root, txn, cache, info["source"], info["commit"])
+
+
+def check_sources(consumer_root, adoption, result, names, txn, cache):
+    """Stops on the first unsafe bundle among `names` — every skill this
+    transaction will copy — before anything durable is written. Each bundle
+    is inspected where it will be copied from (see planned_checkout()),
+    with that checkout root as the boundary: a symlink on the path to the
+    bundle or inside it stops the run. Trees staged here are
+    transaction-owned and disposable; they are the same trees reconcile()
+    promotes and copies, not a second acquisition."""
+    checkouts = {}
+    for name in names:
+        prov = result["provenance"][name]
+        rkey = prov["repo_key"]
+        if rkey not in checkouts:
+            checkouts[rkey] = planned_checkout(consumer_root, adoption, result, rkey,
+                                               txn, cache)
+        if checkouts[rkey] is not None:
+            check_skills.require_bundle(name, checkouts[rkey], checkouts[rkey] / prov["source"])
 
 
 def check_client_collision(consumer_root, desired_names, client_skills_root):
@@ -1322,6 +1465,9 @@ def mutate(args, consumer_root, clients, adoption, result, mode, txn, cache, ver
     to_materialize, to_remove = mutation_targets(result, repair)
     to_materialize = sorted(set(to_materialize)
                             | refresh_names_for_vendor_change(consumer_root, adoption, result))
+    # Every bundle this transaction will copy is judged before the plan is
+    # shown, before any prompt, and before anything durable is written.
+    check_sources(consumer_root, adoption, result, to_materialize, txn, cache)
     target_inventory = set(result["unchanged"]) | set(result["added"])
 
     # Client collisions, capability problems, and Claude governance staging
@@ -1628,6 +1774,7 @@ def run_update(args, consumer_root, clients, classification, txn, cache):
 def main():
     args = parse_args(sys.argv[1:])
     consumer_root = args.root.resolve()
+    root_preflight(consumer_root)
     clients = list(dict.fromkeys(args.client))
 
     if args.verify:

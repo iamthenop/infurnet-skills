@@ -155,6 +155,7 @@ def fetch_temp_tree(repo_url, sha, tmp_parent=None):
 def differing_candidate_updater(tree):
     """The candidate tree's own install.py, when its bytes differ from the
     currently installed one — informational only."""
+    check_skills.require_bundle("skill-installer", tree, tree / "skills" / "skill-installer")
     candidate_path = tree / "skills" / "skill-installer" / "scripts" / "install.py"
     installed_path = SCRIPTS_DIR / "install.py"
     if not candidate_path.is_file() or not installed_path.is_file():
@@ -167,32 +168,28 @@ def differing_candidate_updater(tree):
 def collect_governed(tree):
     """{relative_path: bytes} for every regular file within a skills/<name>/
     bundle — SKILL.md, references, scripts, assets, and anything else, at
-    any nesting depth. A directory symlink inside a bundle is rejected
-    outright; a file symlink is included only when its resolved target
-    stays inside that same bundle. Comparison elsewhere is byte-based, so a
-    binary asset is never decoded as text here."""
+    any nesting depth. `tree` is the acquired checkout root. Nothing under
+    it is listed or read until the path to skills/ passes, and every bundle
+    that check_skills.check_bundle() reports unsafe — a symlink anywhere on
+    its path or inside it — stops the inventory outright. Comparison
+    elsewhere is byte-based, so a binary asset is never decoded as text
+    here."""
     files = {}
     skills_dir = tree / "skills"
+    detail = check_skills.unsafe_symlink_detail(tree, skills_dir)
+    if detail is not None:
+        sys.exit(detail)
     if not skills_dir.is_dir():
         return files
-    for bundle in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
-        if bundle.is_symlink():
-            sys.exit(f"{bundle}: symlink skill bundle root; refusing to inventory")
-        bundle_resolved = bundle.resolve()
+    for bundle in sorted(p for p in skills_dir.iterdir() if p.is_symlink() or p.is_dir()):
+        problems = check_skills.check_bundle(tree, bundle)
+        if problems:
+            sys.exit(f"{problems[0]}; refusing to inventory")
         for dirpath, dirnames, filenames in os.walk(bundle, followlinks=False):
             dirnames.sort()
             current_dir = Path(dirpath)
-            for dirname in dirnames:
-                if (current_dir / dirname).is_symlink():
-                    sys.exit(f"{current_dir / dirname}: symlink directory inside a "
-                             "skill bundle; refusing to inventory")
             for filename in sorted(filenames):
                 p = current_dir / filename
-                if p.is_symlink():
-                    target = p.resolve()
-                    if not target.is_relative_to(bundle_resolved):
-                        sys.exit(f"{p}: symlink escapes its skill bundle; refusing "
-                                 "to inventory")
                 files[str(p.relative_to(tree))] = p.read_bytes()
     return files
 

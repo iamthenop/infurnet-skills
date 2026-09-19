@@ -17,10 +17,10 @@ them: `approved compute module`, `strata in force`, and
 The bindings file is the one home for repository-specific values. Standards
 refer to those declarations instead of copying them.
 
-One bindings file per repository, at the repository root, named in the
-repository's governance entry point. It is mutable by design; that is why
-it exists. Mutability is not informality: every consumer of a binding
-breaks silently when the binding moves.
+One bindings file per repository, at the repository root, named `PROJECT.md`.
+It is mutable by design; that is why it exists. Mutability is not
+informality: every consumer of a binding breaks silently when the binding
+moves.
 
 ## What is a binding
 

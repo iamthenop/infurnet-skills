@@ -1,7 +1,9 @@
 ---
-thread-id: "<workorder identifier>"
+thread-id: "<unique message identifier>"
 msg-type: deviation-request
 agent: "<drafting agent>"
+metadata:
+  workorder: "<current builder-workorder reference>"
 ---
 
 # Deviation request — <title>

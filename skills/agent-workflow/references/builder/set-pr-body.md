@@ -29,6 +29,13 @@ and pull request.
 
 Resolve the workorders and reports associated with the milestone.
 
+Identify the current Builder workorder authorizing the
+PR-body update and establish its mutation boundary.
+
+When incorporating Tester evidence after Designer's review,
+resolve the applicable `R`-iteration workorder and human
+decision reference.
+
 ### 2. Establish implementation state
 
 Inspect the current PR state and determine the delivered outcomes.
@@ -104,6 +111,9 @@ Confirm that:
 Correct discrepancies before publication.
 
 ### 7. Publish the PR body
+
+Confirm that the applicable Builder workorder authorizes
+the PR-body mutation before publishing the update.
 
 Create or update the PR body using the completed template.
 

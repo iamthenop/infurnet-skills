@@ -3,7 +3,7 @@ thread-id: "DC-<issue_number>-<sequence>"
 msg-type: design-change
 agent: "<drafting agent>"
 metadata:
-  ref: "<issue reference>"
+  issue: "<issue reference>"
 ---
 
 # Design change — <title>

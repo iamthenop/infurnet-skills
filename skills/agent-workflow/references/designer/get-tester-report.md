@@ -77,27 +77,37 @@ outside Designer's existing authority.
 Record authorized design changes through their applicable
 procedure before commissioning affected work.
 
-### 5. Select the next workflow path
+### 5. Review with the human
 
-When the commissioned validation is satisfied and its
-evidence remains applicable to the current implementation,
-proceed through the completion path in the master workflow.
+Present the validation conclusion, supporting evidence,
+limitations, and applicability to the current implementation.
 
-When implementation correction is required, establish the
-correction scope and commission another Builder workorder
-iteration through its applicable procedure.
+Identify the bounded actions available under the current
+specification and authority.
 
-When validation evidence is incomplete, determine the
-remaining validation scope and issue a further Tester
-workorder where appropriate.
+Obtain the human's decision before commissioning subsequent
+Builder work or presenting the milestone for merge.
 
-When the report contains defects that prevent reliable
-interpretation, identify the reporting corrections required
+When Builder action is authorized, establish its exact scope
+and issue a `builder-workorder` with the `R` iteration code
+through the applicable procedure.
+
+When implementation correction is required, commission the
+correction before further validation of the affected work.
+
+When validation evidence is incomplete, establish the remaining
+validation scope and issue another Tester workorder when
+authorized.
+
+When the report contains defects preventing reliable
+interpretation, obtain the required reporting correction
 before relying on its conclusion.
 
-When adjacent findings require additional work, obtain
-their disposition through the applicable authority without
-silently expanding the current assignment.
+When adjacent findings require additional work, obtain their
+separate disposition without expanding the current assignment.
+
+Follow the completion path in the master workflow when the
+commissioned obligations are satisfied.
 
 ### 6. Preserve the evidence record
 

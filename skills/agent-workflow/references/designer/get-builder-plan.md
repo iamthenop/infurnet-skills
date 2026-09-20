@@ -83,8 +83,11 @@ The plan exposes an ambiguous assignment, missing
 authority, conflicting requirement, or unresolved
 design decision.
 
-Identify the workorder defect and obtain any required
-human decision before commissioning revised work.
+Identify the workorder defect and any decision required
+to resolve it.
+
+Pass the findings to the `set-plan-feedback` procedure,
+which owns human consultation before feedback is issued.
 
 ### 5. Issue the review
 

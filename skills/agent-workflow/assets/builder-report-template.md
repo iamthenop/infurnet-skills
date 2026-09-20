@@ -1,5 +1,5 @@
 ---
-thread-id: "<workorder identifier>"
+thread-id: "<unique message identifier>"
 msg-type: builder-report
 agent: "<drafting agent>"
 metadata:

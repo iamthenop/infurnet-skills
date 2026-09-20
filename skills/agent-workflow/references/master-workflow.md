@@ -12,9 +12,34 @@ The workflow defines the order in which Designer, Builder, and Tester exchange c
 
 The human can intervene at any point. Routine artifact handoffs do not require the human to act as an intermediary.
 
+## Message identity
+
+The initial workorder identifies its collaboration cycle.
+
+Each subsequent message within an iteration receives a unique
+`thread-id` using the next unused sub-iteration suffix.
+
+A revised workorder within the same iteration also receives
+a unique message identifier.
+
+A new correction iteration receives a new workorder identifier
+with the applicable iteration code.
+
+Message metadata references the exact workorder or plan to
+which the message applies. A reference does not grant authority.
+
+Design-change records use their independent issue-local `DC-`
+identifier sequence.
+
 ## 2. Happy path
 
-Designer commissions the milestone. Builder proposes execution, receives plan feedback, and reports completed work. Designer commissions validation. Tester returns evidence. Builder maintains the PR body, and the human retains merge authority.
+Designer commissions the milestone. Builder proposes execution,
+receives plan feedback, and reports completed work. Designer
+commissions validation, receives Tester's evidence, and reviews
+the result with the human.
+
+Any subsequent Builder action requires a new Builder workorder.
+The human retains merge authority.
 
 ```mermaid
 sequenceDiagram
@@ -26,7 +51,6 @@ sequenceDiagram
     participant T as Tester
 
     Note over H,T: Human may intervene at any point
-
     Note over D: Issue body defines current scope and planned PR
 
     D->>B: builder-workorder
@@ -36,16 +60,39 @@ sequenceDiagram
     Note over B: Execute authorized work through milestone PR
 
     B-->>D: builder-report — PR comment
-    Note over B: Update PR body and reference Builder report
+    Note over B: Maintain PR body within existing authorization
 
     D->>T: tester-workorder
-    Note over D,T: Workorder identifies revision and relevant Builder reports
-
     T-->>D: tester-report — PR comment
-    Note over B: Update PR body with validation evidence
 
-    Note over H: Human reviews and authorizes milestone PR merge into epic
+    D->>H: Present validation evidence and PR state
+    H-->>D: Decision
+
+    Note over D: Establish authorized follow-up scope
+
+    D->>B: builder-workorder — R iteration
+    B-->>D: builder-plan
+    D->>B: plan-feedback — execute as written
+
+    Note over B: Perform only the authorized follow-up work
+
+    B-->>D: builder-report — PR comment
+    Note over B: Update PR body and reference Tester evidence
+
+    D->>H: Present current PR and completion evidence
+    H->>H: Authorize or withhold merge
+    Note over H: Human alone merges milestone PR into epic
 ```
+
+The R-iteration workorder must identify the specific follow-up
+authorized by the human.
+
+For a passing validation result, it may commission only PR-body
+reconciliation if that is the remaining Builder action.
+
+If the result requires implementation correction or further
+testing, use the applicable alternate path before reaching
+the merge decision.
 
 The arrows identify artifact handoffs and intended recipients. They do not prescribe how the artifacts are conveyed.
 
@@ -110,7 +157,7 @@ sequenceDiagram
     Note over B: Missing authority or feasibility blocker identified
 
     B-->>D: deviation-request
-    D->>H: Present request and alternatives
+    D->>H: Present request, evidence, and alternatives
     H-->>D: Decision
 
     alt Request approved
@@ -119,8 +166,12 @@ sequenceDiagram
         D->>B: plan-feedback
 
     else Request rejected
-        D->>B: plan-feedback — request rejected
-        Note over B: Continue only within existing authority
+        D-->>B: Reference to human rejection
+        Note over B: Original grant remains unchanged
+        opt Revised plan is feasible within existing authority
+            B-->>D: Revised builder-plan
+            D->>B: plan-feedback
+        end
 
     else Alternate approved
         D->>B: Updated builder-workorder — approved alternative
@@ -128,8 +179,10 @@ sequenceDiagram
         D->>B: plan-feedback
 
     else Workorder stopped
-        D->>B: Stop disposition
-        Note over D,B: No further execution under this workorder
+        D-->>B: Reference to human stop decision
+        opt Execution already occurred
+            B-->>D: builder-report — stopped work
+        end
     end
 ```
 
@@ -141,6 +194,23 @@ The four dispositions are mutually exclusive:
 | Request rejected | The original grant remains unchanged. Builder may continue only if the commissioned work remains feasible within it. |
 | Alternate approved | The approved alternative is incorporated into the workorder. The original request is not authorized. |
 | Workorder stopped | Execution ends. Builder reports any work already performed and its disposition. |
+
+Designer records the human decision and provides Builder with
+a reference to its authorizing source.
+
+That reference communicates an established human decision.
+It is not a new collaboration message type.
+
+Rejection leaves the original grant unchanged. Builder may
+resume under an already approved plan only while that plan
+remains feasible and authorized. A changed implementation
+requires a revised plan and normal plan review.
+
+If no acceptable implementation remains feasible, execution
+stays stopped pending further human disposition.
+
+A stop decision terminates execution under the workorder.
+Builder reports work already performed when applicable.
 
 Approval of a request or alternative must be recorded in the updated workorder before execution resumes.
 
@@ -156,27 +226,33 @@ A failed validation does not automatically authorize repairs. Designer uses the 
 sequenceDiagram
     autonumber
 
+    actor H as Human
     participant D as Designer
     participant B as Builder
     participant T as Tester
 
     T-->>D: tester-report — failure evidence
+    D->>H: Present failure evidence and correction scope
+    H-->>D: Decision
 
-    Note over D: Determine correction against existing authority
+    alt Correction authorized
+        D->>B: builder-workorder — R iteration
+        B-->>D: builder-plan
+        D->>B: plan-feedback — execute as written
 
-    D->>B: builder-workorder — correction iteration
-    B-->>D: builder-plan
-    D->>B: plan-feedback — execute as written
+        Note over B: Correct only the commissioned scope
 
-    Note over B: Execute correction on existing milestone branch
+        B-->>D: builder-report — correction evidence
+        Note over B: Maintain PR body within existing authorization
 
-    B-->>D: builder-report — correction evidence
-    Note over B: Update PR body
+        D->>T: tester-workorder — corrected revision
+        T-->>D: tester-report — new validation evidence
 
-    D->>T: tester-workorder — affected revision
-    T-->>D: tester-report — new validation evidence
+        Note over D: Return to human review of Tester evidence
 
-    Note over B: Update PR body with latest validation
+    else Correction not authorized
+        Note over D,B: No correction work commissioned
+    end
 ```
 
 The original Tester report remains unchanged. Subsequent reports identify the revision they evaluated.
@@ -211,7 +287,8 @@ sequenceDiagram
     opt Validation required
         D->>T: tester-workorder
         T-->>D: tester-report — PR comment
-        Note over B: Update PR body
+        Note over D: Review Tester evidence with human
+        Note over D: Follow validation or completion path
     end
 ```
 
@@ -270,7 +347,8 @@ The following conditions apply to the happy path and every alternate:
 
 | Document | Role |
 | --- | --- |
-| [`workorder-template.md`](../assets/workorder-template.md) | Commissioning contract for Builder and Tester |
+| [`builder-workorder-template.md`](../assets/builder-workorder-template.md) | Builder commissioning contract |
+| [`tester-workorder-template.md`](../assets/tester-workorder-template.md) | Tester commissioning contract |
 | [`builder-plan-template.md`](../assets/builder-plan-template.md) | Proposed execution |
 | [`plan-feedback-template.md`](../assets/plan-feedback-template.md) | Plan review disposition |
 | [`deviation-request-template.md`](../assets/deviation-request-template.md) | Request for additional authority |
@@ -280,7 +358,5 @@ The following conditions apply to the happy path and every alternate:
 | [`pr-body-template.md`](../assets/pr-body-template.md) | Current PR summary |
 | [`design-change-template.md`](../assets/design-change-template.md) | Issue design-change record |
 | [`review-comment-template.md`](../assets/review-comment-template.md) | Review finding or disposition |
-
-These paths are proposed destinations under the consolidated skill, not a claim that the files already exist.
 
 The master workflow owns sequencing. Each template owns its artifact content. `SKILL.md` directs agents to the relevant references without reproducing their rules.

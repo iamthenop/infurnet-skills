@@ -1,7 +1,9 @@
 ---
-thread-id: "<workorder identifier>"
+thread-id: "<unique message identifier>"
 msg-type: builder-plan
 agent: "<drafting agent>"
+metadata:
+  workorder: "<current builder-workorder reference>"
 ---
 
 # Builder plan — <title>

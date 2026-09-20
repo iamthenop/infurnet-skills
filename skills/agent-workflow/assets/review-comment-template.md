@@ -1,7 +1,11 @@
 ---
-thread-id: "<workorder identifier>"
+thread-id: "<unique message identifier>"
 msg-type: review-comment
 agent: "<drafting agent>"
+metadata:
+  workorder: "<applicable workorder reference>"
+  pull-request: "<PR reference>"
+  revision: "<reviewed commit SHA>"
 ---
 
 # Review finding — <title>

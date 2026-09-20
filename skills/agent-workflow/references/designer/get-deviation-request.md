@@ -65,11 +65,12 @@ commissioning procedure.
 
 #### Request rejected
 
-Record the human's rejection.
+Record the human's rejection and its authorizing source.
 
 The original workorder authority remains unchanged.
 
-Follow the rejection path in the master workflow.
+Provide Builder with the decision reference and follow the
+rejection path in the master workflow.
 
 #### Alternate approved
 
@@ -80,10 +81,12 @@ alternative.
 
 #### Workorder stopped
 
-Record the human's decision to stop the workorder.
+Record the human's stop decision and its authorizing source.
+
+Provide Builder with the decision reference.
 
 Follow the termination path in the master workflow, preserving
-the request and any evidence of work already performed.
+the request and evidence of work already performed.
 
 ### 5. Verify the disposition
 

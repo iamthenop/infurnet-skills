@@ -1,7 +1,10 @@
 ---
-thread-id: "<workorder identifier>"
+thread-id: "<unique message identifier>"
 msg-type: plan-feedback
 agent: "<drafting agent>"
+metadata:
+  workorder: "<current builder-workorder reference>"
+  builder-plan: "<exact reviewed plan reference>"
 ---
 
 # Plan feedback — <title>

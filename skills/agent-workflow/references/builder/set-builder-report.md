@@ -107,8 +107,13 @@ to the applicable handoff in the master workflow.
 
 Preserve the issued report as an individual execution record.
 
-Update the PR body through its separate procedure to reflect the
-current cumulative state and reference the report.
+When the current workorder authorizes PR-body maintenance,
+use its separate procedure to update the cumulative state
+and reference the report.
+
+A subsequent Tester result requires Designer's review and
+an applicable `R`-iteration Builder workorder before Builder
+performs additional PR-body work.
 
 ## Output
 

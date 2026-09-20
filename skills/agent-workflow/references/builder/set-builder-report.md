@@ -119,5 +119,9 @@ performs additional PR-body work.
 
 One completed `builder-report` posted as a PR comment.
 
-The PR body references the report and reflects the current
-milestone state.
+When the workorder authorizes PR-body maintenance, Builder
+updates the PR body through its separate procedure and
+references the report.
+
+Otherwise, PR-body maintenance remains outstanding until
+separately authorized.

@@ -1,5 +1,5 @@
 ---
-thread-id: "<message identifier>"
+thread-id: "<unique message identifier>"
 msg-type: tester-report
 agent: "<drafting agent>"
 metadata:

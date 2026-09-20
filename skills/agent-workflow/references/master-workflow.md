@@ -12,7 +12,7 @@ The workflow defines the order in which Designer, Builder, and Tester exchange c
 
 The human can intervene at any point. Routine artifact handoffs do not require the human to act as an intermediary.
 
-## Message identity
+### 1.1. Message identity
 
 The initial workorder identifies its collaboration cycle.
 
@@ -139,17 +139,28 @@ sequenceDiagram
         D->>B: plan-feedback — execute as written
 
     else Workorder defect
-        D->>B: plan-feedback — stop and redraft
+        Note over D: Identify the defect and required decision
 
         opt Missing decision requires human authority
             D->>H: Present unresolved decision
             H-->>D: Decision
         end
 
+        D->>B: plan-feedback — stop and redraft
         D->>B: revised builder-workorder
         B-->>D: revised builder-plan
     end
 ```
+
+When a required human decision is deferred, Designer retains
+the review and issues no plan feedback until the decision is
+available.
+
+When no additional decision is required, Designer may issue
+`Stop and redraft` directly.
+
+The revised workorder requires a new Builder plan and review
+before execution.
 
 Plan feedback cannot amend the workorder's grant. A revised workorder must preserve the applicable authorization and receive any additional decision it requires.
 
@@ -214,6 +225,12 @@ a reference to its authorizing source.
 That reference communicates an established human decision.
 It is not a new collaboration message type.
 
+Builder processes the decision reference using
+[`receive-deviation-disposition.md`](builder/receive-deviation-disposition.md).
+
+Approved requests and alternatives still require an updated
+workorder and reviewed plan before execution.
+
 Rejection leaves the original grant unchanged. Builder may
 resume under an already approved plan only while that plan
 remains feasible and authorized. A changed implementation
@@ -270,7 +287,15 @@ sequenceDiagram
 
 The original Tester report remains unchanged. Subsequent reports identify the revision they evaluated.
 
-If correction requires a new design or scope decision, the authorization-request path applies before the correction workorder is issued.
+When correction requires a new design or scope decision,
+Designer consults the human and follows the design-change path
+before issuing the affected workorder.
+
+The authorization-request path applies when Builder submits
+a deviation request concerning its existing assignment.
+
+Neither path permits implementation before the applicable
+authority is established.
 
 ### 3.4. PR review findings
 
@@ -280,30 +305,47 @@ Designer can record a finding against presented work. The review comment identif
 sequenceDiagram
     autonumber
 
+    actor H as Human
     participant D as Designer
     participant B as Builder
     participant T as Tester
 
     D-->>B: review-comment — PR review
 
-    Note over D: Establish correction scope and authority
+    Note over D: Establish findings and proposed correction scope
 
-    D->>B: builder-workorder — review iteration
-    B-->>D: builder-plan
-    D->>B: plan-feedback — execute as written
+    D->>H: Present findings and correction scope
+    H-->>D: Decision
 
-    Note over B: Apply authorized corrections
+    alt Correction authorized
+        D->>B: builder-workorder — R iteration
+        B-->>D: builder-plan
+        D->>B: plan-feedback — execute as written
 
-    B-->>D: builder-report — PR comment
-    Note over B: Update PR body
+        Note over B: Apply authorized corrections
 
-    opt Validation required
-        D->>T: tester-workorder
-        T-->>D: tester-report — PR comment
-        Note over D: Review Tester evidence with human
-        Note over D: Follow validation or completion path
+        B-->>D: builder-report — PR comment
+        Note over B: Maintain PR body within workorder authority
+
+        opt Validation required
+            D->>T: tester-workorder
+            T-->>D: tester-report — PR comment
+            D->>H: Present validation evidence
+            H-->>D: Decision
+            Note over D: Follow validation or completion path
+        end
+
+    else Correction not authorized
+        Note over D,B: No correction work commissioned
     end
 ```
+
+The human authorizes the correction scope, not Builder's
+internal implementation choices.
+
+Designer records the authorized scope in the R-iteration
+workorder. Builder selects implementation details within
+that workorder and the established contracts.
 
 The review comment remains the record of the finding. The correction workorder establishes the assignment.
 

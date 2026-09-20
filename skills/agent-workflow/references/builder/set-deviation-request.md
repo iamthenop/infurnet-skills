@@ -11,9 +11,9 @@ This procedure applies during planning and authorized execution.
 
 Read the following documents in full:
 
-- [`../master-workflow.md`](../master-workflow.md) — applicable
+- [`master-workflow.md`](../master-workflow.md) — applicable
   authorization-request path.
-- [`../../assets/deviation-request-template.md`](../../assets/deviation-request-template.md)
+- [`deviation-request-template.md`](../../assets/deviation-request-template.md)
   — authoritative message structure.
 
 Read the current workorder and relevant source artifacts.

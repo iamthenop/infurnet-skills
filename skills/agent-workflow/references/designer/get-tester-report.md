@@ -117,8 +117,11 @@ its stated revision and scope.
 Ensure that subsequent work and validation reference the
 relevant historical reports.
 
-Follow the master workflow for communicating the result
-needed to maintain the living PR body.
+Preserve the human's disposition and reference it in any
+subsequent Builder workorder.
+
+Do not send Tester evidence directly to Builder or treat
+the report as permission to update the PR body.
 
 ## Output
 

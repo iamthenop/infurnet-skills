@@ -34,6 +34,13 @@ For correction work, identify the applicable review findings,
 validation evidence, or authorized design decision. Establish the
 revision being corrected.
 
+Identify the human decision authorizing the correction scope.
+Use the R iteration code for authorized review and validation
+corrections.
+
+A finding or Tester report supplies evidence, not execution
+authority.
+
 Resolve missing design decisions with the human before commissioning
 work that depends on them.
 

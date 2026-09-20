@@ -11,7 +11,7 @@ Read the following documents in full:
 
 - [`master-workflow.md`](../master-workflow.md) — applicable
   handoff and alternate paths.
-- [`assets/builder-workorder-template.md`](../../assets/builder-workorder-template.md)
+- [`builder-workorder-template.md`](../../assets/builder-workorder-template.md)
   — incoming message contract.
 
 Read the governance documents, contracts, and source artifacts

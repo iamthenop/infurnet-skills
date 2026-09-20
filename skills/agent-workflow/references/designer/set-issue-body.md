@@ -12,9 +12,9 @@ and execution events retain their separate records.
 
 Read the following documents in full:
 
-- [`../master-workflow.md`](../master-workflow.md) — applicable
+- [`master-workflow.md`](../master-workflow.md) — applicable
   workflow and milestone relationships.
-- [`../../assets/issue-body-template.md`](../../assets/issue-body-template.md)
+- [`issue-body-template.md`](../../assets/issue-body-template.md)
   — authoritative document structure.
 
 Read applicable governance, design artifacts, human decisions,

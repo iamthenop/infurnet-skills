@@ -12,9 +12,9 @@ preserves the historical change and its authorizing decision.
 
 Read the following documents in full:
 
-- [`../master-workflow.md`](../master-workflow.md) — applicable
+- [`master-workflow.md`](../master-workflow.md) — applicable
   design-change path.
-- [`../../assets/design-change-template.md`](../../assets/design-change-template.md)
+- [`design-change-template.md`](../../assets/design-change-template.md)
   — authoritative message structure.
 
 Read the current issue specification, applicable design documents,

@@ -9,9 +9,9 @@ proceed through the applicable master workflow path.
 
 Read the following documents in full:
 
-- [`../master-workflow.md`](../master-workflow.md) — applicable
+- [`master-workflow.md`](../master-workflow.md) — applicable
   handoff and alternate paths.
-- [`../../assets/plan-feedback-template.md`](../../assets/plan-feedback-template.md)
+- [`plan-feedback-template.md`](../../assets/plan-feedback-template.md)
   — incoming message contract.
 
 Read the referenced Builder plan and workorder.

@@ -12,9 +12,9 @@ revises one following an authorized decision or recorded finding.
 
 Read the following documents in full:
 
-- [`../master-workflow.md`](../master-workflow.md) — applicable
+- [`master-workflow.md`](../master-workflow.md) — applicable
   handoff and alternate path.
-- [`../../assets/builder-workorder-template.md`](../../assets/builder-workorder-template.md)
+- [`builder-workorder-template.md`](../../assets/builder-workorder-template.md)
   — authoritative message structure.
 
 Read the applicable issue, design decisions, governance documents,

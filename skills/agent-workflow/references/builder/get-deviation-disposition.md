@@ -36,15 +36,17 @@ stop without assuming approval.
 
 ### 2. Apply the disposition
 
+For either approval disposition, follow the approval path
+in the master workflow.
+
+Receive the updated workorder through
+`get-builder-workorder.md` and prepare the revised plan
+for review.
+
 #### Request approved
 
-Do not execute the requested departure from the decision
-reference alone.
-
-Receive the updated workorder through the applicable
-workorder procedure.
-
-Prepare a revised Builder plan for review before execution.
+Apply the common approval procedure to the requested
+departure.
 
 #### Request rejected
 
@@ -64,13 +66,8 @@ execution stopped and report the remaining blocker.
 
 #### Alternate approved
 
-Do not execute the alternative from the decision reference
-alone.
-
-Receive the updated workorder incorporating the approved
+Apply the common approval procedure to the approved
 alternative.
-
-Prepare a revised Builder plan for review before execution.
 
 #### Workorder stopped
 

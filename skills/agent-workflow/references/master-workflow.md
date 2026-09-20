@@ -228,8 +228,9 @@ It is not a new collaboration message type.
 Builder processes the decision reference using
 [`get-deviation-disposition.md`](builder/get-deviation-disposition.md).
 
-Approved requests and alternatives still require an updated
-workorder and reviewed plan before execution.
+For an approved request or alternative, Designer records the
+decision in an updated workorder. Builder submits a revised
+plan and obtains plan feedback before execution resumes.
 
 Rejection leaves the original grant unchanged. Builder may
 resume under an already approved plan only while that plan
@@ -241,8 +242,6 @@ stays stopped pending further human disposition.
 
 A stop decision terminates execution under the workorder.
 Builder reports work already performed when applicable.
-
-Approval of a request or alternative must be recorded in the updated workorder before execution resumes.
 
 A rejected request does not implicitly require Builder to continue when the original work is infeasible.
 
@@ -367,10 +366,10 @@ sequenceDiagram
 
     Note over D: Update issue body to current design
 
-    D-->>B: design-change — issue comment
+    Note over D: Post design-change as issue comment
 
     alt Active workorder is affected
-        D->>B: Updated builder-workorder
+        D->>B: Updated builder-workorder — references design change
         B-->>D: Revised builder-plan
         D->>B: plan-feedback
 
@@ -378,6 +377,15 @@ sequenceDiagram
         Note over D,B: Existing workorders remain unchanged
     end
 ```
+
+The design-change comment records an issue-level decision.
+It is not a direct Builder assignment.
+
+When an active Builder assignment is affected, Designer
+references the design change in an updated workorder.
+
+Builder receives that workorder through the existing
+`get-builder-workorder.md` procedure.
 
 The design-change record uses its own `DC-<issue_number>-<sequence>` identifier. Its contract belongs to [`design-change-template.md`](../assets/design-change-template.md).
 

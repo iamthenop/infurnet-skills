@@ -81,9 +81,17 @@ When the reported work satisfies the commissioned obligations
 and provides sufficient evidence, proceed to the Tester
 commissioning path in the master workflow.
 
-When correction is required, establish the correction scope
-and issue a new Builder workorder iteration through its
-applicable procedure.
+When delivery correction is required, establish the findings
+and proposed correction scope.
+
+Present the correction scope and supporting evidence to the
+human and obtain the authorizing decision.
+
+When correction is authorized, issue an R-iteration Builder
+workorder through its applicable procedure.
+
+A Builder report or review finding supplies evidence, not
+authority to execute a correction.
 
 When the report identifies a decision requiring human authority,
 consult the human and record the decision through the

@@ -1,4 +1,4 @@
-# Receive deviation disposition
+# Get deviation disposition
 
 ## Purpose
 

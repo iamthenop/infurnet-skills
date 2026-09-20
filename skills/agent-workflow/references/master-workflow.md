@@ -226,7 +226,7 @@ That reference communicates an established human decision.
 It is not a new collaboration message type.
 
 Builder processes the decision reference using
-[`receive-deviation-disposition.md`](builder/receive-deviation-disposition.md).
+[`get-deviation-disposition.md`](builder/get-deviation-disposition.md).
 
 Approved requests and alternatives still require an updated
 workorder and reviewed plan before execution.

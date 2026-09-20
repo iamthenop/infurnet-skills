@@ -38,7 +38,14 @@ receives plan feedback, and reports completed work. Designer
 commissions validation, receives Tester's evidence, and reviews
 the result with the human.
 
-Any subsequent Builder action requires a new Builder workorder.
+After reviewing Tester evidence with the human, Designer
+commissions further Builder work only when authorized follow-up
+is required.
+
+That follow-up uses an R-iteration Builder workorder. When no
+Builder action is required, the workflow proceeds without
+creating another workorder.
+
 The human retains merge authority.
 
 ```mermaid
@@ -68,27 +75,33 @@ sequenceDiagram
     D->>H: Present validation evidence and PR state
     H-->>D: Decision
 
-    Note over D: Establish authorized follow-up scope
+    alt Builder follow-up authorized
+        Note over D: Establish authorized follow-up scope
 
-    D->>B: builder-workorder — R iteration
-    B-->>D: builder-plan
-    D->>B: plan-feedback — execute as written
+        D->>B: builder-workorder — R iteration
+        B-->>D: builder-plan
+        D->>B: plan-feedback — execute as written
 
-    Note over B: Perform only the authorized follow-up work
+        Note over B: Perform only authorized follow-up work
 
-    B-->>D: builder-report — PR comment
-    Note over B: Update PR body and reference Tester evidence
+        B-->>D: builder-report — PR comment
+        Note over B: Update PR body within workorder authority
+
+    else No Builder follow-up required
+        Note over D,H: No additional Builder work commissioned
+    end
 
     D->>H: Present current PR and completion evidence
     H->>H: Authorize or withhold merge
     Note over H: Human alone merges milestone PR into epic
 ```
 
-The R-iteration workorder must identify the specific follow-up
+An R-iteration workorder identifies the specific follow-up
 authorized by the human.
 
-For a passing validation result, it may commission only PR-body
-reconciliation if that is the remaining Builder action.
+A passing validation result does not automatically require
+another workorder. PR-body reconciliation is commissioned only
+when the current summary requires an authorized Builder update.
 
 If the result requires implementation correction or further
 testing, use the applicable alternate path before reaching

@@ -1,0 +1,31 @@
+# Editorial defaults. User overrides supersede only named keys.
+version: "0.1"
+salience:
+  min_score: 7.0
+  components:
+    semantic: 4.0
+    rhetorical: 3.0
+    character: 2.0
+    prosodic: 1.0
+phonetics:
+  min_similarity: 4.0
+  conventional_exception_min: 3.0
+  allow_conventional_exception: true
+  minimum_intelligibility: 3.0
+spacing:
+  min_word_gap: 25
+  min_full_sentences_between: 1
+  max_per_paragraph: 1
+density:
+  rolling_window_words: 100
+  max_per_window: 2
+  target_words_between: [60, 90] # guidance, never a quota
+repetition:
+  exact_form_gap_words: 300
+  sound_family_gap_words: 150
+  sound_family_mode: soft # soft or hard
+context:
+  serious_emotional_passages: suppress_by_default
+  no_automatic_signatures: true
+  no_familiarity_bonuses: true
+  language_neutral_selection: true

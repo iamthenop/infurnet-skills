@@ -26,7 +26,7 @@ Illustrative candidates, never mandatory substitutions:
   and must still pass the phonetic gate or a conventional exception.
 
 Feline sounds belong to language-neutral repetition families such as
-\`meow\`, \`purr\`, \`hiss\`, \`trill\`, and \`chatter\`. The spellings
+`meow`, `purr`, `hiss`, `trill`, and `chatter`. The spellings
 *meow* and *miau* share the meowing family; their spelling difference
 does not create a new repetition allowance.
 

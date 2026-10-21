@@ -9,7 +9,7 @@ Rate the untouched source occurrence on a 0–10 editorial scale:
 - Character relevance: 0–2.
 - Natural spoken stress: 0–1.
 
-Add the four values. Below \`salience.min_score\`, leave the word unchanged.
+Add the four values. Below `salience.min_score`, leave the word unchanged.
 Do not increase salience because a replacement looks amusing.
 
 ## Compare candidate sounds
@@ -25,9 +25,9 @@ structure, segments, stress, vowel duration, and changes in onset or coda.
 - 1: visual joke with weak phonetic relationship.
 - 0: phonetic association is absent.
 
-Accept only candidates meeting \`phonetics.min_similarity\` and
-\`phonetics.minimum_intelligibility\`, except familiar *conventional*
-cat puns that pass \`conventional_exception_min\`. A conventional exception
+Accept only candidates meeting `phonetics.min_similarity` and
+`phonetics.minimum_intelligibility`, except familiar *conventional*
+cat puns that pass `conventional_exception_min`. A conventional exception
 does not override salience or meaning.
 
 The replacement for a single occurrence is the eligible candidate with the
@@ -55,14 +55,14 @@ Prefer higher source-word salience. For equal salience, compare:
 
 Choose a subset satisfying all active hard constraints:
 
-- Source-word positions differ by at least \`spacing.min_word_gap\` lexical words.
-- At least \`spacing.min_full_sentences_between\` complete sentences intervene.
-- No more than \`spacing.max_per_paragraph\` substitutions in one paragraph.
-- At most \`density.max_per_window\` in every rolling
-  \`density.rolling_window_words\` lexical-word window.
-- Identical spellings are separated by \`repetition.exact_form_gap_words\`.
-- The same vocalization family follows \`sound_family_gap_words\`;
-  \`sound_family_mode: soft\` warns and \`hard\` rejects.
+- Source-word positions differ by at least `spacing.min_word_gap` lexical words.
+- At least `spacing.min_full_sentences_between` complete sentences intervene.
+- No more than `spacing.max_per_paragraph` substitutions in one paragraph.
+- At most `density.max_per_window` in every rolling
+  `density.rolling_window_words` lexical-word window.
+- Identical spellings are separated by `repetition.exact_form_gap_words`.
+- The same vocalization family follows `sound_family_gap_words`;
+  `sound_family_mode: soft` warns and `hard` rejects.
 
 A code-switch does not reset any counter. In Japanese, count lexical words,
 not characters, using consistent segmentation.

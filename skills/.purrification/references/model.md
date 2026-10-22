@@ -1,5 +1,30 @@
 # Selection and conflict model
 
+## Anti-self-meowtilation
+
+An already feline word does not need another feline disguise. Before scoring,
+exclude a proposed substitution when:
+
+- The original already names a feline vocalization, behavior, or feature, and
+  the replacement offers no distinct meaning.
+- The replacement stacks another feline marker onto an already stylized form.
+- The replacement conflates distinct sounds or behaviors, even if its IPA
+  resemblance or editorial salience would otherwise pass.
+
+Preserve the original word. Do not rephrase merely to create an opportunity
+for another substitution. Phonetic similarity, salience, density targets, and
+tie-breakers cannot override this exclusion.
+
+Examples:
+
+- `yowling` to `meowling`: reject. A yowl is not simply a meow.
+- `purring` to `purr-ring`: reject. The original already says it.
+- `personal` to `purr-sonal`: still eligible for normal scoring.
+
+This is a meaning-based exclusion, not a string-prefix blacklist:
+`catastrophe` is not inherently a reference to a cat. Explicit author
+direction may allow a deliberate exception within its stated scope.
+
 ## Salience is not model attention
 
 Rate the untouched source occurrence on a 0–10 editorial scale:

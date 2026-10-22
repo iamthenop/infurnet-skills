@@ -34,8 +34,10 @@ Never lower a different threshold silently to force a substitution.
 
 1. Read and preserve the original passage. Identify lexical word occurrences
    and their sentence and paragraph boundaries.
-2. Score each source word's editorial salience, not the attractiveness of a pun.
-   Do not confuse editorial salience with measured transformer attention.
+2. Apply the anti-self-meowtilation exclusion in
+   [model.md](references/model.md) before scoring. Score each remaining source
+   word's editorial salience, not the attractiveness of a pun. Do not confuse
+   editorial salience with measured transformer attention.
 3. Discard source words below the active salience threshold.
 4. For each eligible word, consider plausible feline replacements from English,
    German, Japanese, and any additional language the user enables.
